@@ -1,18 +1,30 @@
 # AdaCraft
 
-Native high-assurance Minecraft: Java Edition server, written in Ada/SPARK.
+Native Minecraft: Java Edition server in Ada/SPARK.
 
-v1.0 is pinned to **Minecraft Java Edition 26.3**, **protocol 777**, **data version 5023**.
+v1.0 is pinned to **26.3**, protocol **777**, data version **5023**. The binary does not link a JVM. The official `server.jar` is a lab oracle only.
 
-The shipped server does not run on a JVM and does not embed Mojang's server.
-The official 26.3 `server.jar` is a test-lab oracle only. That oracle needs Java 25. AdaCraft does not.
-
-| Document | What it is |
+| Document | Role |
 |---|---|
-| [CONSTITUTION.md](CONSTITUTION.md) | Frozen v1.0 specification. Do not edit in place. |
-| [ROADMAP.md](ROADMAP.md) | Engineering sequence under the constitution. It does not amend it. |
+| [CONSTITUTION.md](CONSTITUTION.md) | Frozen v1.0 specification. |
+| [ROADMAP.md](ROADMAP.md) | Sequence under the constitution. |
+| [docs/PROTOCOL.md](docs/PROTOCOL.md) | Wire rules for protocol 777. |
+| [docs/KERNEL.md](docs/KERNEL.md) | The nine authority operations. |
+| [pin/26.3.toml](pin/26.3.toml) | Jar hashes and the version pin. |
+| [generated/26.3/](generated/26.3/PROVENANCE.md) | Packet, registry, block, and command reports from the 26.3 data generator. |
 
-Next documents, before implementation: `docs/PROTOCOL.md` and `docs/KERNEL.md`.
+## What runs
 
-There is no 1.21.x target and no protocol 767 / data version 3955 scaffold.
-Protocol and registry data are generated from the pinned 26.3 artifacts.
+This tree is the Milestone 0 pin plus the Phase 1 codec, status handling, offline-login identity check, and the Phase 4a authority boundary.
+
+A 26.3 client can complete a server-list status ping and see protocol 777. Login checks the offline UUID derived from the player name and then disconnects. Play, chunks, encryption, and compression are not implemented. That is the constitution's order, not a temporary shortcut around it.
+
+```text
+make test
+make
+./bin/adacraft 25565
+```
+
+`make test` needs GNAT 2022 on `PATH` (`gnatmake`). Java is not required to build or run the tests. Java 25 is required only to regenerate `generated/26.3/reports` from the pinned jar.
+
+Packet ids are generated. Do not edit `generated/adacraft-protocol-ids.ads` by hand.

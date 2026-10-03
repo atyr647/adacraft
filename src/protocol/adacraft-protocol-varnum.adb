@@ -1,5 +1,4 @@
 package body Adacraft.Protocol.Varnum
-  with SPARK_Mode
 is
    use type Interfaces.Unsigned_8;
    use type Interfaces.Unsigned_32;
@@ -73,4 +72,54 @@ is
       end loop;
       return (Status => Rejected, Value => 0, Next => From);
    end Decode_Varlong;
+
+   function Try_Decode
+     (Data     : Octets;
+      From     : Positive;
+      Value    : out Interfaces.Unsigned_32;
+      Consumed : out Natural) return VarInt_Status
+   is
+      use type Interfaces.Unsigned_8;
+
+      Result : Interfaces.Unsigned_32 := 0;
+      Pos    : Natural                := From;
+      Step   : Natural                := 0;
+      B      : Octet;
+      Bits   : Interfaces.Unsigned_32;
+   begin
+      Value    := 0;
+      Consumed := 0;
+
+      if From > Data'Last then
+         return Incomplete;
+      end if;
+
+      for S in 1 .. Max_Varint_Bytes loop
+         Step := S;
+         B    := Data (Pos);
+         Bits := Interfaces.Unsigned_32 (B and 16#7F#);
+
+         if Step = Max_Varint_Bytes and then Bits > 15 then
+            return Malformed;
+         end if;
+
+         Result := Result or Interfaces.Shift_Left (Bits, (Step - 1) * 7);
+         Pos    := Pos + 1;
+
+         if (B and 16#80#) = 0 then
+            if Step > 1 and then Bits = 0 then
+               return Malformed;
+            end if;
+            Value    := Result;
+            Consumed := Pos - From;
+            return Ok;
+         end if;
+
+         if Pos > Data'Last then
+            return Incomplete;
+         end if;
+      end loop;
+
+      return Malformed;
+   end Try_Decode;
 end Adacraft.Protocol.Varnum;

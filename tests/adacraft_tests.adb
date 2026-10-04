@@ -1,5 +1,7 @@
 with Ada.Command_Line;
+with Ada.Streams;
 with Ada.Strings.Fixed;
+with Ada.Unchecked_Deallocation;
 with Ada.Text_IO;
 with Interfaces;
 with Adacraft.Auth;
@@ -295,6 +297,117 @@ begin
             end if;
          end;
       end loop;
+   end;
+
+   declare
+      package Streams renames Ada.Streams;
+      package Frame renames Adacraft.Protocol.Frame;
+      use type Streams.Stream_Element;
+      use type Streams.Stream_Element_Offset;
+      use type Frame.Encode_Status;
+
+      subtype SE is Streams.Stream_Element;
+      subtype SEO is Streams.Stream_Element_Offset;
+      subtype SEA is Streams.Stream_Element_Array;
+
+      type SEA_Access is access SEA;
+      procedure Free is new Ada.Unchecked_Deallocation (SEA, SEA_Access);
+
+      function Fill (I : SEO) return SE is (SE (I mod 251));
+
+      procedure Small_Case
+        (N          : SEO;
+         Prefix_Len : SEO;
+         P1, P2     : SE;
+         Name       : String)
+      is
+         Payload : SEA (1 .. N);
+         Output  : SEA (1 .. Prefix_Len + N) := (others => 0);
+         Last    : SEO;
+         Status  : Frame.Encode_Status;
+         Same    : Boolean := True;
+      begin
+         for I in Payload'Range loop
+            Payload (I) := Fill (I);
+         end loop;
+         Frame.Encode (Payload, Output, Last, Status);
+         Check (Status = Frame.Ok, Name & " status");
+         Check (Last = Prefix_Len + N, Name & " last");
+         Check (Output (1) = P1, Name & " prefix 1");
+         if Prefix_Len = 2 then
+            Check (Output (2) = P2, Name & " prefix 2");
+         end if;
+         for I in 1 .. N loop
+            if Output (Prefix_Len + I) /= Payload (I) then
+               Same := False;
+            end if;
+         end loop;
+         Check (Same, Name & " body copy");
+      end Small_Case;
+   begin
+      Small_Case (0, 1, 16#00#, 0, "frame 0-byte");
+      Small_Case (127, 1, 16#7F#, 0, "frame 127-byte");
+      Small_Case (128, 2, 16#80#, 16#01#, "frame 128-byte");
+
+      declare
+         Max_Len : constant := 2_097_151;
+         Payload : SEA_Access := new SEA (1 .. Max_Len);
+         Output  : SEA_Access := new SEA (1 .. Max_Len + 3);
+         Last    : SEO;
+         Status  : Frame.Encode_Status;
+         Same    : Boolean := True;
+      begin
+         for I in Payload'Range loop
+            Payload (I) := Fill (I);
+         end loop;
+         Output.all := (others => 0);
+         Frame.Encode (Payload.all, Output.all, Last, Status);
+         Check (Status = Frame.Ok, "frame max status");
+         Check (Last = 2_097_154, "frame max last");
+         Check
+           (Output (1) = 16#FF# and then Output (2) = 16#FF#
+            and then Output (3) = 16#7F#,
+            "frame max prefix");
+         for I in SEO'(1) .. Max_Len loop
+            if I = 1 or else I = 2 or else I = 1000 or else I = 1_048_576
+              or else I = Max_Len - 1 or else I = Max_Len
+            then
+               if Output (3 + I) /= Payload (I) then
+                  Same := False;
+               end if;
+            end if;
+         end loop;
+         Check (Same, "frame max body samples");
+         Free (Payload);
+         Free (Output);
+      end;
+
+      declare
+         Payload : SEA_Access := new SEA (1 .. 2_097_152);
+         Output  : SEA_Access := new SEA (1 .. 4);
+         Last    : SEO;
+         Status  : Frame.Encode_Status;
+      begin
+         Payload.all := (others => 7);
+         Output.all := (others => 16#AA#);
+         Frame.Encode (Payload.all, Output.all, Last, Status);
+         Check (Status = Frame.Body_Too_Long, "frame body too long");
+         Check (Output (1) = 16#AA# and then Output (4) = 16#AA#,
+                "frame body too long writes nothing");
+         Free (Payload);
+         Free (Output);
+      end;
+
+      declare
+         Payload : constant SEA (1 .. 1) := (1 => 5);
+         Output  : SEA (1 .. 1) := (1 => 16#AA#);
+         Last    : SEO;
+         Status  : Frame.Encode_Status;
+      begin
+         Frame.Encode (Payload, Output, Last, Status);
+         Check (Status = Frame.Output_Too_Small, "frame output too small");
+         Check (Output (1) = 16#AA#, "frame output too small writes nothing");
+      end;
    end;
 
    if Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Handshake_Intention) /= 0

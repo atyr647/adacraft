@@ -30,6 +30,7 @@ procedure Adacraft_Tests is
    use type Kernel.Item_Id;
    use type Kernel.Residency;
    use type Kernel.Stack_Count;
+   use type Protocol.Varnum.VarInt_Status;
    Failures : Natural := 0;
 
    procedure Check (Cond : Boolean; Name : String) is
@@ -101,6 +102,153 @@ begin
       Check (Dec.Status = Protocol.Rejected, "reject overlong varint");
       Check (More.Status = Protocol.Need_More, "truncated varint");
       Check (Bad.Status = Protocol.Rejected, "reject 5-byte overflow");
+   end;
+
+   declare
+      --  Try_Decode: incremental VarInt decode (wire-format seam).
+      --  Covers minimal/non-minimal encodings, incomplete input,
+      --  malformed overlong varints, bit-31 boundary, and exact
+      --  boundary values. Verifies both Consumed and Value out
+      --  parameters.
+
+      --  Minimal encodings: 1 byte for values 0..127.
+      V0    : constant Protocol.Octets := (1 => 16#00#);
+      V1    : constant Protocol.Octets := (1 => 16#01#);
+      V127  : constant Protocol.Octets := (1 => 16#7F#);
+
+      --  Minimal encodings: 2 bytes for values 128..16383.
+      V128   : constant Protocol.Octets := (16#80#, 16#01#);
+      V255   : constant Protocol.Octets := (16#FF#, 16#01#);
+      V16383 : constant Protocol.Octets := (16#FF#, 16#7F#);
+
+      --  Non-minimal encoding of 128 (3 bytes, leading zero group).
+      V128_NM : constant Protocol.Octets := (16#80#, 16#80#, 16#01#);
+
+      --  Incomplete: continuation bit set, no terminator yet.
+      Partial1 : constant Protocol.Octets (1 .. 1) := (1 => 16#80#);
+      Partial2 : constant Protocol.Octets (1 .. 2) := (16#80#, 16#80#);
+
+      --  Malformed: overlong via non-terminal zero group (value 0 in 2 bytes).
+      Overlong0 : constant Protocol.Octets := (16#80#, 16#00#);
+
+      --  Malformed: overlong (6 continuation bytes, exceeds 5-byte ceiling).
+      Overlong6 : constant Protocol.Octets :=
+        (16#80#, 16#80#, 16#80#, 16#80#, 16#80#, 16#80#);
+
+      --  Malformed: 5th byte's payload exceeds 4 bits (would set bit 32+).
+      FifthOverflow : constant Protocol.Octets :=
+        (16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#7F#);
+
+      --  Boundary: 2^32 - 1 (max unsigned 32-bit, exact ceiling).
+      VMax : constant Protocol.Octets :=
+        (16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#0F#);
+
+      --  Boundary: bit 31 set (value 2^31, "negative" on signed read).
+      VBit31 : constant Protocol.Octets :=
+        (16#80#, 16#80#, 16#80#, 16#80#, 16#08#);
+
+      --  Boundary: 2^32 (exceeds unsigned 32-bit, 5th byte payload = 16).
+      VOverflow : constant Protocol.Octets :=
+        (16#80#, 16#80#, 16#80#, 16#80#, 16#10#);
+
+      Val : Interfaces.Unsigned_32;
+      Con : Natural;
+      St  : Protocol.Varnum.VarInt_Status;
+   begin
+      --  Minimal encodings (single byte).
+      St := Protocol.Varnum.Try_Decode (V0, V0'First, Val, Con);
+      Check (St = Protocol.Varnum.Ok and then Val = 0 and then Con = 1,
+             "try_decode minimal 0");
+
+      St := Protocol.Varnum.Try_Decode (V1, V1'First, Val, Con);
+      Check (St = Protocol.Varnum.Ok and then Val = 1 and then Con = 1,
+             "try_decode minimal 1");
+
+      St := Protocol.Varnum.Try_Decode (V127, V127'First, Val, Con);
+      Check (St = Protocol.Varnum.Ok and then Val = 127 and then Con = 1,
+             "try_decode minimal 127");
+
+      --  Minimal encodings (two bytes).
+      St := Protocol.Varnum.Try_Decode (V128, V128'First, Val, Con);
+      Check (St = Protocol.Varnum.Ok and then Val = 128 and then Con = 2,
+             "try_decode minimal 128");
+
+      St := Protocol.Varnum.Try_Decode (V255, V255'First, Val, Con);
+      Check (St = Protocol.Varnum.Ok and then Val = 255 and then Con = 2,
+             "try_decode minimal 255");
+
+      St := Protocol.Varnum.Try_Decode (V16383, V16383'First, Val, Con);
+      Check (St = Protocol.Varnum.Ok and then Val = 16383 and then Con = 2,
+             "try_decode minimal 16383");
+
+      --  Non-minimal encoding (lenient decode of 3-byte form of 128).
+      St := Protocol.Varnum.Try_Decode (V128_NM, V128_NM'First, Val, Con);
+      Check (St = Protocol.Varnum.Ok and then Val = 128 and then Con = 3,
+             "try_decode non-minimal 128");
+
+      --  Incomplete: continuation bit set, no terminator in buffer.
+      St := Protocol.Varnum.Try_Decode (Partial1, Partial1'First, Val, Con);
+      Check (St = Protocol.Varnum.Incomplete and then Con = 0,
+             "try_decode incomplete 1 byte");
+
+      St := Protocol.Varnum.Try_Decode (Partial2, Partial2'First, Val, Con);
+      Check (St = Protocol.Varnum.Incomplete and then Con = 0,
+             "try_decode incomplete 2 bytes");
+
+      --  Incomplete: From is past the end of a non-empty buffer.
+      declare
+         One : constant Protocol.Octets := (1 => 16#05#);
+      begin
+         St := Protocol.Varnum.Try_Decode (One, One'Last + 1, Val, Con);
+         Check (St = Protocol.Varnum.Incomplete and then Con = 0,
+                "try_decode incomplete from past end");
+      end;
+
+      --  Malformed: overlong (non-terminal zero group rejects "80 00").
+      St := Protocol.Varnum.Try_Decode (Overlong0, Overlong0'First, Val, Con);
+      Check (St = Protocol.Varnum.Malformed and then Con = 0,
+             "try_decode malformed overlong 0");
+
+      --  Malformed: 6 continuation bytes (exceeds 5-byte ceiling).
+      St := Protocol.Varnum.Try_Decode (Overlong6, Overlong6'First, Val, Con);
+      Check (St = Protocol.Varnum.Malformed and then Con = 0,
+             "try_decode malformed overlong 6 bytes");
+
+      --  Malformed: 5th byte payload > 15 (would set bit 32+).
+      St := Protocol.Varnum.Try_Decode
+        (FifthOverflow, FifthOverflow'First, Val, Con);
+      Check (St = Protocol.Varnum.Malformed and then Con = 0,
+             "try_decode malformed 5th byte overflow");
+
+      --  Boundary: 2^32 - 1 (exact max unsigned 32-bit, 5th byte payload 15).
+      St := Protocol.Varnum.Try_Decode (VMax, VMax'First, Val, Con);
+      Check (St = Protocol.Varnum.Ok
+             and then Val = 16#FFFF_FFFF# and then Con = 5,
+             "try_decode boundary max u32");
+
+      --  Boundary: bit 31 set (value 2^31, "negative" on signed read).
+      --  5th byte payload is 8, which is within the 4-bit limit, so the
+      --  decoder accepts it and reports the exact unsigned value.
+      St := Protocol.Varnum.Try_Decode (VBit31, VBit31'First, Val, Con);
+      Check (St = Protocol.Varnum.Ok
+             and then Val = 16#8000_0000# and then Con = 5,
+             "try_decode boundary bit 31 set");
+
+      --  Boundary: 2^32 (5th byte payload is 16, exceeds 4-bit limit).
+      St := Protocol.Varnum.Try_Decode
+        (VOverflow, VOverflow'First, Val, Con);
+      Check (St = Protocol.Varnum.Malformed and then Con = 0,
+             "try_decode boundary 2^32 overflow");
+
+      --  From offset: skip a leading byte and decode the trailing varint.
+      declare
+         Prefixed : constant Protocol.Octets := (16#AA#, 16#00#);
+      begin
+         St := Protocol.Varnum.Try_Decode (Prefixed, 2, Val, Con);
+         Check (St = Protocol.Varnum.Ok
+                and then Val = 0 and then Con = 1,
+                "try_decode from offset 2");
+      end;
    end;
 
    declare

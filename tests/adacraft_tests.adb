@@ -410,6 +410,334 @@ begin
       end;
    end;
 
+   declare
+      package Streams renames Ada.Streams;
+      package Frame renames Adacraft.Protocol.Frame;
+      use type Streams.Stream_Element;
+      use type Streams.Stream_Element_Offset;
+      use type Frame.Feed_Status;
+
+      subtype SE is Streams.Stream_Element;
+      subtype SEO is Streams.Stream_Element_Offset;
+      subtype SEA is Streams.Stream_Element_Array;
+
+      type Dec_Access is access Frame.Decoder_Type;
+      procedure Free_Dec is new Ada.Unchecked_Deallocation
+        (Frame.Decoder_Type, Dec_Access);
+
+      D : Dec_Access := new Frame.Decoder_Type;
+
+      Max_Frames : constant := 32;
+      Count    : Natural := 0;
+      Lens     : array (1 .. Max_Frames) of Natural := (others => 0);
+      Starts   : array (1 .. Max_Frames) of Natural := (others => 0);
+      Data     : array (1 .. 1024) of SE := (others => 0);
+      Data_Len : Natural := 0;
+
+      procedure Fresh is
+      begin
+         Free_Dec (D);
+         D := new Frame.Decoder_Type;
+         Count := 0;
+         Data_Len := 0;
+      end Fresh;
+
+      procedure Record_Frame (F : in SEA) is
+      begin
+         if Count < Max_Frames and then Data_Len + F'Length <= Data'Length then
+            Count := Count + 1;
+            Lens (Count) := F'Length;
+            Starts (Count) := Data_Len;
+            for I in F'Range loop
+               Data_Len := Data_Len + 1;
+               Data (Data_Len) := F (I);
+            end loop;
+         else
+            Count := Count + 1;
+         end if;
+      end Record_Frame;
+
+      function Frame_Is (N : Positive; Expected : SEA) return Boolean is
+      begin
+         if N > Count or else N > Max_Frames
+           or else Lens (N) /= Expected'Length
+         then
+            return False;
+         end if;
+         for K in 0 .. Expected'Length - 1 loop
+            if Data (Starts (N) + K + 1) /= Expected (Expected'First + SEO (K))
+            then
+               return False;
+            end if;
+         end loop;
+         return True;
+      end Frame_Is;
+
+      procedure Feed_Chunk (C : in SEA; Name : in String) is
+         St : Frame.Feed_Status;
+      begin
+         Frame.Feed (D.all, C, Record_Frame'Access, St);
+         Check (St = Frame.Success, Name & " status");
+      end Feed_Chunk;
+
+      function Pat (I : SEO) return SE is (SE (I mod 251));
+
+      E_12   : constant SEA := (1 => 1, 2 => 2);
+      E_9    : constant SEA := (1 => 9);
+      E_1_5  : constant SEA := (1 => 1, 2 => 2, 3 => 3, 4 => 4, 5 => 5);
+      E_Nil  : constant SEA (1 .. 0) := (others => 0);
+   begin
+      --  T-1: body split across chunks.
+      declare
+         W : constant SEA (1 .. 6) := (5, 1, 2, 3, 4, 5);
+      begin
+         Fresh;
+         Feed_Chunk (W (1 .. 3), "T-1 a");
+         Check (Count = 0, "T-1 no frame after first chunk");
+         Feed_Chunk (W (4 .. 5), "T-1 b");
+         Check (Count = 0, "T-1 no frame after second chunk");
+         Feed_Chunk (W (6 .. 6), "T-1 c");
+         Check (Count = 1, "T-1 one frame");
+         Check (Frame_Is (1, E_1_5), "T-1 body");
+      end;
+
+      --  T-2: byte-at-a-time feeding.
+      declare
+         W : constant SEA (1 .. 7) := (3, 10, 20, 30, 0, 1, 99);
+         E_3 : constant SEA := (1 => 10, 2 => 20, 3 => 30);
+         E_1 : constant SEA := (1 => 99);
+      begin
+         Fresh;
+         for I in SEO range 1 .. 7 loop
+            Feed_Chunk (W (I .. I), "T-2 byte");
+            case I is
+               when 1 | 2 | 3 => Check (Count = 0, "T-2 count early");
+               when 4 => Check (Count = 1, "T-2 count after 4");
+               when 5 => Check (Count = 2, "T-2 count after 5");
+               when 6 => Check (Count = 2, "T-2 count after 6");
+               when others => Check (Count = 3, "T-2 count after 7");
+            end case;
+         end loop;
+         Check (Frame_Is (1, E_3), "T-2 frame 1");
+         Check (Frame_Is (2, E_Nil), "T-2 frame 2 empty");
+         Check (Frame_Is (3, E_1), "T-2 frame 3");
+      end;
+
+      --  T-3: prefix split across chunks.
+      declare
+         W : SEA (1 .. 202);
+      begin
+         W (1) := 16#C8#;
+         W (2) := 16#01#;
+         for I in SEO range 3 .. 202 loop
+            W (I) := Pat (I - 2);
+         end loop;
+         Fresh;
+         Feed_Chunk (W (1 .. 1), "T-3 a");
+         Check (Count = 0, "T-3 after prefix byte 1");
+         Feed_Chunk (W (2 .. 50), "T-3 b");
+         Check (Count = 0, "T-3 after prefix byte 2 and partial body");
+         Feed_Chunk (W (51 .. 202), "T-3 c");
+         Check (Count = 1, "T-3 one frame");
+         Check (Frame_Is (1, W (3 .. 202)), "T-3 body");
+      end;
+
+      --  T-4: multiple frames in one chunk plus trailing partial frame.
+      declare
+         W : constant SEA (1 .. 9) := (2, 1, 2, 0, 1, 9, 4, 5, 6);
+         R : constant SEA (1 .. 2) := (7, 8);
+         E_5_8 : constant SEA := (1 => 5, 2 => 6, 3 => 7, 4 => 8);
+      begin
+         Fresh;
+         Feed_Chunk (W, "T-4 a");
+         Check (Count = 3, "T-4 three complete frames");
+         Check (Frame_Is (1, E_12), "T-4 frame 1");
+         Check (Frame_Is (2, E_Nil), "T-4 frame 2 empty");
+         Check (Frame_Is (3, E_9), "T-4 frame 3");
+         Feed_Chunk (R, "T-4 b");
+         Check (Count = 4, "T-4 trailing frame completed");
+         Check (Frame_Is (4, E_5_8), "T-4 frame 4");
+      end;
+
+      --  T-5: non-minimal prefixes.
+      declare
+         W : constant SEA (1 .. 10) :=
+           (16#80#, 16#00#, 16#85#, 16#80#, 16#00#, 1, 2, 3, 4, 5);
+      begin
+         Fresh;
+         Feed_Chunk (W, "T-5");
+         Check (Count = 2, "T-5 two frames");
+         Check (Lens (1) = 0 and then Frame_Is (1, E_Nil), "T-5 length 0");
+         Check (Lens (2) = 5 and then Frame_Is (2, E_1_5), "T-5 length 5");
+      end;
+
+      --  T-11: non-1 lower bounds and zero-length chunks.
+      declare
+         Neg  : constant SEA (-1 .. 1) := (2, 7, 8);
+         High : constant SEA (100 .. 102) := (2, 7, 8);
+         Nil1 : constant SEA (1 .. 0) := (others => 0);
+         Nil5 : constant SEA (5 .. 4) := (others => 0);
+         Mid  : constant SEA (50 .. 50) := (1 => 2);
+         Tail : constant SEA (60 .. 61) := (7, 8);
+         E_78 : constant SEA := (1 => 7, 2 => 8);
+      begin
+         Fresh;
+         Feed_Chunk (Neg, "T-11 negative lower bound");
+         Check (Count = 1 and then Frame_Is (1, E_78), "T-11 negative bound frame");
+
+         Fresh;
+         Feed_Chunk (High, "T-11 lower bound 100");
+         Check (Count = 1 and then Frame_Is (1, E_78), "T-11 bound 100 frame");
+
+         Fresh;
+         Feed_Chunk (Nil1, "T-11 empty 1");
+         Feed_Chunk (Nil5, "T-11 empty 2");
+         Check (Count = 0, "T-11 empty chunks no callbacks");
+
+         Feed_Chunk (Mid, "T-11 prefix");
+         Feed_Chunk (Nil1, "T-11 empty mid-frame");
+         Check (Count = 0, "T-11 no callback mid-frame");
+         Feed_Chunk (Tail, "T-11 tail");
+         Check (Count = 1 and then Frame_Is (1, E_78), "T-11 frame after empty chunk");
+      end;
+
+      --  T-6 .. T-10: limits and errors.
+      declare
+         Max_Len : constant := 2_097_151;
+
+         type SEA_Access is access SEA;
+         procedure Free_Wire is new Ada.Unchecked_Deallocation
+           (SEA, SEA_Access);
+
+         Wire      : SEA_Access;
+         Big_Count : Natural := 0;
+         Big_Len   : Natural := 0;
+         Big_Match : Boolean := True;
+         St        : Frame.Feed_Status;
+         Nil       : constant SEA (1 .. 0) := (others => 0);
+
+         procedure Record_Big (F : in SEA) is
+         begin
+            Big_Count := Big_Count + 1;
+            Big_Len := F'Length;
+            for K in 0 .. F'Length - 1 loop
+               if F (F'First + SEO (K)) /= Pat (SEO (K) + 1) then
+                  Big_Match := False;
+               end if;
+            end loop;
+         end Record_Big;
+
+         procedure Expect_Error (C : in SEA; Name : in String) is
+            S : Frame.Feed_Status;
+         begin
+            Frame.Feed (D.all, C, Record_Frame'Access, S);
+            Check (S = Frame.Framing_Error, Name & " status");
+         end Expect_Error;
+      begin
+         --  T-6: maximum-size body, whole and split.
+         Wire := new SEA (1 .. Max_Len + 3);
+         Wire (1) := 16#FF#;
+         Wire (2) := 16#FF#;
+         Wire (3) := 16#7F#;
+         for I in SEO range 1 .. Max_Len loop
+            Wire (3 + I) := Pat (I);
+         end loop;
+
+         Fresh;
+         Frame.Feed (D.all, Wire.all, Record_Big'Access, St);
+         Check (St = Frame.Success, "T-6 whole status");
+         Check (Big_Count = 1, "T-6 whole one frame");
+         Check (Big_Len = Max_Len, "T-6 whole length");
+         Check (Big_Match, "T-6 whole content");
+
+         Big_Count := 0;
+         Big_Len := 0;
+         Big_Match := True;
+         Fresh;
+         Frame.Feed (D.all, Wire (1 .. 2), Record_Big'Access, St);
+         Check (St = Frame.Success, "T-6 split a status");
+         Frame.Feed (D.all, Wire (3 .. 1000), Record_Big'Access, St);
+         Check (St = Frame.Success, "T-6 split b status");
+         Frame.Feed
+           (D.all, Wire (1001 .. 1_048_576), Record_Big'Access, St);
+         Check (St = Frame.Success, "T-6 split c status");
+         Frame.Feed
+           (D.all, Wire (1_048_577 .. Max_Len + 2), Record_Big'Access, St);
+         Check (St = Frame.Success, "T-6 split d status");
+         Check (Big_Count = 0, "T-6 split no frame before last byte");
+         Frame.Feed
+           (D.all, Wire (Max_Len + 3 .. Max_Len + 3), Record_Big'Access, St);
+         Check (St = Frame.Success, "T-6 split e status");
+         Check (Big_Count = 1, "T-6 split one frame");
+         Check (Big_Len = Max_Len, "T-6 split length");
+         Check (Big_Match, "T-6 split content");
+         Free_Wire (Wire);
+
+         --  T-7: overlong prefix is rejected at the third byte.
+         declare
+            Three : constant SEA (1 .. 3) := (16#80#, 16#80#, 16#80#);
+            Four  : constant SEA (1 .. 8) :=
+              (16#80#, 16#80#, 16#80#, 16#01#, 1, 0, 0, 0);
+         begin
+            Fresh;
+            Expect_Error (Three, "T-7 three bytes");
+            Check (Count = 0, "T-7 no callbacks");
+
+            Fresh;
+            Feed_Chunk (Three (1 .. 2), "T-7 first two bytes");
+            Expect_Error (Three (3 .. 3), "T-7 third byte");
+            Check (Count = 0, "T-7 no callbacks split");
+
+            Fresh;
+            Expect_Error (Four, "T-7 four bytes and trailing");
+            Check (Count = 0, "T-7 no callbacks trailing");
+         end;
+
+         --  T-8: oversize length encoding.
+         declare
+            Over : constant SEA (1 .. 4) :=
+              (16#80#, 16#80#, 16#80#, 16#01#);
+         begin
+            Fresh;
+            Expect_Error (Over, "T-8 oversize");
+            Check (Count = 0, "T-8 no callbacks");
+         end;
+
+         --  T-9: sticky failure.
+         declare
+            Bad  : constant SEA (1 .. 3) := (16#80#, 16#80#, 16#80#);
+            Good : constant SEA (1 .. 3) := (2, 1, 2);
+            Zero : constant SEA (1 .. 1) := (1 => 0);
+         begin
+            Fresh;
+            Expect_Error (Bad, "T-9 initial");
+            Expect_Error (Good, "T-9 good chunk after failure");
+            Expect_Error (Nil, "T-9 empty chunk after failure");
+            Expect_Error (Zero, "T-9 zero-length frame after failure");
+            Expect_Error (Nil, "T-9 empty chunk again");
+            Check (Count = 0, "T-9 no callbacks after failure");
+         end;
+
+         --  T-10: good frames delivered, then an error in the same chunk.
+         declare
+            W : constant SEA (1 .. 9) :=
+              (2, 1, 2, 0, 16#80#, 16#80#, 16#80#, 1, 5);
+            After : constant SEA (1 .. 2) := (1, 7);
+         begin
+            Fresh;
+            Expect_Error (W, "T-10 chunk");
+            Check (Count = 2, "T-10 prior frames delivered");
+            Check (Frame_Is (1, E_12), "T-10 frame 1");
+            Check (Frame_Is (2, E_Nil), "T-10 frame 2 empty");
+            Expect_Error (After, "T-10 later chunk");
+            Check (Count = 2, "T-10 no later callbacks");
+            Check (Frame_Is (1, E_12), "T-10 frame 1 kept");
+         end;
+      end;
+
+      Free_Dec (D);
+   end;
+
    if Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Handshake_Intention) /= 0
      or else Protocol.Ids.Protocol_Id (Protocol.Ids.Cb_Status_Status_Response) /= 0
      or else Protocol.Ids.Protocol_Id (Protocol.Ids.Cb_Login_Login_Disconnect) /= 0

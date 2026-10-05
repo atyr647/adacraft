@@ -8,6 +8,60 @@ package body Adacraft.Ingress is
    use type Interfaces.Unsigned_32;
    use type Protocol.Octet;
 
+   procedure Close_Connection (Connection : in out Connection_Type) is
+   begin
+      if not Connection.Closed then
+         Connection.Closed := True;
+         Connection.On_Close.all;
+      end if;
+   end Close_Connection;
+
+   procedure Initialize
+     (Connection : out Connection_Type;
+      On_Body    : Body_Consumer;
+      On_Close   : Close_Action)
+   is
+   begin
+      if On_Body = null or else On_Close = null then
+         raise Program_Error with "null ingress callback";
+      end if;
+      --  The embedded decoder starts fresh from its default initialization
+      --  when the connection object is declared.
+      Connection.On_Body := On_Body;
+      Connection.On_Close := On_Close;
+      Connection.Closed := False;
+   end Initialize;
+
+   procedure Receive
+     (Connection : in out Connection_Type;
+      Bytes      : Byte_Array)
+   is
+      Status : Protocol.Frame.Feed_Status;
+
+      procedure Forward (Data : in Protocol.Frame.Byte_Array) is
+      begin
+         Connection.On_Body.all (Data);
+      end Forward;
+   begin
+      if Connection.Closed then
+         return;
+      end if;
+
+      Protocol.Frame.Feed (Connection.Decoder, Bytes, Forward'Access, Status);
+
+      case Status is
+         when Protocol.Frame.Framing_Error =>
+            Close_Connection (Connection);
+         when Protocol.Frame.Success =>
+            null;
+      end case;
+   end Receive;
+
+   function Is_Closed (Connection : Connection_Type) return Boolean is
+   begin
+      return Connection.Closed;
+   end Is_Closed;
+
    function Same_UUID (Left : Protocol.Octets; Right : Auth.Digest) return Boolean is
    begin
       if Left'Length /= 16 then

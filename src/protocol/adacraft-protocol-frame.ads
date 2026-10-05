@@ -44,4 +44,42 @@ is
      with SPARK_Mode => Off;
    --  On success Output (Output'First .. Last) holds prefix || Payload.
    --  On rejection no frame is written and Last must not be used.
+
+   --  Ingress framing: stateful, per-connection frame decoder.
+
+   subtype Byte_Array is Ada.Streams.Stream_Element_Array;
+
+   type Feed_Status is (Success, Framing_Error);
+
+   type Decoder_Type is private;
+
+   procedure Feed
+     (Decoder  : in out Decoder_Type;
+      Chunk    : in     Byte_Array;
+      On_Frame : not null access procedure (Frame : in Byte_Array);
+      Status   : out    Feed_Status)
+     with SPARK_Mode => Off;
+   --  Consumes every byte of Chunk in order. Each completed frame body
+   --  (without its length prefix) is passed to On_Frame exactly once, during
+   --  the call that supplied its last byte; the body is valid only during the
+   --  callback. A framing error is terminal: it is reported again by every
+   --  later call and no further callbacks are made.
+
+private
+
+   type Decode_Phase is (In_Prefix, In_Body);
+
+   type Decoder_Type is record
+      Phase        : Decode_Phase := In_Prefix;
+      Failed       : Boolean      := False;
+
+      Prefix_Count : Ada.Streams.Stream_Element_Offset
+        range 0 .. Max_Frame_Prefix_Bytes := 0;
+      Prefix_Bytes : Byte_Array (1 .. Max_Frame_Prefix_Bytes);
+
+      Body_Length  : Frame_Body_Length := 0;
+      Body_Count   : Frame_Body_Length := 0;
+      Body_Bytes   : Byte_Array (1 .. Max_Frame_Body_Length);
+   end record;
+
 end Adacraft.Protocol.Frame;

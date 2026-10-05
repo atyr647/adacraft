@@ -82,6 +82,82 @@ is
       Status := Ok;
    end Encode;
 
+   procedure Feed
+     (Decoder  : in out Decoder_Type;
+      Chunk    : in     Byte_Array;
+      On_Frame : not null access procedure (Frame : in Byte_Array);
+      Status   : out    Feed_Status)
+     with SPARK_Mode => Off
+   is
+      Empty_Body : constant Byte_Array (1 .. 0) := (others => 0);
+      Value      : Ada.Streams.Stream_Element;
+   begin
+      if Decoder.Failed then
+         Status := Framing_Error;
+         return;
+      end if;
+
+      for I in Chunk'Range loop
+         Value := Chunk (I);
+
+         case Decoder.Phase is
+            when In_Prefix =>
+               Decoder.Prefix_Count := Decoder.Prefix_Count + 1;
+               Decoder.Prefix_Bytes (Decoder.Prefix_Count) := Value;
+
+               if (Value and 16#80#) /= 0 then
+                  if Decoder.Prefix_Count = Max_Frame_Prefix_Bytes then
+                     Decoder.Failed := True;
+                     Status := Framing_Error;
+                     return;
+                  end if;
+               else
+                  declare
+                     Length : Ada.Streams.Stream_Element_Offset := 0;
+                     Mult   : Ada.Streams.Stream_Element_Offset := 1;
+                  begin
+                     for J in 1 .. Decoder.Prefix_Count loop
+                        Length := Length
+                          + Ada.Streams.Stream_Element_Offset
+                              (Decoder.Prefix_Bytes (J) and 16#7F#) * Mult;
+                        Mult := Mult * 128;
+                     end loop;
+
+                     if Length > Max_Frame_Body_Length then
+                        Decoder.Failed := True;
+                        Status := Framing_Error;
+                        return;
+                     end if;
+
+                     Decoder.Body_Length := Length;
+                  end;
+
+                  Decoder.Body_Count := 0;
+                  if Decoder.Body_Length = 0 then
+                     On_Frame (Empty_Body);
+                     Decoder.Phase := In_Prefix;
+                     Decoder.Prefix_Count := 0;
+                  else
+                     Decoder.Phase := In_Body;
+                  end if;
+               end if;
+
+            when In_Body =>
+               Decoder.Body_Count := Decoder.Body_Count + 1;
+               Decoder.Body_Bytes (Decoder.Body_Count) := Value;
+
+               if Decoder.Body_Count = Decoder.Body_Length then
+                  Decoder.Phase := In_Prefix;
+                  Decoder.Prefix_Count := 0;
+                  On_Frame (Decoder.Body_Bytes (1 .. Decoder.Body_Length));
+                  Decoder.Body_Count := 0;
+               end if;
+         end case;
+      end loop;
+
+      Status := Success;
+   end Feed;
+
    function Decode_Frame (Buffer : Octets; From : Positive) return Frame_Decode is
       Length      : Varnum.Varint_Result;
       Ident       : Varnum.Varint_Result;

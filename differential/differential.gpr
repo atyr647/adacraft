@@ -1,0 +1,33 @@
+--  Lab-only project. Never referenced from the shipped build.
+project Differential is
+
+   for Source_Dirs use
+     ("src", "../generated", "../src/protocol", "../tests");
+   for Object_Dir use "../obj/differential";
+   for Exec_Dir use "../bin";
+   --  Main is added when the CLI (differential-main.adb) lands;
+   --  it will produce adacraft-diff.
+   for Main use ();
+   for Source_Files use
+     ("differential.ads",
+      "adacraft.ads",
+      "adacraft-protocol.ads",
+      "adacraft-protocol-buffer.ads", "adacraft-protocol-buffer.adb",
+      "adacraft-protocol-frame.ads", "adacraft-protocol-frame.adb",
+      "adacraft-protocol-packets.ads", "adacraft-protocol-packets.adb",
+      "adacraft-protocol-state-table.ads", "adacraft-protocol-state-table.adb",
+      "adacraft-protocol-state.ads", "adacraft-protocol-state.adb",
+      "adacraft-protocol-varnum.ads", "adacraft-protocol-varnum.adb",
+      "adacraft-protocol-ids.ads",
+      "adacraft-corpus.ads",
+      "adacraft-corpus-loader.ads", "adacraft-corpus-loader.adb");
+
+   package Compiler is
+      for Default_Switches ("ada") use ("-gnat2022", "-gnata");
+   end Compiler;
+
+   package Builder is
+      for Executable ("differential-main.adb") use "adacraft-diff";
+   end Builder;
+
+end Differential;

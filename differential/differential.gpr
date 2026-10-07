@@ -1,0 +1,23 @@
+--  Standalone project. It must never "with" adacraft.gpr. The protocol
+--  packages are taken from their source directory (no protocol library
+--  GPR exists in the repository yet).
+project Differential is
+   type Target_Kind is ("driver", "test");
+   Target : Target_Kind := external ("DIFFERENTIAL_TARGET", "driver");
+
+   for Source_Dirs use
+     ("src", "tests", "../src/protocol", "../generated");
+   for Object_Dir use "obj";
+   for Exec_Dir use "bin";
+
+   case Target is
+      when "driver" =>
+         for Main use ("differential_driver.adb");
+      when "test" =>
+         for Main use ("test_runner.adb");
+   end case;
+
+   package Compiler is
+      for Default_Switches ("Ada") use ("-gnat2022", "-gnata", "-g");
+   end Compiler;
+end Differential;

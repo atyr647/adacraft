@@ -597,6 +597,153 @@ begin
          Cur := Step (Cur, S.Serverbound, Play_Ack).Next_State;
          Check (Cur = S.Configuration, "reconfiguration returns to Configuration");
       end;
+
+      --  Pending sub-state rules, outbound checks, neighbours, boundaries.
+      declare
+         Cb_Rej_Ok : Boolean := True;
+         Sb_Ok     : Boolean := True;
+         Neigh_Ok  : Boolean := True;
+         Cross_Ok  : Boolean := False;
+         Bound_Ok  : Boolean := True;
+         Det_Ok    : Boolean := True;
+         Out_Ok    : Boolean := True;
+         Ids_To_Try : constant array (1 .. 9) of S.Packet_Id :=
+           (S.Packet_Id'First, S.Packet_Id'Last, 0, -1, 1, 1_000_000,
+            -1_000_000, S.Packet_Id'First + 1, S.Packet_Id'Last - 1);
+         Intents : constant array (1 .. 8) of S.Handshake_Intent :=
+           (S.Handshake_Intent'First, S.Handshake_Intent'Last, 0, -1, 4,
+            100, -100, 1);
+      begin
+         for I in 1 .. T.Row_Count loop
+            declare
+               R   : constant T.Row := T.Row_At (I);
+               Pen : constant S.Connection_State := Pending_Of (R.State);
+            begin
+               if R.State in S.Login | S.Configuration | S.Play then
+                  if R.Direction = S.Clientbound then
+                     declare
+                        Res : constant S.Transition_Result :=
+                          Step (Pen, S.Clientbound, R.Id);
+                     begin
+                        if Res.Kind /= S.Rejected
+                          or else Res.Next_State /= Pen
+                          or else S.Is_Packet_Valid (Pen, S.Clientbound, R.Id)
+                        then
+                           Cb_Rej_Ok := False;
+                        end if;
+                     end;
+                  else
+                     if not S.Is_Packet_Valid (Pen, S.Serverbound, R.Id)
+                       or else Step (Pen, S.Serverbound, R.Id).Kind
+                               = S.Rejected
+                     then
+                        Sb_Ok := False;
+                     end if;
+                  end if;
+               end if;
+               --  Neighbouring ids.
+               for Delta_Id in -1 .. 1 loop
+                  if R.Id > S.Packet_Id'First + 1
+                    and then R.Id < S.Packet_Id'Last - 1
+                  then
+                     declare
+                        N : constant S.Packet_Id :=
+                          R.Id + S.Packet_Id (Delta_Id);
+                     begin
+                        if S.Is_Packet_Valid (R.State, R.Direction, N)
+                          /= In_Table (R.State, R.Direction, N)
+                        then
+                           Neigh_Ok := False;
+                        end if;
+                     end;
+                  end if;
+               end loop;
+               --  Same id valid here, invalid elsewhere.
+               for St in S.Connection_State loop
+                  for D in S.Packet_Direction loop
+                     if (St /= R.State or else D /= R.Direction)
+                       and then not S.Is_Packet_Valid (St, D, R.Id)
+                     then
+                        Cross_Ok := True;
+                     end if;
+                  end loop;
+               end loop;
+            end;
+         end loop;
+         Check (Cb_Rej_Ok, "clientbound parent packets rejected in pending");
+         Check (Sb_Ok, "serverbound copies valid and accepted in pending");
+         Check (Neigh_Ok, "neighbouring ids exact");
+         Check (Cross_Ok, "same id valid in one state/direction, not another");
+
+         --  Outbound triggers.
+         Expect_Move ("outbound Login Finished", S.Login, S.Clientbound,
+                      Finished, 0, S.Login_Awaiting_Ack);
+         Expect_Move ("outbound Finish Configuration", S.Configuration,
+                      S.Clientbound, Fin_CB, 0, S.Configuration_Awaiting_Ack);
+         Expect_Move ("outbound Start Configuration", S.Play, S.Clientbound,
+                      Start_Cfg, 0, S.Play_Awaiting_Config_Ack);
+         for St in S.Connection_State loop
+            declare
+               Cnt_Valid : Natural := 0;
+            begin
+               for V in -3 .. 400 loop
+                  if S.Is_Packet_Valid (St, S.Clientbound, S.Packet_Id (V))
+                  then
+                     Cnt_Valid := Cnt_Valid + 1;
+                  end if;
+               end loop;
+               if Cnt_Valid /= Expected_Count (St, S.Clientbound) then
+                  Out_Ok := False;
+               end if;
+            end;
+         end loop;
+         Check (Out_Ok, "clientbound validity count per state");
+
+         --  Boundary inputs and determinism.
+         for St in S.Connection_State loop
+            for D in S.Packet_Direction loop
+               for Id of Ids_To_Try loop
+                  for In_V of Intents loop
+                     declare
+                        A : constant S.Transition_Result :=
+                          Step (St, D, Id, In_V);
+                        B : constant S.Transition_Result :=
+                          Step (St, D, Id, In_V);
+                     begin
+                        if not Same (A, B) then
+                           Det_Ok := False;
+                        end if;
+                        if A.Kind = S.Rejected
+                          and then A.Next_State /= St
+                        then
+                           Bound_Ok := False;
+                        end if;
+                        if S.Is_Packet_Valid (St, D, Id)
+                          /= S.Is_Packet_Valid (St, D, Id)
+                        then
+                           Det_Ok := False;
+                        end if;
+                     end;
+                  end loop;
+                  if Id in S.Packet_Id'First | S.Packet_Id'Last | -1
+                       | -1_000_000 | 1_000_000
+                    and then S.Is_Packet_Valid (St, D, Id)
+                  then
+                     Bound_Ok := False;
+                  end if;
+               end loop;
+            end loop;
+         end loop;
+         Check (Bound_Ok, "boundary ids and intents yield value results");
+         Check (Det_Ok, "repeated calls are identical");
+         for K in S.Handshake_Intent'(-5) .. 10 loop
+            if K not in 1 .. 3 then
+               Expect_Reject ("intent outside 1..3", S.Handshake,
+                              S.Serverbound, Intention, K,
+                              S.Invalid_Handshake_Intent);
+            end if;
+         end loop;
+      end;
    end;
 
    if Failures = 0 then

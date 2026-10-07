@@ -4,7 +4,7 @@ FLAGS := -gnat2022 -gnata -D obj
 
 .PHONY: all test server clean check check-packets-table
 
-all: bin/adacraft bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state
+all: bin/adacraft bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus
 
 bin/test_protocol_varnum: tests/test_protocol_varnum.adb
 	mkdir -p bin obj
@@ -22,17 +22,27 @@ bin/test_ingress_framing: tests/test_ingress_framing.adb
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_ingress_framing.adb -o $@
 
+bin/test_corpus_loader: tests/test_corpus_loader.adb tests/adacraft-corpus.ads tests/adacraft-corpus-loader.ads tests/adacraft-corpus-loader.adb
+	mkdir -p bin obj
+	$(GNATMAKE) $(FLAGS) -Itests $(SRC) tests/test_corpus_loader.adb -o $@
+
+bin/test_golden_corpus: tests/test_golden_corpus.adb tests/adacraft-corpus.ads tests/adacraft-corpus-loader.ads tests/adacraft-corpus-loader.adb tests/adacraft-corpus-runner.ads tests/adacraft-corpus-runner.adb
+	mkdir -p bin obj
+	$(GNATMAKE) $(FLAGS) -Itests $(SRC) tests/test_golden_corpus.adb -o $@
+
 bin/adacraft: src/adacraft_server.adb
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) src/adacraft_server.adb -o $@
 
-test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state
+test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus
 	$(MAKE) --no-print-directory check-packets-table
 	$(MAKE) --no-print-directory check
 	./bin/adacraft_tests
 	./bin/test_ingress_framing
 	./bin/test_protocol_varnum
 	./bin/test_protocol_state
+	./bin/test_corpus_loader
+	./bin/test_golden_corpus
 
 # Regenerates Adacraft.Protocol.Ids from the committed packets.json, compares
 # it with the committed file, and checks the report SHA-256 recorded in the

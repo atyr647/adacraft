@@ -7,7 +7,7 @@ project Differential is
    for Exec_Dir use "../bin";
    --  Main is added when the CLI (differential-main.adb) lands;
    --  it will produce adacraft-diff.
-   for Main use ();
+   for Main use ("differential-main.adb");
    for Source_Files use
      ("differential.ads",
       "adacraft.ads",

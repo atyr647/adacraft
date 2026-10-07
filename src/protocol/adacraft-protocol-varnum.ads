@@ -55,4 +55,25 @@ is
    --  before a terminating byte. Overlong: the 5th byte has the
    --  continuation bit set or is greater than 16#0F#. Non-minimal forms
    --  within 5 bytes are accepted.
+
+   --  Compatibility wrapper for existing callers (frame, buffer, packets):
+   --  same shape and strictness as the previous Decode_Varint, which also
+   --  rejects non-minimal forms.
+   type Varint_Result is record
+      Status : Status_Kind            := Rejected;
+      Value  : Interfaces.Unsigned_32 := 0;
+      Next   : Natural                := 0;
+   end record;
+
+   function Decode_Varint (Buffer : Octets; From : Positive) return Varint_Result
+     with
+       Global => null,
+       Pre    => Buffer'Last < Positive'Last
+                 and then From <= Buffer'Last + 1,
+       Post   =>
+         (if Decode_Varint'Result.Status = Status_Kind'(Ok)
+          then Decode_Varint'Result.Next in From + 1 .. From + Max_Varint_Bytes
+               and then Decode_Varint'Result.Next - 1 <= Buffer'Last)
+         and then (if Decode_Varint'Result.Status /= Status_Kind'(Ok)
+                   then Decode_Varint'Result.Next = From);
 end Adacraft.Protocol.Varnum;

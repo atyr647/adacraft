@@ -115,4 +115,34 @@ is
 
       Status := Overlong;
    end Decode;
+
+   function Decode_Varint (Buffer : Octets; From : Positive) return Varint_Result is
+      V : Interfaces.Integer_32;
+      C : Natural;
+      S : Status_Type;
+   begin
+      if From > Buffer'Last then
+         return (Status => Need_More, Value => 0, Next => From);
+      end if;
+
+      Decode (Buffer, From, V, C, S);
+      case S is
+         when Ok =>
+            if C > 1 and then Buffer (From + C - 1) = 0 then
+               return (Status => Rejected, Value => 0, Next => From);
+            end if;
+            return
+              (Status => Status_Kind'(Ok),
+               Value  =>
+                 (if V < 0
+                  then Interfaces.Unsigned_32
+                         (Interfaces.Integer_64 (V) + 2 ** 32)
+                  else Interfaces.Unsigned_32 (V)),
+               Next   => From + C);
+         when Truncated =>
+            return (Status => Need_More, Value => 0, Next => From);
+         when Overlong | Buffer_Too_Small =>
+            return (Status => Rejected, Value => 0, Next => From);
+      end case;
+   end Decode_Varint;
 end Adacraft.Protocol.Varnum;

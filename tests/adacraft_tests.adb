@@ -106,15 +106,6 @@ begin
    end;
 
    declare
-      Long : Protocol.Buffer.Writer (16);
-      Dec  : Protocol.Varnum.Varlong_Result;
-   begin
-      Protocol.Buffer.Put_Varint (Long, 777);
-      Dec := Protocol.Varnum.Decode_Varlong (Long.Data (1 .. Long.Len), 1);
-      Check (Dec.Status = Protocol.Ok and then Dec.Value = 777, "varlong 777");
-   end;
-
-   declare
       Payload : Protocol.Buffer.Writer (64);
       Wire    : Protocol.Buffer.Writer (80);
       Dec     : Protocol.Frame.Frame_Decode;

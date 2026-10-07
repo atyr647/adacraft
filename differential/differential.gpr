@@ -5,11 +5,19 @@ project Differential is
      ("src", "../generated", "../src/protocol", "../tests");
    for Object_Dir use "../obj/differential";
    for Exec_Dir use "../bin";
-   --  Main is added when the CLI (differential-main.adb) lands;
-   --  it will produce adacraft-diff.
-   for Main use ("differential-main.adb");
+   --  When the CLI (differential-main.adb) lands, add
+   --  'for Main use' and a Builder Executable mapping to adacraft-diff.
    for Source_Files use
      ("differential.ads",
+      "differential-client.ads", "differential-client.adb",
+      "differential-compare.ads", "differential-compare.adb",
+      "differential-extract.ads", "differential-extract.adb",
+      "differential-normalize.ads", "differential-normalize.adb",
+      "differential-obs.ads", "differential-obs.adb",
+      "differential-report.ads", "differential-report.adb",
+      "differential-scenario.ads", "differential-scenario.adb",
+      "differential-target.ads",
+      "differential-target-oracle.ads", "differential-target-oracle.adb",
       "adacraft.ads",
       "adacraft-protocol.ads",
       "adacraft-protocol-buffer.ads", "adacraft-protocol-buffer.adb",
@@ -25,9 +33,5 @@ project Differential is
    package Compiler is
       for Default_Switches ("ada") use ("-gnat2022", "-gnata");
    end Compiler;
-
-   package Builder is
-      for Executable ("differential-main.adb") use "adacraft-diff";
-   end Builder;
 
 end Differential;

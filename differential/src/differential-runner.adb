@@ -1,75 +1,76 @@
 with Ada.Streams;
 with Interfaces;
+with Adacraft.Protocol.Frame;
+with Adacraft.Protocol.Varnum;
 with Adacraft.Protocol.State;
 with Differential.Net;
 
 package body Differential.Runner is
 
+   package P renames Adacraft.Protocol;
    package St renames Adacraft.Protocol.State;
    use type St.Result_Kind;
-   use type Interfaces.Unsigned_8;
-   use type Corpus.Byte_Vectors.Extended_Index;
+   use type P.Status_Kind;
+   use type Interfaces.Integer_32;
+   use type P.Varnum.Status_Type;
 
-   function Byte (Raw : Corpus.Byte_Vectors.Vector; Pos : Positive)
-      return Natural is (Natural (Raw.Element (Pos)));
+   function To_Octets (Raw : Corpus.Byte_Vectors.Vector) return P.Octets is
+      R : P.Octets (1 .. Natural (Raw.Length));
+   begin
+      for I in R'Range loop
+         R (I) := P.Octet (Raw.Element (I));
+      end loop;
+      return R;
+   end To_Octets;
 
-   --  Reads a VarInt at Pos; advances Pos.
-   procedure Read_VarInt
-     (Raw : Corpus.Byte_Vectors.Vector;
+   --  Reads a VarInt through Varnum at Pos; advances Pos.
+   procedure Read_Var
+     (Buf : P.Octets;
       Pos : in out Positive;
       Val : out Natural;
       Ok  : out Boolean)
    is
-      Acc   : Long_Long_Integer := 0;
-      Shift : Natural := 0;
-      B     : Natural;
+      V      : Interfaces.Integer_32;
+      Used   : Natural;
+      Status : P.Varnum.Status_Type;
    begin
       Val := 0;
       Ok := False;
-      for I in 1 .. 5 loop
-         if Pos > Natural (Raw.Length) then
-            return;
-         end if;
-         B := Byte (Raw, Pos);
-         Pos := Pos + 1;
-         Acc := Acc + Long_Long_Integer (B mod 128) * 2 ** Shift;
-         Shift := Shift + 7;
-         if B < 128 then
-            if Acc > Long_Long_Integer (Natural'Last) then
-               return;
-            end if;
-            Val := Natural (Acc);
-            Ok := True;
-            return;
-         end if;
-      end loop;
-   end Read_VarInt;
+      if Pos > Buf'Last then
+         return;
+      end if;
+      P.Varnum.Decode (Buf, Pos, V, Used, Status);
+      if Status /= P.Varnum.Ok or else V < 0 then
+         return;
+      end if;
+      Pos := Pos + Used;
+      Val := Natural (V);
+      Ok := True;
+   end Read_Var;
 
-   --  Validates a serverbound step; returns its id and the position of
-   --  the first payload byte.
+   --  Validates a serverbound step as exactly one frame; returns its id
+   --  and the position of the first payload byte.
    procedure Prepare
      (S       : Corpus.Step;
       Id      : out Natural;
       Payload : out Positive)
    is
-      Pos : Positive := 1;
-      Len : Natural;
-      Ok  : Boolean;
+      Buf : constant P.Octets := To_Octets (S.Raw);
    begin
       Id := 0;
       Payload := 1;
-      if S.Raw.Is_Empty then
+      if Buf'Length = 0 then
          raise Step_Encoding_Error;
       end if;
-      Read_VarInt (S.Raw, Pos, Len, Ok);
-      if not Ok or else Len /= Natural (S.Raw.Length) - (Pos - 1) then
-         raise Step_Encoding_Error;
-      end if;
-      Read_VarInt (S.Raw, Pos, Id, Ok);
-      if not Ok then
-         raise Step_Encoding_Error;
-      end if;
-      Payload := Pos;
+      declare
+         F : constant P.Frame.Frame_Decode := P.Frame.Decode_Frame (Buf, 1);
+      begin
+         if F.Status /= P.Ok or else F.Next /= Buf'Last + 1 then
+            raise Step_Encoding_Error;
+         end if;
+         Id := F.Packet_Id;
+         Payload := F.Payload_First;
+      end;
       if S.Has_Packet_Id then
          Id := S.Packet_Id;
       end if;
@@ -79,20 +80,21 @@ package body Differential.Runner is
      (Raw : Corpus.Byte_Vectors.Vector; Payload : Positive)
       return St.Handshake_Intent
    is
+      Buf : constant P.Octets := To_Octets (Raw);
       Pos : Positive := Payload;
       V   : Natural;
       Ok  : Boolean;
    begin
-      Read_VarInt (Raw, Pos, V, Ok);        --  protocol version
+      Read_Var (Buf, Pos, V, Ok);           --  protocol version
       if not Ok then
          return 0;
       end if;
-      Read_VarInt (Raw, Pos, V, Ok);        --  address length
-      if not Ok or else Pos + V + 2 > Natural (Raw.Length) + 1 then
+      Read_Var (Buf, Pos, V, Ok);           --  address length
+      if not Ok or else Pos + V + 2 > Buf'Last + 1 then
          return 0;
       end if;
       Pos := Pos + V + 2;                   --  address, port
-      Read_VarInt (Raw, Pos, V, Ok);
+      Read_Var (Buf, Pos, V, Ok);
       if not Ok then
          return 0;
       end if;

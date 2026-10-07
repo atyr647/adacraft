@@ -11,7 +11,6 @@ with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Ids;
 with Adacraft.Protocol.Packets;
-with Adacraft.Protocol.Varnum;
 
 procedure Adacraft_Tests is
    package Protocol renames Adacraft.Protocol;
@@ -64,25 +63,25 @@ procedure Adacraft_Tests is
 begin
    declare
       W   : Protocol.Buffer.Writer (16);
-      Dec : Protocol.Varnum.Varint_Result;
+      Dec : Protocol.Buffer.Varint_Result;
    begin
       Protocol.Buffer.Put_Varint (W, 0);
-      Dec := Protocol.Varnum.Decode_Varint (W.Data (1 .. W.Len), 1);
+      Dec := Protocol.Buffer.Decode_Varint (W.Data (1 .. W.Len), 1);
       Check (Dec.Status = Protocol.Ok and then Dec.Value = 0 and then Dec.Next = 2, "varint 0");
 
       Protocol.Buffer.Reset (W);
       Protocol.Buffer.Put_Varint (W, 127);
-      Dec := Protocol.Varnum.Decode_Varint (W.Data (1 .. W.Len), 1);
+      Dec := Protocol.Buffer.Decode_Varint (W.Data (1 .. W.Len), 1);
       Check (Dec.Status = Protocol.Ok and then Dec.Value = 127, "varint 127");
 
       Protocol.Buffer.Reset (W);
       Protocol.Buffer.Put_Varint (W, 128);
-      Dec := Protocol.Varnum.Decode_Varint (W.Data (1 .. W.Len), 1);
+      Dec := Protocol.Buffer.Decode_Varint (W.Data (1 .. W.Len), 1);
       Check (Dec.Status = Protocol.Ok and then Dec.Value = 128 and then W.Len = 2, "varint 128");
 
       Protocol.Buffer.Reset (W);
       Protocol.Buffer.Put_Varint (W, 777);
-      Dec := Protocol.Varnum.Decode_Varint (W.Data (1 .. W.Len), 1);
+      Dec := Protocol.Buffer.Decode_Varint (W.Data (1 .. W.Len), 1);
       Check
         (Dec.Status = Protocol.Ok and then Dec.Value = 777
          and then W.Data (1) = 16#89# and then W.Data (2) = 16#06#,
@@ -91,27 +90,18 @@ begin
 
    declare
       Overlong : constant Protocol.Octets := (16#80#, 16#00#);
-      Dec      : constant Protocol.Varnum.Varint_Result :=
-        Protocol.Varnum.Decode_Varint (Overlong, 1);
+      Dec      : constant Protocol.Buffer.Varint_Result :=
+        Protocol.Buffer.Decode_Varint (Overlong, 1);
       Partial  : constant Protocol.Octets := (1 => 16#80#);
-      More     : constant Protocol.Varnum.Varint_Result :=
-        Protocol.Varnum.Decode_Varint (Partial, 1);
+      More     : constant Protocol.Buffer.Varint_Result :=
+        Protocol.Buffer.Decode_Varint (Partial, 1);
       Wide     : constant Protocol.Octets := (16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#7F#);
-      Bad      : constant Protocol.Varnum.Varint_Result :=
-        Protocol.Varnum.Decode_Varint (Wide, 1);
+      Bad      : constant Protocol.Buffer.Varint_Result :=
+        Protocol.Buffer.Decode_Varint (Wide, 1);
    begin
       Check (Dec.Status = Protocol.Rejected, "reject overlong varint");
       Check (More.Status = Protocol.Need_More, "truncated varint");
       Check (Bad.Status = Protocol.Rejected, "reject 5-byte overflow");
-   end;
-
-   declare
-      Long : Protocol.Buffer.Writer (16);
-      Dec  : Protocol.Varnum.Varlong_Result;
-   begin
-      Protocol.Buffer.Put_Varint (Long, 777);
-      Dec := Protocol.Varnum.Decode_Varlong (Long.Data (1 .. Long.Len), 1);
-      Check (Dec.Status = Protocol.Ok and then Dec.Value = 777, "varlong 777");
    end;
 
    declare
@@ -287,8 +277,8 @@ begin
             Buf (I) := Protocol.Octet (Seed mod 256);
          end loop;
          declare
-            Dec : constant Protocol.Varnum.Varint_Result :=
-              Protocol.Varnum.Decode_Varint (Buf, 1);
+            Dec : constant Protocol.Buffer.Varint_Result :=
+              Protocol.Buffer.Decode_Varint (Buf, 1);
             Frm : constant Protocol.Frame.Frame_Decode :=
               Protocol.Frame.Decode_Frame (Buf, 1);
          begin

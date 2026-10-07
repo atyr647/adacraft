@@ -15,6 +15,23 @@ package Adacraft.Protocol.Buffer is
    procedure Put_U64 (W : in out Writer; Value : Interfaces.Unsigned_64);
    procedure Put_String (W : in out Writer; Value : String);
 
+   type Varint_Result is record
+      Status : Status_Kind            := Rejected;
+      Value  : Interfaces.Unsigned_32 := 0;
+      Next   : Natural                := 0;
+   end record;
+
+   function Decode_Varint (Buffer : Octets; From : Positive) return Varint_Result
+     with Pre =>
+       Buffer'Last < Positive'Last
+       and then From <= Buffer'Last + 1,
+       Post =>
+         (if Decode_Varint'Result.Status = Ok
+          then Decode_Varint'Result.Next in From + 1 .. From + Max_Varint_Bytes
+               and then Decode_Varint'Result.Next - 1 <= Buffer'Last)
+         and then (if Decode_Varint'Result.Status /= Ok
+                   then Decode_Varint'Result.Next = From);
+
    type String_Decode is record
       Status : Status_Kind := Rejected;
       Text   : String (1 .. 32767) := (others => ' ');

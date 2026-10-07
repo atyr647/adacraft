@@ -1,18 +1,17 @@
 with Adacraft.Protocol.Ids;
-with Adacraft.Protocol.Varnum;
 
 package body Adacraft.Protocol.Packets is
    function Decode_Handshake (Payload : Octets) return Handshake is
       Result  : Handshake;
-      Version : Varnum.Varint_Result;
+      Version : Buffer.Varint_Result;
       Address : Buffer.String_Decode;
-      Intent  : Varnum.Varint_Result;
+      Intent  : Buffer.Varint_Result;
    begin
       if Payload'Length = 0 then
          Result.Status := Rejected;
          return Result;
       end if;
-      Version := Varnum.Decode_Varint (Payload, Payload'First);
+      Version := Buffer.Decode_Varint (Payload, Payload'First);
       if Version.Status /= Ok then
          Result.Status := Version.Status;
          return Result;
@@ -32,7 +31,7 @@ package body Adacraft.Protocol.Packets is
          Result.Status := Rejected;
          return Result;
       end if;
-      Intent := Varnum.Decode_Varint (Payload, Address.Next + 2);
+      Intent := Buffer.Decode_Varint (Payload, Address.Next + 2);
       if Intent.Status /= Ok or else Intent.Next /= Payload'Last + 1 then
          Result.Status := Rejected;
          return Result;

@@ -1,9 +1,10 @@
 with Interfaces;
-with Adacraft.Protocol.Varnum;
+with Adacraft.Protocol.Buffer;
 
 package body Adacraft.Protocol.Frame
   with SPARK_Mode
 is
+   package Wire renames Adacraft.Protocol.Buffer;
    use type Interfaces.Unsigned_32;
    use type Ada.Streams.Stream_Element_Offset;
    use type Ada.Streams.Stream_Element;
@@ -159,8 +160,8 @@ is
    end Feed;
 
    function Decode_Frame (Buffer : Octets; From : Positive) return Frame_Decode is
-      Length      : Varnum.Varint_Result;
-      Ident       : Varnum.Varint_Result;
+      Length      : Wire.Varint_Result;
+      Ident       : Wire.Varint_Result;
       Size        : Natural;
       Payload_End : Natural;
    begin
@@ -169,7 +170,7 @@ is
                  Payload_Last => 0, Next => From, Declared_Length => 0);
       end if;
 
-      Length := Varnum.Decode_Varint (Buffer, From);
+      Length := Wire.Decode_Varint (Buffer, From);
       if Length.Status /= Status_Kind'(Ok) then
          return (Status => Length.Status, Packet_Id => 0, Payload_First => 1,
                  Payload_Last => 0, Next => From, Declared_Length => 0);
@@ -194,7 +195,7 @@ is
       end if;
 
       Payload_End := Length.Next + Size - 1;
-      Ident := Varnum.Decode_Varint (Buffer, Length.Next);
+      Ident := Wire.Decode_Varint (Buffer, Length.Next);
       if Ident.Status /= Status_Kind'(Ok)
         or else Ident.Next < Length.Next
         or else Ident.Next > Payload_End + 1

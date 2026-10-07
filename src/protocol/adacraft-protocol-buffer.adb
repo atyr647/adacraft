@@ -1,6 +1,5 @@
-with Adacraft.Protocol.Varnum;
-
 package body Adacraft.Protocol.Buffer is
+   use type Interfaces.Unsigned_8;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_64;
@@ -67,13 +66,48 @@ package body Adacraft.Protocol.Buffer is
       end loop;
    end Put_String;
 
+   function Decode_Varint (Buffer : Octets; From : Positive) return Varint_Result is
+      Result : Interfaces.Unsigned_32 := 0;
+      Pos    : Natural                := From;
+   begin
+      if From > Buffer'Last then
+         return (Status => Need_More, Value => 0, Next => From);
+      end if;
+
+      for Step in 1 .. Max_Varint_Bytes loop
+         pragma Loop_Invariant (Pos in From .. Buffer'Last);
+         declare
+            B     : constant Octet := Buffer (Pos);
+            Bits  : constant Interfaces.Unsigned_32 :=
+              Interfaces.Unsigned_32 (B and 16#7F#);
+            Shift : constant Natural := (Step - 1) * 7;
+         begin
+            if Step = Max_Varint_Bytes and then Bits > 15 then
+               return (Status => Rejected, Value => 0, Next => From);
+            end if;
+            Result := Result or Interfaces.Shift_Left (Bits, Shift);
+            Pos    := Pos + 1;
+            if (B and 16#80#) = 0 then
+               if Step > 1 and then Bits = 0 then
+                  return (Status => Rejected, Value => 0, Next => From);
+               end if;
+               return (Status => Ok, Value => Result, Next => Pos);
+            end if;
+            if Pos > Buffer'Last then
+               return (Status => Need_More, Value => 0, Next => From);
+            end if;
+         end;
+      end loop;
+      return (Status => Rejected, Value => 0, Next => From);
+   end Decode_Varint;
+
    function Remaining (Last : Natural; From : Natural) return Natural is
      (if From > Last then 0 else Last - From + 1);
 
    function Decode_String
      (Buffer : Octets; From : Positive; Max_Chars : Positive) return String_Decode
    is
-      Dec : constant Varnum.Varint_Result := Varnum.Decode_Varint (Buffer, From);
+      Dec : constant Varint_Result := Decode_Varint (Buffer, From);
       Len : Natural;
       Pos : Natural;
       Decoded : String_Decode;

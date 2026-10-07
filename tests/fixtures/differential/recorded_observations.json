@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "normalization_version": 1,
+  "ignore_list_version": 1,
+  "note": "Normalized observations derived from the recorded Phase-1 packet streams; regenerate from a real server.jar run when available.",
+  "observations": [
+    {
+      "scenario": "status-request",
+      "steps": [
+        {
+          "state": "status",
+          "outcome": "ok",
+          "fields": {
+            "status.description": {"text": "A Minecraft Server"},
+            "status.players.max": 20,
+            "status.players.online": 0,
+            "status.version.name": "26.3",
+            "status.version.protocol": 777
+          },
+          "unlisted": {
+            "status.favicon": "ignored:string:30",
+            "status.players.sample": "ignored:array:2"
+          }
+        },
+        {
+          "state": "status",
+          "outcome": "ok",
+          "fields": {},
+          "unlisted": {"status.pong": "unlisted:scalar:3"}
+        }
+      ]
+    },
+    {
+      "scenario": "login-rejected",
+      "steps": [
+        {
+          "state": "login",
+          "outcome": "rejected",
+          "fields": {
+            "login.outcome": "rejected",
+            "login.reason": {"text": "Not allowed"}
+          },
+          "unlisted": {}
+        }
+      ]
+    }
+  ]
+}

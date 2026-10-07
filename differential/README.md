@@ -13,6 +13,10 @@ Runs the same Golden Corpus scenarios against an **oracle** (the official Minecr
 - A running AdaCraft subject (`make && ./bin/adacraft 25565`, or another port).
 - Compression, encryption and authentication are not exercised.
 
+## Protocol packages
+
+No protocol library GPR exists in the repository, so `differential/differential.gpr` compiles `src/protocol/` and `generated/` directly as source directories. It never depends on `adacraft.gpr`, and nothing in `adacraft.gpr` depends on it.
+
 ## Build and test
 
 ```text

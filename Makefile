@@ -2,7 +2,7 @@ GNATMAKE ?= gnatmake
 SRC := -Igenerated -Isrc -Isrc/protocol -Isrc/kernel -Isrc/auth -Isrc/ingress -Isrc/network
 FLAGS := -gnat2022 -gnata -D obj
 
-.PHONY: all test server clean check check-packets-table differential differential-test
+.PHONY: all test server clean check check-packets-table differential differential-test ci
 
 all: bin/adacraft bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus
 
@@ -70,6 +70,11 @@ differential:
 differential-test:
 	gprbuild -P differential/differential.gpr -XDIFFERENTIAL_TARGET=test
 	./differential/bin/test_runner
+
+# CI entry point: shipped-server tests plus the standalone differential tests.
+ci:
+	$(MAKE) --no-print-directory test
+	$(MAKE) --no-print-directory differential-test
 
 server: bin/adacraft
 	./bin/adacraft

@@ -5,6 +5,8 @@ with Adacraft.Protocol.State;
 
 package Adacraft.Corpus is
 
+   subtype Unbounded_String is Ada.Strings.Unbounded.Unbounded_String;
+
    Max_Steps     : constant := 1024;
    Max_File_Size : constant := 1_048_576;
 

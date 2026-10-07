@@ -434,8 +434,12 @@ begin
       Expect_Reject ("Configuration Acknowledged in Play",
                      S.Play, S.Serverbound, Play_Ack, 0,
                      S.Invalid_Transition);
-      Expect_Reject ("Login Finished is not repeated in Login_Awaiting_Ack",
+      Expect_Reject ("Login Finished id is serverbound-only in Login_Awaiting_Ack",
                      S.Login_Awaiting_Ack, S.Clientbound, Finished, 0,
+                     S.Wrong_Direction);
+      Expect_Reject ("Clientbound Login packet rejected in Login_Awaiting_Ack",
+                     S.Login_Awaiting_Ack, S.Clientbound,
+                     Id_Of (Ids.Cb_Login_Cookie_Request), 0,
                      S.Packet_Not_Valid_In_State);
 
       --  Rejection reasons.

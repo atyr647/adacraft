@@ -4,6 +4,8 @@ with Adacraft.Protocol.State.Table;
 package body Adacraft.Protocol.State
   with SPARK_Mode => On
 is
+   use type Ids.Packet_Name;
+
    function Is_Packet_Valid
      (State : Connection_State;
       Dir   : Packet_Direction;

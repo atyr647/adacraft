@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "note": "Vanilla-shaped Phase-1 streams (payloads as text); regenerate from a real server.jar run when available.",
+  "streams": [
+    {
+      "scenario": "status-request",
+      "steps": [
+        {"state_after": "status", "packets": [
+          {"id": 0, "json": "{\"version\":{\"name\":\"26.3\",\"protocol\":777},\"players\":{\"max\":20,\"online\":0,\"sample\":[]},\"description\":{\"text\":\"A Minecraft Server\"},\"favicon\":\"data:image/png;base64,AAAA\"}"}
+        ]},
+        {"state_after": "status", "packets": [{"id": 1, "pong": 123}]}
+      ]
+    },
+    {
+      "scenario": "login-rejected",
+      "steps": [
+        {"state_after": "login", "packets": [
+          {"id": 0, "json": "{\"text\":\"Not allowed\"}"}
+        ]}
+      ]
+    }
+  ]
+}

@@ -37,6 +37,7 @@ bin/adacraft: src/adacraft_server.adb
 test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus
 	$(MAKE) --no-print-directory check-packets-table
 	$(MAKE) --no-print-directory check
+	$(MAKE) --no-print-directory check-differential
 	./bin/adacraft_tests
 	./bin/test_ingress_framing
 	./bin/test_protocol_varnum

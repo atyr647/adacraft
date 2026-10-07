@@ -1,39 +1,58 @@
 with Interfaces;
 
 package Adacraft.Protocol.Varnum
-  with SPARK_Mode
+  with SPARK_Mode => On
 is
-   type Varint_Result is record
-      Status : Status_Kind             := Rejected;
-      Value  : Interfaces.Unsigned_32  := 0;
-      Next   : Natural                 := 0;
-   end record;
+   use type Interfaces.Integer_32;
 
-   type Varlong_Result is record
-      Status : Status_Kind             := Rejected;
-      Value  : Interfaces.Unsigned_64  := 0;
-      Next   : Natural                 := 0;
-   end record;
+   --  Bounded 32-bit VarInt codec. Malformed or short input is reported
+   --  through Status_Type; no operation raises an exception.
 
-   function Decode_Varint (Buffer : Octets; From : Positive) return Varint_Result
-     with Pre =>
-       Buffer'Last < Positive'Last
-       and then From <= Buffer'Last + 1,
-       Post =>
-         (if Decode_Varint'Result.Status = Ok
-          then Decode_Varint'Result.Next in From + 1 .. From + Max_Varint_Bytes
-               and then Decode_Varint'Result.Next - 1 <= Buffer'Last)
-         and then (if Decode_Varint'Result.Status /= Ok
-                   then Decode_Varint'Result.Next = From);
+   type Status_Type is (Ok, Truncated, Overlong, Buffer_Too_Small);
 
-   function Decode_Varlong (Buffer : Octets; From : Positive) return Varlong_Result
-     with Pre =>
-       Buffer'Last < Positive'Last
-       and then From <= Buffer'Last + 1,
-       Post =>
-         (if Decode_Varlong'Result.Status = Ok
-          then Decode_Varlong'Result.Next in From + 1 .. From + Max_Varlong_Bytes
-               and then Decode_Varlong'Result.Next - 1 <= Buffer'Last)
-         and then (if Decode_Varlong'Result.Status /= Ok
-                   then Decode_Varlong'Result.Next = From);
+   function Encoded_Length (Value : Interfaces.Integer_32) return Natural
+     with
+       Global => null,
+       Post   => Encoded_Length'Result in 1 .. Max_Varint_Bytes
+                 and then (if Value < 0 then Encoded_Length'Result = 5);
+   --  Exact number of bytes Encode writes for Value (minimal form).
+
+   procedure Encode
+     (Value       : in     Interfaces.Integer_32;
+      Buffer      : in out Octets;
+      Start_Index : in     Integer;
+      Written     :    out Natural;
+      Status      :    out Status_Type)
+     with
+       Global => null,
+       Post   =>
+         (if Status = Ok
+          then Written = Encoded_Length (Value)
+          else Status = Buffer_Too_Small
+               and then Written = 0
+               and then Buffer = Buffer'Old);
+   --  Writes the minimal VarInt at Buffer (Start_Index ..). If the full
+   --  encoding does not fit inside Buffer'Range from Start_Index, returns
+   --  Buffer_Too_Small, writes nothing and leaves Buffer unchanged.
+
+   procedure Decode
+     (Buffer      : in     Octets;
+      Start_Index : in     Integer;
+      Value       :    out Interfaces.Integer_32;
+      Consumed    :    out Natural;
+      Status      :    out Status_Type)
+     with
+       Global => null,
+       Post   =>
+         (if Status = Ok
+          then Consumed in 1 .. Max_Varint_Bytes
+          else Status in Truncated | Overlong
+               and then Value = 0
+               and then Consumed = 0);
+   --  Reads at most 5 bytes from Buffer (Start_Index ..), never outside
+   --  Buffer'Range and never past the terminating byte.
+   --  Truncated: no available byte at Start_Index, or the buffer ends
+   --  before a terminating byte. Overlong: the 5th byte has the
+   --  continuation bit set or is greater than 16#0F#. Non-minimal forms
+   --  within 5 bytes are accepted.
 end Adacraft.Protocol.Varnum;

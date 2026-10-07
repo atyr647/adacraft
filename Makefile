@@ -39,8 +39,7 @@ test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/t
 # state spec. No network, no server.jar.
 check-packets-table:
 	mkdir -p obj
-	sed 's|^OUT = .*|OUT = Path("obj/ids.regenerated.ads").resolve()|; s|OUT.relative_to(ROOT)|OUT.name|' tools/extract_reports.py > obj/extract_tmp.py
-	sed -i 's|ROOT = Path(__file__).resolve().parents\[1\]|ROOT = Path("$(CURDIR)")|' obj/extract_tmp.py
+	sed -e 's|^OUT = .*|OUT = Path("obj/ids.regenerated.ads").resolve()|' -e 's|OUT.relative_to(ROOT)|OUT.name|' -e 's|^ROOT = .*|ROOT = Path("$(CURDIR)")|' tools/extract_reports.py > obj/extract_tmp.py
 	python3 obj/extract_tmp.py > /dev/null
 	cmp obj/ids.regenerated.ads generated/adacraft-protocol-ids.ads || { echo "generated Ids differ from packets.json"; exit 1; }
 	h=$$(python3 -c "import hashlib;print(hashlib.sha256(open('generated/26.3/reports/packets.json','rb').read()).hexdigest())"); \

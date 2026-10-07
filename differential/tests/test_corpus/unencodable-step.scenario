@@ -1,0 +1,16 @@
+corpus_format: 1
+id: unencodable-step
+title: Step whose length prefix does not match its bytes
+description: The driver cannot encode this step, so it must classify ERROR.
+category: status
+protocol: 777
+provenance: hand-authored
+initial_state: STATUS
+final_state: STATUS
+
+step:
+  direction: serverbound
+  input: 05 00
+  outcome: accepted
+  packet_id: 0x00
+  state_after: STATUS

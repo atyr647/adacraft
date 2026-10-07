@@ -197,6 +197,190 @@ begin
       Expect_Error (Buf, 16, V.Truncated, "start past Last 15");
    end;
 
+   --  VarLong happy-path tests (T1-T4).
+   declare
+      use type Interfaces.Integer_64;
+      subtype I64 is Interfaces.Integer_64;
+
+      procedure RT (Value : I64; Len : Natural; Name : String) is
+         Buf  : Octets (1 .. 12) := (others => 16#AA#);
+         W, C : Natural;
+         S    : V.Status_Type;
+         D    : I64;
+      begin
+         V.Encode_Varlong (Value, Buf, 1, W, S);
+         Check (S = V.Ok and then W = Len, Name & " enc len");
+         Check (V.Encoded_Length_Varlong (Value) = Len, Name & " size");
+         if S /= V.Ok or else W not in 1 .. 10 then
+            return;
+         end if;
+         Check (Buf (W + 1) = 16#AA#, Name & " no overrun");
+         V.Decode_Varlong (Buf, 1, D, C, S);
+         Check (S = V.Ok and then D = Value and then C = W,
+                Name & " round trip");
+      end RT;
+
+      procedure Vec (Value : I64; Bytes : Octets; Name : String) is
+         Buf  : Octets (1 .. 12) := (others => 16#AA#);
+         W, C : Natural;
+         S    : V.Status_Type;
+         D    : I64;
+      begin
+         V.Encode_Varlong (Value, Buf, 1, W, S);
+         Check (S = V.Ok and then W = Bytes'Length
+                and then Buf (1 .. W) = Bytes, Name & " encode bytes");
+         V.Decode_Varlong (Bytes, 1, D, C, S);
+         Check (S = V.Ok and then D = Value and then C = Bytes'Length,
+                Name & " decode value");
+         RT (Value, Bytes'Length, Name);
+      end Vec;
+
+      FF9 : constant Octets := (1 .. 9 => 16#FF#);
+      Z9  : constant Octets := (1 .. 9 => 16#80#);
+   begin
+      --  T1
+      Vec (0, (1 => 0), "L0");
+      Vec (1, (1 => 1), "L1");
+      Vec (127, (1 => 16#7F#), "L127");
+      Vec (128, (16#80#, 16#01#), "L128");
+      Vec (255, (16#FF#, 16#01#), "L255");
+      Vec (2_147_483_647, (16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#07#),
+           "Lint max");
+      Vec (2_147_483_648, (16#80#, 16#80#, 16#80#, 16#80#, 16#08#),
+           "Lint max+1");
+      Vec (I64'Last, (1 .. 8 => 16#FF#) & Octets'(1 => 16#7F#), "Llast");
+      Vec (-1, FF9 & Octets'(1 => 1), "L-1");
+      Vec (-2_147_483_648,
+           Octets'(16#80#, 16#80#, 16#80#, 16#80#, 16#F8#, 16#FF#, 16#FF#,
+                   16#FF#, 16#FF#, 16#01#), "Lint min");
+      Vec (I64'First, Z9 & Octets'(1 => 1), "Lfirst");
+
+      --  T2
+      for N in 1 .. 8 loop
+         RT (2 ** (7 * N) - 1, N, "bound-1 n" & Integer'Image (N));
+         RT (2 ** (7 * N), N + 1, "bound n" & Integer'Image (N));
+      end loop;
+      RT (I64'Last, 9, "n9 last");
+      RT (I64'First, 10, "n9 first");
+
+      --  T3
+      declare
+         Extra : constant array (1 .. 8) of I64 :=
+           (12345, 987_654_321, 1 ** 1 + 2 ** 40 + 5, I64'Last - 1,
+            -2, -1000, -(2 ** 40), I64'First + 1);
+      begin
+         for I in Extra'Range loop
+            RT (Extra (I), (if Extra (I) < 0 then 10
+                            else V.Encoded_Length_Varlong (Extra (I))),
+                "extra" & Integer'Image (I));
+         end loop;
+      end;
+
+      --  T4
+      declare
+         Buf : Octets (10 .. 21) := (others => 16#FF#);
+         Cpy : Octets (10 .. 21);
+         D   : I64;
+         C   : Natural;
+         S   : V.Status_Type;
+      begin
+         Buf (12) := 16#80#;
+         Buf (13) := 16#01#;
+         Buf (14) := 16#05#;
+         Cpy := Buf;
+         V.Decode_Varlong (Buf, 12, D, C, S);
+         Check (S = V.Ok and then D = 128 and then C = 2
+                and then 12 + C = 14, "T4 offset decode");
+         Check (Buf = Cpy, "T4 decode does not mutate");
+         V.Decode_Varlong (Buf, 14, D, C, S);
+         Check (S = V.Ok and then D = 5 and then C = 1, "T4 trailing byte");
+      end;
+      declare
+         Buf : Octets (1 .. 14) := (others => 16#EE#);
+         W, C : Natural;
+         D   : I64;
+         S   : V.Status_Type;
+      begin
+         V.Encode_Varlong (-1, Buf, 3, W, S);
+         Check (S = V.Ok and then W = 10, "T4 encode at 3");
+         V.Decode_Varlong (Buf, 3, D, C, S);
+         Check (S = V.Ok and then D = -1 and then C = 10
+                and then Buf (13) = 16#EE#, "T4 decode at 3");
+      end;
+   end;
+
+   --  VarLong error-path tests (T5-T9).
+   declare
+      use type Interfaces.Integer_64;
+      subtype I64 is Interfaces.Integer_64;
+
+      procedure Err (Buf : Octets; Start : Integer;
+                     Expected : V.Status_Type; Name : String) is
+         D : I64;
+         C : Natural;
+         S : V.Status_Type;
+      begin
+         V.Decode_Varlong (Buf, Start, D, C, S);
+         Check (S = Expected, Name & " status");
+         Check (C <= Start + 10 - Start and then D = 0, Name & " bound");
+      end Err;
+
+      procedure Ok_Case (Buf : Octets; Value : I64; Count : Natural;
+                         Name : String) is
+         D : I64;
+         C : Natural;
+         S : V.Status_Type;
+      begin
+         V.Decode_Varlong (Buf, 1, D, C, S);
+         Check (S = V.Ok and then D = Value and then C = Count, Name);
+      end Ok_Case;
+
+      Empty64 : constant Octets (1 .. 0) := (others => 0);
+      FF9     : constant Octets := (1 .. 9 => 16#FF#);
+   begin
+      --  T5
+      Err (Empty64, 1, V.Truncated, "T5 empty");
+      Err (Octets'(1 => 16#80#), 1, V.Truncated, "T5 single 80");
+      Err (FF9, 1, V.Truncated, "T5 nine ff");
+
+      --  T6
+      Err ((1 .. 10 => 16#FF#), 1, V.Overlong, "T6 ten cont");
+      Err ((1 .. 11 => 16#FF#), 1, V.Overlong, "T6 eleven cont");
+      Err ((1 .. 15 => 16#80#), 1, V.Overlong, "T6 fifteen cont");
+
+      --  T7
+      Err (FF9 & Octets'(1 => 16#02#), 1, V.Overlong, "T7 ff9 02");
+      Err (FF9 & Octets'(1 => 16#7F#), 1, V.Overlong, "T7 ff9 7f");
+
+      --  T8
+      Ok_Case (Octets'(16#80#, 16#00#), 0, 2, "T8 80 00");
+      Ok_Case (Octets'(16#FF#, 16#80#, 16#00#), 127, 3, "T8 ff 80 00");
+      Ok_Case ((1 .. 9 => 16#80#) & Octets'(1 => 16#00#), 0, 10,
+               "T8 80x9 00");
+
+      --  T9
+      declare
+         Buf    : Octets (1 .. 5) := (others => 16#EE#);
+         Before : constant Octets (1 .. 5) := Buf;
+         W      : Natural;
+         S      : V.Status_Type;
+      begin
+         V.Encode_Varlong (128, Buf (2 .. 2), 2, W, S);
+         Check (S = V.Buffer_Too_Small and then W = 0 and then Buf = Before,
+                "T9 128 into 1 byte");
+      end;
+      declare
+         Buf    : Octets (1 .. 11) := (others => 16#EE#);
+         Before : constant Octets (1 .. 11) := Buf;
+         W      : Natural;
+         S      : V.Status_Type;
+      begin
+         V.Encode_Varlong (-1, Buf (2 .. 10), 2, W, S);
+         Check (S = V.Buffer_Too_Small and then W = 0 and then Buf = Before,
+                "T9 -1 into 9 bytes");
+      end;
+   end;
+
    if Failures = 0 then
       Ada.Text_IO.Put_Line ("varnum tests passed");
    else

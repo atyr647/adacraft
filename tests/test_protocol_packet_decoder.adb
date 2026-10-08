@@ -18,6 +18,9 @@ procedure Test_Protocol_Packet_Decoder is
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
+   use type V.Status_Type;
+   use type D.Decode_Status;
+   use type D.Field_Kind;
 
    Failures : Natural := 0;
 
@@ -322,9 +325,9 @@ begin
       Append_VarInt (-123);
       Append_VarLong (-9_999_999_999);
       Append_Byte (16#FE#);  --  -2 as byte
-      Append_BE (Interfaces.Unsigned_64 (Interfaces.Unsigned_16 (Interfaces.Integer_16 (-300))), 2);
-      Append_BE (Interfaces.Unsigned_64 (Interfaces.Unsigned_32 (Interfaces.Integer_32 (-70000))), 4);
-      Append_BE (Interfaces.Unsigned_64 (Interfaces.Integer_64 (-2)), 8);
+      Append_BE (65_236, 2);  --  -300 as Short
+      Append_BE (4_294_897_296, 4);  --  -70000 as Int
+      Append_BE (18_446_744_073_709_551_614, 8);  --  -2 as Long
       Append_VarInt (3);
       Append_Byte (16#41#);
       Append_Byte (16#42#);

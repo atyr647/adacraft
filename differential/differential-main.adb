@@ -10,6 +10,7 @@ with Differential.Capture;
 with Differential.Compare;
 with Differential.Report;
 with Differential.Selftest;
+with Differential.Transcript;
 
 procedure Differential.Main is
    use Ada.Command_Line;
@@ -42,10 +43,6 @@ begin
             O_T  : Transcript.Transcript;
             C_T  : Transcript.Transcript;
             Res  : Compare.Comparison_Result;
-            Line : constant String :=
-              Report.Scenario_Line
-                (Report.Make_Result
-                   (Name, Compare.Compare (O_T, C_T)));
          begin
             Capture.Capture_For_Target
               (O_Host, Cfg.Oracle.Port, Item, O_T);
@@ -61,7 +58,6 @@ begin
             else
                Diverged := Diverged + 1;
             end if;
-            pragma Unreferenced (Line);
          end;
       end loop;
       Ada.Text_IO.Put_Line

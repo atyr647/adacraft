@@ -115,4 +115,42 @@ package body Adacraft.Protocol.Packets is
       end loop;
       return Result;
    end Decode_Login_Hello;
+
+   function Decode_Login_Start (Payload : Octets) return Login_Start is
+      Hello  : constant Login_Hello := Decode_Login_Hello (Payload);
+      Result : Login_Start;
+   begin
+      Result.Status := Hello.Status;
+      Result.Name := Hello.Name;
+      Result.Name_Len := Hello.Name_Len;
+      Result.Uuid := Hello.Uuid;
+      return Result;
+   end Decode_Login_Start;
+
+   procedure Encode_Login_Success
+     (W    : in out Buffer.Writer;
+      Uuid : Octets;
+      Name : String)
+   is
+   begin
+      Buffer.Put_Varint
+        (W, Interfaces.Unsigned_32 (Ids.Protocol_Id (Ids.Cb_Login_Login_Finished)));
+      if Uuid'Length /= 16 then
+         W.Failed := True;
+         return;
+      end if;
+      for I in 0 .. 15 loop
+         Buffer.Put_Octet (W, Uuid (Uuid'First + I));
+      end loop;
+      Buffer.Put_String (W, Name);
+      Buffer.Put_Varint (W, 0);
+   end Encode_Login_Success;
+
+   function Decode_Login_Acknowledged (Payload : Octets) return Login_Acknowledged is
+   begin
+      if Payload'Length /= 0 then
+         return (Status => Rejected);
+      end if;
+      return (Status => Ok);
+   end Decode_Login_Acknowledged;
 end Adacraft.Protocol.Packets;

@@ -35,4 +35,24 @@ package Adacraft.Protocol.Packets is
    end record;
 
    function Decode_Login_Hello (Payload : Octets) return Login_Hello;
+
+   type Login_Start is record
+      Status : Status_Kind := Rejected;
+      Name   : String (1 .. 16) := (others => ' ');
+      Name_Len : Natural := 0;
+      Uuid   : Octets (1 .. 16) := (others => 0);
+   end record;
+
+   function Decode_Login_Start (Payload : Octets) return Login_Start;
+
+   procedure Encode_Login_Success
+     (W    : in out Buffer.Writer;
+      Uuid : Octets;
+      Name : String);
+
+   type Login_Acknowledged is record
+      Status : Status_Kind := Rejected;
+   end record;
+
+   function Decode_Login_Acknowledged (Payload : Octets) return Login_Acknowledged;
 end Adacraft.Protocol.Packets;

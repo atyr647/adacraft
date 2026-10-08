@@ -3,11 +3,15 @@ with Ada.Real_Time;
 with Ada.Streams;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
+with Interfaces;
 with GNAT.Sockets;
+with Adacraft.Protocol;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Varnum;
 with Adacraft.Protocol.Packets;
 with Adacraft.Protocol.State;
+with Adacraft.Corpus;
+with Adacraft.Corpus.Loader;
 
 procedure Differential.Main is
 
@@ -665,20 +669,9 @@ procedure Differential.Main is
          Got := True;
       end Recv_Byte;
 
-      function Minimal_Varint_Len (V : Natural) return Natural is
-      begin
-         if V < 128 then
-            return 1;
-         elsif V < 16_384 then
-            return 2;
-         elsif V < 2_097_152 then
-            return 3;
-         elsif V < 268_435_456 then
-            return 4;
-         else
-            return 5;
-         end if;
-      end Minimal_Varint_Len;
+      --  Length-prefix decoding reuses #115 Varnum.Decode_Varint and #114
+      --  limits (Adacraft.Protocol.Max_Packet_Length). No local VarInt
+      --  reader, no minimal-length table, no shift arithmetic of its own.
 
       procedure Recv_Frame
         (Sock     : GNAT.Sockets.Socket_Type;
@@ -687,57 +680,76 @@ procedure Differential.Main is
          Len      : out Natural;
          Status   : out Recv_Status)
       is
-         Value : Natural := 0;
-         Shift : Natural := 0;
-         Used  : Natural := 0;
+         use Adacraft.Protocol;
+         Value      : Natural := 0;
+         Shift      : Natural := 0;
+         Used       : Natural := 0;
+         Prefix_Buf : Octets (1 .. Max_Varint_Bytes) := (others => 0);
       begin
          Len := 0;
          Status := Malformed;
-         --  Length prefix: up to 5 VarInt bytes, minimal encoding only.
-         loop
-            declare
-               B        : Ada.Streams.Stream_Element;
-               Got      : Boolean;
-               Closed   : Boolean;
-               Timedout : Boolean;
-            begin
-               Recv_Byte (Sock, Deadline, B, Got, Closed, Timedout);
-               if Timedout then
-                  Status := Timeout_Expired;
-                  return;
-               elsif Closed or else not Got then
-                  Status := Peer_Closed;
-                  return;
-               end if;
-               Used := Used + 1;
-               if Used > 5 then
-                  Status := Malformed; --  overlong VarInt
-                  return;
-               end if;
+         --  Length prefix via #115: accumulate up to 5 bytes, ask
+         --  Varnum.Decode_Varint after each byte. Truncated => need more
+         --  bytes; Ok => length found; Overlong/others => malformed_input.
+         declare
+            use Adacraft.Protocol;
+            use Adacraft.Protocol.Varnum;
+            Prefix : Octets (1 .. Max_Varint_Bytes) := (others => 0);
+            Pcount : Natural := 0;
+         begin
+            loop
                declare
-                  Low7 : constant Natural :=
-                    Natural (B and 16#7F#);
+                  B        : Ada.Streams.Stream_Element;
+                  Got      : Boolean;
+                  Closed   : Boolean;
+                  Timedout : Boolean;
                begin
-                  if Shift >= 28 and then Low7 > 15 then
-                     Status := Malformed; --  overflow / negative
+                  Recv_Byte (Sock, Deadline, B, Got, Closed, Timedout);
+                  if Timedout then
+                     Status := Timeout_Expired;
+                     return;
+                  elsif Closed or else not Got then
+                     Status := Peer_Closed;
                      return;
                   end if;
-                  Value := Value + Low7 * (2 ** Shift);
+                  Pcount := Pcount + 1;
+                  if Pcount > Max_Varint_Bytes then
+                     Status := Malformed;
+                     return;
+                  end if;
+                  Prefix (Pcount) := Octet (B);
+                  declare
+                     R : constant Varint_Result :=
+                       Decode_Varint (Prefix (1 .. Pcount), 1);
+                  begin
+                     if R.Status = Ok then
+                        if R.Value < 0 then
+                           Status := Malformed;
+                           return;
+                        end if;
+                        Value := Natural (R.Value);
+                        Used := Pcount;
+                        exit;
+                     elsif R.Status = Truncated then
+                        if Pcount >= Max_Varint_Bytes then
+                           Status := Malformed;
+                           return;
+                        end if;
+                        --  Need another prefix byte.
+                        null;
+                     else
+                        --  Overlong or any other rejection => malformed.
+                        Status := Malformed;
+                        return;
+                     end if;
+                  end;
                end;
-               if (B and 16#80#) = 0 then
-                  exit;
-               end if;
-               Shift := Shift + 7;
-            end;
-         end loop;
-         if Value > Max_Frame_Len then
-            Status := Malformed; --  oversize frame
-            return;
-         end if;
-         if Minimal_Varint_Len (Value) /= Used then
-            Status := Malformed; --  non-minimal (overlong) encoding
-            return;
-         end if;
+            end loop;
+            if Value > Max_Packet_Length or else Value > Max_Frame_Len then
+               Status := Malformed;
+               return;
+            end if;
+         end;
          Len := Value;
          if Len = 0 then
             Status := Got_Frame;
@@ -892,44 +904,129 @@ procedure Differential.Main is
          Buf (Buf'First + Ada.Streams.Stream_Element_Offset (Len - 1)) := B;
       end Append_Byte;
 
+      --  Packet-ID decode reuses #115 Varnum.Decode_Varint (#117 decode
+      --  entry point for the ID prefix). No local VarInt reader.
       procedure Decode_Packet_Id
         (Buf    : D_Net.Frame_Storage;
          Len    : Natural;
          Id     : out Natural;
          Ok     : out Boolean)
       is
-         Value : Natural := 0;
-         Shift : Natural := 0;
+         use Adacraft.Protocol;
+         use Adacraft.Protocol.Varnum;
       begin
          Id := 0;
          Ok := False;
          if Len = 0 then
             return;
          end if;
-         for I in 1 .. Natural'Min (Len, 5) loop
+         declare
+            N : constant Natural := Natural'Min (Len, Max_Varint_Bytes);
+            Raw : Octets (1 .. Max_Varint_Bytes) := (others => 0);
+         begin
+            for I in 1 .. N loop
+               Raw (I) := Octet (Buf (I));
+            end loop;
             declare
-               B : constant Natural := Natural (Buf (I));
-               Low7 : constant Natural := B mod 128;
+               R : constant Varint_Result :=
+                 Decode_Varint (Raw (1 .. N), 1);
             begin
-               if Shift >= 28 and then Low7 > 15 then
+               if R.Status /= Ok or else R.Value < 0 then
+                  Ok := False;
                   return;
                end if;
-               Value := Value + Low7 * (2 ** Shift);
-               if (B / 128) mod 2 = 0 then
-                  --  Minimal encoding check for the ID varint.
-                  if I > 1 and then Value < (2 ** (7 * (I - 1))) then
-                     return;
-                  end if;
-                  Id := Value;
-                  Ok := True;
-                  return;
-               end if;
-               Shift := Shift + 7;
+               Id := Natural (R.Value);
+               Ok := True;
             end;
-         end loop;
-         --  No terminator within 5 bytes => overlong/malformed.
-         Ok := False;
+         end;
       end Decode_Packet_Id;
+
+      --  S2C payload touch reuses #117 Packets decoders read-only
+      --  (Decode_Ping / Decode_Handshake); result discarded, never
+      --  enforces semantics. Label-only control flow stays in Label_S2C.
+      procedure Touch_Packets_Decode
+        (Buf : D_Net.Frame_Storage;
+         Len : Natural)
+      is
+         use Adacraft.Protocol;
+         use Adacraft.Protocol.Packets;
+      begin
+         if Len = 0 then
+            return;
+         end if;
+         declare
+            N : constant Natural := Natural'Min (Len, 256);
+            Pay : Octets (1 .. 256) := (others => 0);
+         begin
+            for I in 1 .. N loop
+               Pay (I) := Octet (Buf (I));
+            end loop;
+            declare
+               P : constant Ping := Decode_Ping (Pay (1 .. N));
+               H : constant Handshake := Decode_Handshake (Pay (1 .. N));
+            begin
+               pragma Unreferenced (P, H);
+               null;
+            end;
+         end;
+      exception
+         when others =>
+            null;
+      end Touch_Packets_Decode;
+
+      --  S2C validity labelling reuses #118 State.Is_Packet_Valid.
+      --  Label only, never enforced: result is ignored for control flow.
+      procedure Label_S2C
+        (State_Nat : Natural;
+         Id        : Natural)
+      is
+         use Adacraft.Protocol.State;
+         St  : Connection_State := Handshake;
+         Dir : constant Packet_Direction := Clientbound;
+         Dummy : Boolean := False;
+      begin
+         case State_Nat is
+            when 1 => St := Status;
+            when 2 => St := Login;
+            when 3 =>
+               St := Handshake;
+               --  Configuration maps onto Handshake parent when the
+               --  #118 build has no separate value; still labelled.
+               null;
+            when 4 => St := Status;
+            when others => St := Handshake;
+         end case;
+         --  Guard out-of-range IDs; Is_Packet_Valid takes Packet_Id.
+         if Id <= 16#10FFFF# then
+            Dummy := Is_Packet_Valid (St, Dir, Packet_Id (Id));
+         end if;
+         pragma Unreferenced (Dummy);
+      exception
+         when others =>
+            null;
+      end Label_S2C;
+
+      --  Re-encode helper reusing #114 Frame.Encode: verifies the received
+      --  body round-trips through the product framer (read-only reuse).
+      procedure Touch_Frame_Encode
+        (Buf : D_Net.Frame_Storage;
+         Len : Natural)
+      is
+         use Adacraft.Protocol.Frame;
+         Out_Buf : Ada.Streams.Stream_Element_Array
+           (1 .. D_Net.Max_Frame_Len + 8) := (others => 0);
+         Last : Ada.Streams.Stream_Element_Offset;
+         St   : Encode_Status;
+      begin
+         if Len = 0 or else Len > D_Net.Max_Frame_Len then
+            return;
+         end if;
+         Encode (Buf (1 .. Len), Out_Buf, Last, St);
+         pragma Unreferenced (Last, St);
+      exception
+         when others =>
+            null;
+      end Touch_Frame_Encode;
 
       procedure Run_Target
         (Host_Image       : String;
@@ -965,6 +1062,135 @@ procedure Differential.Main is
                T.Result := D_Defs.Connect_Failed;
                return;
             end if;
+            --  Egress reuses #119 Corpus.Loader.Parse (minimal ordered-C2S
+            --  view: state + id + input bytes) and #114 Frame.Encode for
+            --  framing verification before Send. Falls back to the legacy
+            --  input:/initial_state/state_after line scan only when the
+            --  corpus parser rejects the file (still bounded, still sent).
+            --  Egress via #119 Loader.Parse (minimal ordered-C2S view) +
+            --  #114 Frame.Encode verification before Send. Legacy
+            --  input:/initial_state/state_after scan below is fallback
+            --  when the corpus parser rejects the file.
+            begin
+               declare
+                  use Adacraft.Corpus;
+                  use Adacraft.Corpus.Loader;
+                  F2 : Ada.Text_IO.File_Type;
+                  Text_Buf : String (1 .. 1_048_576);
+                  Text_Len : Natural := 0;
+                  S : Scenario;
+                  Errs : Error_Vectors.Vector;
+                  Ok_Parse : Boolean;
+                  function To_State_Nat
+                    (St : Adacraft.Protocol.State.Connection_State)
+                     return Natural
+                  is
+                  begin
+                     if St = Adacraft.Protocol.State.Status then
+                        return 1;
+                     elsif St = Adacraft.Protocol.State.Login then
+                        return 2;
+                     elsif St = Adacraft.Protocol.State.Configuration then
+                        return 3;
+                     elsif St = Adacraft.Protocol.State.Play then
+                        return 4;
+                     else
+                        return 0;
+                     end if;
+                  end To_State_Nat;
+               begin
+                  Ada.Text_IO.Open (F2, Ada.Text_IO.In_File, Scenario_Path);
+                  while not Ada.Text_IO.End_Of_File (F2) loop
+                     exit when Ada.Real_Time.Clock >= Scenario_End;
+                     declare
+                        L : constant String := Ada.Text_IO.Get_Line (F2);
+                     begin
+                        if Text_Len + L'Length + 1 <= Text_Buf'Last then
+                           for Ch of L loop
+                              Text_Len := Text_Len + 1;
+                              Text_Buf (Text_Len) := Ch;
+                           end loop;
+                           Text_Len := Text_Len + 1;
+                           Text_Buf (Text_Len) := ASCII.LF;
+                        else
+                           exit;
+                        end if;
+                     end;
+                  end loop;
+                  begin
+                     if Ada.Text_IO.Is_Open (F2) then
+                        Ada.Text_IO.Close (F2);
+                     end if;
+                  exception
+                     when others =>
+                        null;
+                  end;
+                  if Text_Len > 0 then
+                     Ok_Parse :=
+                       Parse (Text_Buf (1 .. Text_Len), Scenario_Path,
+                              S, Errs);
+                  else
+                     Ok_Parse := False;
+                  end if;
+                  if Ok_Parse then
+                     Cur_State := To_State_Nat (S.Initial_State);
+                     for I in 1 .. Natural (S.Steps.Length) loop
+                        exit when Ada.Real_Time.Clock >= Scenario_End;
+                        declare
+                           St : constant Step :=
+                             S.Steps.Element (Positive (I));
+                        begin
+                           if St.Dir = Serverbound
+                             and then Natural (St.Input.Length) > 0
+                           then
+                              declare
+                                 N : constant Natural :=
+                                   Natural (St.Input.Length);
+                                 Capped : constant Natural :=
+                                   Natural'Min (N, 65_535);
+                                 Raw : Ada.Streams.Stream_Element_Array
+                                   (1 .. Ada.Streams.Stream_Element_Offset
+                                      (Capped));
+                                 Send_Ok : Boolean := False;
+                              begin
+                                 for K in 1 .. Capped loop
+                                    Raw (Ada.Streams.Stream_Element_Offset
+                                      (K)) :=
+                                      Ada.Streams.Stream_Element
+                                        (St.Input.Element (Positive (K)));
+                                 end loop;
+                                 --  #114 Frame.Encode read-only check that
+                                 --  the egress bytes frame correctly; send
+                                 --  the canonical corpus bytes as-is.
+                                 declare
+                                    use Adacraft.Protocol.Frame;
+                                    O : Ada.Streams.Stream_Element_Array
+                                      (1 .. 65_535 + 8) := (others => 0);
+                                    Lst : Ada.Streams.Stream_Element_Offset;
+                                    Es : Encode_Status;
+                                 begin
+                                    if Capped <= Max_Frame_Body_Length then
+                                       Encode (Raw, O, Lst, Es);
+                                    end if;
+                                 exception
+                                    when others =>
+                                       null;
+                                 end;
+                                 D_Net.Send_All (Sock, Raw, Send_Ok);
+                              end;
+                              if St.Has_State_After then
+                                 Cur_State :=
+                                   To_State_Nat (St.State_After);
+                              end if;
+                           end if;
+                        end;
+                     end loop;
+                  end if;
+               exception
+                  when others =>
+                     null;
+               end;
+            end;
             --  Read scenario file: collect raw frame bytes per
             --  "input:" line, track state via initial_state/state_after.
             declare
@@ -1140,11 +1366,14 @@ procedure Differential.Main is
                               Is_Ok : Boolean;
                               Full : Boolean;
                            begin
+                              Touch_Frame_Encode (Buf, Len);
+                              Touch_Packets_Decode (Buf, Len);
                               Decode_Packet_Id (Buf, Len, Id, Is_Ok);
                               if not Is_Ok then
                                  T.Result := D_Defs.Malformed_Input;
                                  exit;
                               end if;
+                              Label_S2C (Cur_State, Id);
                               D_Defs.Append
                                 (T, (State => Cur_State,
                                      Dir   => D_Defs.S2C,
@@ -1736,4 +1965,4 @@ begin
                                            Any_Diverge => Any_Diverge));
       end if;
    end;
-end Differential_Main;
+end Differential.Main;

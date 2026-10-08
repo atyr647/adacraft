@@ -1,35 +1,54 @@
 with Ada.Exceptions;
+with Ada.Strings.Fixed;
+with GNAT.Sockets;
 with Adacraft.Protocol.State;
 with Differential.Capture.Wire;
 
 package body Differential.Capture is
    package T renames Differential.Transcript;
-   package S renames Adacraft.Protocol.State;
+   package State_Machine renames Adacraft.Protocol.State;
 
    procedure Append
      (Result    : in out T.Transcript;
-      State     : S.Connection_State;
+      State     : State_Machine.Connection_State;
       Direction : T.Direction_T;
-      Packet_Id : S.Packet_Id)
+      Packet_Id : State_Machine.Packet_Id)
    is
    begin
       Result.Entries.Append
         ((State => State, Direction => Direction, Packet_Id => Packet_Id));
    end Append;
 
+   procedure Apply_Transition
+     (Current   : in out State_Machine.Connection_State;
+      Direction : State_Machine.Packet_Direction;
+      Packet_Id : State_Machine.Packet_Id;
+      Intent    : State_Machine.Handshake_Intent := 0)
+   is
+      Transition : constant State_Machine.Transition_Result :=
+        State_Machine.Transition
+          (Current,
+           (Direction => Direction, Id => Packet_Id, Intent => Intent));
+   begin
+      if Transition.Kind /= State_Machine.Rejected then
+         Current := Transition.Next_State;
+      end if;
+   end Apply_Transition;
+
    procedure Run
-     (S          : Scenario;
-      Host       : String;
-      Port       : Positive;
-      Result     : out T.Transcript)
+     (Scenario : Differential.Capture.Scenario;
+      Host     : String;
+      Port     : Positive;
+      Result   : out T.Transcript)
    is
       Target : Differential.Capture.Wire.Connection;
-      State  : S.Connection_State := S.Initial_State;
+      Current_State : State_Machine.Connection_State :=
+        State_Machine.Initial_State;
    begin
       Result := (Entries => T.Entry_Vectors.Empty_Vector,
                  Outcome => T.Completed);
 
-      --  A failed connection is a setup error: no transcript has begun.
+      --  Connect before beginning the transcript: failures are setup errors.
       begin
          Differential.Capture.Wire.Connect (Target, Host, Port);
       exception
@@ -38,72 +57,48 @@ package body Differential.Capture is
       end;
 
       begin
-         for Step of S.Steps loop
+         for Step of Scenario.Steps loop
             if Step.Direction = T.Serverbound then
-               Append (Result, State, T.Serverbound, Step.Packet_Id);
                Differential.Capture.Wire.Send_Packet
-                 (Target, Step.Packet_Id, Step.Payload);
-               declare
-                  Reply : S.Packet_Id;
-                  Before : constant S.Connection_State := State;
-               begin
-                  Differential.Capture.Wire.Receive_Packet
-                    (Target, Reply);
-                  Append (Result, State, T.Clientbound, Reply);
-                  declare
-                     Transition : constant S.Transition_Result :=
-                       S.Transition
-                         (State,
-                          (Direction => S.Clientbound,
-                           Id => Reply,
-                           Intent => 0));
-                  begin
-                     if Transition.Kind /= S.Rejected then
-                        State := Transition.Next_State;
-                     end if;
-                  end;
-                  pragma Unreferenced (Before);
-               end;
-            else
-               declare
-                  Reply : S.Packet_Id;
-               begin
-                  Differential.Capture.Wire.Receive_Packet (Target, Reply);
-                  Append (Result, State, T.Clientbound, Reply);
-                  declare
-                     Transition : constant S.Transition_Result :=
-                       S.Transition
-                         (State,
-                          (Direction => S.Clientbound,
-                           Id => Reply,
-                           Intent => 0));
-                  begin
-                     if Transition.Kind /= S.Rejected then
-                        State := Transition.Next_State;
-                     end if;
-                  end;
-               end;
+                 (Target, Adacraft.Protocol.Packet_Id (Step.Packet_Id),
+                  Step.Payload);
+               Append (Result, Current_State, T.Serverbound, Step.Packet_Id);
+               Apply_Transition
+                 (Current_State, State_Machine.Serverbound, Step.Packet_Id,
+                  Step.Intent);
             end if;
 
-            if Step.Direction = T.Serverbound then
-               declare
-                  Transition : constant S.Transition_Result :=
-                    S.Transition
-                      (State,
-                       (Direction => S.Serverbound,
-                        Id => Step.Packet_Id,
-                        Intent => Step.Intent));
-               begin
-                  if Transition.Kind /= S.Rejected then
-                     State := Transition.Next_State;
-                  end if;
-               end;
-            end if;
+            declare
+               Reply : Adacraft.Protocol.Packet_Id;
+               Reply_State : constant State_Machine.Connection_State :=
+                 Current_State;
+            begin
+               Differential.Capture.Wire.Receive_Packet (Target, Reply);
+               Append
+                 (Result, Reply_State, T.Clientbound,
+                  State_Machine.Packet_Id (Reply));
+               Apply_Transition
+                 (Current_State, State_Machine.Clientbound,
+                  State_Machine.Packet_Id (Reply));
+            end;
          end loop;
       exception
+         when E : GNAT.Sockets.Socket_Error =>
+            declare
+               Message : constant String :=
+                 Ada.Exceptions.Exception_Message (E);
+            begin
+               if Ada.Strings.Fixed.Index (Message, "invalid frame") > 0
+                 or else Ada.Strings.Fixed.Index (Message, "encode") > 0
+               then
+                  Result.Outcome := T.Decode_Error;
+               elsif Ada.Strings.Fixed.Index (Message, "timed out") > 0 then
+                  Result.Outcome := T.Timeout;
+               else
+                  Result.Outcome := T.Closed_By_Peer;
+               end if;
+            end;
          when others =>
-            --  Wire currently reports peer-close, timeout and decode failure
-            --  through Socket_Error; retain the failure as a terminal outcome.
             Result.Outcome := T.Decode_Error;
       end;
 
@@ -113,4 +108,18 @@ package body Differential.Capture is
          Differential.Capture.Wire.Close (Target);
          raise;
    end Run;
+
+   procedure Run_Pair
+     (Scenario         : Differential.Capture.Scenario;
+      Oracle_Host      : String;
+      Oracle_Port      : Positive;
+      Candidate_Host   : String;
+      Candidate_Port   : Positive;
+      Oracle_Result    : out T.Transcript;
+      Candidate_Result : out T.Transcript)
+   is
+   begin
+      Run (Scenario, Oracle_Host, Oracle_Port, Oracle_Result);
+      Run (Scenario, Candidate_Host, Candidate_Port, Candidate_Result);
+   end Run_Pair;
 end Differential.Capture;

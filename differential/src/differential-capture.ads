@@ -24,8 +24,17 @@ package Differential.Capture is
    Setup_Error : exception;
 
    procedure Run
-     (S          : Scenario;
+     (Scenario   : Differential.Capture.Scenario;
       Host       : String;
       Port       : Positive;
       Result     : out Differential.Transcript.Transcript);
+
+   procedure Run_Pair
+     (Scenario        : Differential.Capture.Scenario;
+      Oracle_Host     : String;
+      Oracle_Port     : Positive;
+      Candidate_Host  : String;
+      Candidate_Port  : Positive;
+      Oracle_Result   : out Differential.Transcript.Transcript;
+      Candidate_Result : out Differential.Transcript.Transcript);
 end Differential.Capture;

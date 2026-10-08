@@ -1,4 +1,3 @@
-with Ada.Exceptions;
 with Ada.Streams;
 with GNAT.Sockets;
 with Adacraft.Ingress;
@@ -106,9 +105,11 @@ package body Differential.Capture.Wire is
      (Target    : in out Connection;
       Packet_Id : out Adacraft.Protocol.Packet_Id)
    is
+      type Receive_Failure is (No_Failure, Peer_Closed, Invalid_Frame, Timed_Out);
+
       Ingress : Adacraft.Ingress.Connection_Type;
       Found   : Boolean := False;
-      Failed  : Boolean := False;
+      Failure : Receive_Failure := No_Failure;
 
       procedure On_Body (Data : Adacraft.Ingress.Byte_Array) is
          Bytes    : Adacraft.Protocol.Octets (1 .. Natural (Data'Length));
@@ -117,7 +118,7 @@ package body Differential.Capture.Wire is
          Status   : Adacraft.Protocol.Varnum.Status_Type;
       begin
          if Data'Length = 0 then
-            Failed := True;
+            Failure := Invalid_Frame;
             return;
          end if;
 
@@ -126,9 +127,10 @@ package body Differential.Capture.Wire is
               Adacraft.Protocol.Octet (Data (I));
          end loop;
 
-         Adacraft.Protocol.Varnum.Decode (Bytes, Bytes'First, Value, Consumed, Status);
+         Adacraft.Protocol.Varnum.Decode
+           (Bytes, Bytes'First, Value, Consumed, Status);
          if Status /= Adacraft.Protocol.Varnum.Ok then
-            Failed := True;
+            Failure := Invalid_Frame;
          else
             Packet_Id := Adacraft.Protocol.Packet_Id (Value);
             Found := True;
@@ -137,7 +139,7 @@ package body Differential.Capture.Wire is
 
       procedure On_Close is
       begin
-         Failed := True;
+         Failure := Invalid_Frame;
       end On_Close;
 
       Buffer : Stream_Element_Array (1 .. 4096);
@@ -147,25 +149,43 @@ package body Differential.Capture.Wire is
       end if;
 
       Adacraft.Ingress.Initialize (Ingress, On_Body'Access, On_Close'Access);
-      while not Found and then not Failed loop
+      while not Found and then Failure = No_Failure loop
          declare
             Last : Stream_Element_Offset;
          begin
             Receive_Socket (Target.Socket, Buffer, Last);
             if Last < Buffer'First then
-               Failed := True;
+               Failure := Peer_Closed;
             else
                Adacraft.Ingress.Receive (Ingress, Buffer (Buffer'First .. Last));
             end if;
          exception
-            when Socket_Error =>
-               Failed := True;
+            when E : Socket_Error =>
+               declare
+                  Message : constant String :=
+                    GNAT.Sockets.Exception_Message (E);
+               begin
+                  if Ada.Strings.Fixed.Index (Message, "timed out") > 0
+                    or else Ada.Strings.Fixed.Index (Message, "timeout") > 0
+                  then
+                     Failure := Timed_Out;
+                  else
+                     Failure := Peer_Closed;
+                  end if;
+               end;
          end;
       end loop;
 
-      if Failed then
-         raise Socket_Error with "peer closed, timed out, or sent an invalid frame";
-      end if;
+      case Failure is
+         when No_Failure =>
+            null;
+         when Peer_Closed =>
+            raise Socket_Error with "peer closed";
+         when Invalid_Frame =>
+            raise Socket_Error with "invalid frame";
+         when Timed_Out =>
+            raise Socket_Error with "timed out";
+      end case;
    end Receive_Packet;
 
    procedure Send_All

@@ -4,7 +4,7 @@ FLAGS := -gnat2022 -gnata -D obj
 
 .PHONY: all test server clean check check-packets-table
 
-all: bin/adacraft bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus
+all: bin/adacraft bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus bin/test_login_offline
 
 bin/test_protocol_varnum: tests/test_protocol_varnum.adb
 	mkdir -p bin obj
@@ -14,9 +14,13 @@ bin/test_protocol_state: tests/test_protocol_state.adb
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_protocol_state.adb -o $@
 
-bin/adacraft_tests: tests/adacraft_tests.adb
+bin/adacraft_tests: tests/adacraft_tests.adb tests/test_login_offline.adb
 	mkdir -p bin obj
-	$(GNATMAKE) $(FLAGS) $(SRC) tests/adacraft_tests.adb -o $@
+	$(GNATMAKE) $(FLAGS) -Itests $(SRC) tests/adacraft_tests.adb -o $@
+
+bin/test_login_offline: tests/test_login_offline.adb
+	mkdir -p bin obj
+	$(GNATMAKE) $(FLAGS) -Itests $(SRC) tests/test_login_offline.adb -o $@
 
 bin/test_ingress_framing: tests/test_ingress_framing.adb
 	mkdir -p bin obj
@@ -34,10 +38,11 @@ bin/adacraft: src/adacraft_server.adb
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) src/adacraft_server.adb -o $@
 
-test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus
+test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus bin/test_login_offline
 	$(MAKE) --no-print-directory check-packets-table
 	$(MAKE) --no-print-directory check
 	./bin/adacraft_tests
+	./bin/test_login_offline
 	./bin/test_ingress_framing
 	./bin/test_protocol_varnum
 	./bin/test_protocol_state

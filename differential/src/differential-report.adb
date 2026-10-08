@@ -2,25 +2,29 @@ with Ada.Strings.Unbounded;
 with Differential.Transcript;
 
 package body Differential.Report is
+   function Natural_Text (Value : Natural) return String is
+      Image : constant String := Natural'Image (Value);
+   begin
+      return Image (Image'First + 1 .. Image'Last);
+   end Natural_Text;
+
    function Difference_Text
      (Verdict : Differential.Compare.Verdict) return String
    is
-      use type Differential.Compare.Difference_Kind;
-      use type Differential.Compare.Verdict;
    begin
       case Verdict.Difference is
          when Differential.Compare.No_Difference =>
-            return "difference";
+            return "unspecified";
          when Differential.Compare.State_Difference =>
-            return "entry" & Natural'Image (Verdict.Entry_Index) & " state";
+            return "entry " & Natural_Text (Verdict.Entry_Index) & " state";
          when Differential.Compare.Direction_Difference =>
-            return "entry" & Natural'Image (Verdict.Entry_Index) & " direction";
+            return "entry " & Natural_Text (Verdict.Entry_Index) & " direction";
          when Differential.Compare.Packet_Id_Difference =>
-            return "entry" & Natural'Image (Verdict.Entry_Index) & " packet-id";
+            return "entry " & Natural_Text (Verdict.Entry_Index) & " packet-id";
          when Differential.Compare.Length_Difference =>
-            return "length at entry" & Natural'Image (Verdict.Entry_Index);
+            return "length at entry " & Natural_Text (Verdict.Entry_Index);
          when Differential.Compare.Outcome_Difference =>
-            return "outcome";
+            return "terminal outcome";
       end case;
    end Difference_Text;
 
@@ -28,11 +32,9 @@ package body Differential.Report is
      (Scenarios : Scenario_Result_Vectors.Vector) return String
    is
       use Ada.Strings.Unbounded;
-      use type Differential.Compare.Verdict;
-      use type Scenario_Result_Vectors.Vector;
 
-      Output  : Unbounded_String;
-      Matches : Natural := 0;
+      Output   : Unbounded_String;
+      Matches  : Natural := 0;
       Diverges : Natural := 0;
    begin
       for Item of Scenarios loop
@@ -41,17 +43,7 @@ package body Differential.Report is
             Append (Output, ": MATCH");
             Matches := Matches + 1;
          else
-            Append
-              (Output,
-               ": DIVERGE " & Difference_Text (Item.Verdict));
-            if Item.Verdict.Difference =
-              Differential.Compare.Outcome_Difference
-            then
-               Append
-                 (Output,
-                  " (" & Differential.Transcript.Terminal_Outcome'Image
-                    (Item.Verdict.Difference'Enum_Rep) & ")");
-            end if;
+            Append (Output, ": DIVERGE " & Difference_Text (Item.Verdict));
             Diverges := Diverges + 1;
          end if;
          Append (Output, ASCII.LF);
@@ -59,9 +51,9 @@ package body Differential.Report is
 
       Append
         (Output,
-         "total=" & Natural'Image (Natural (Scenarios.Length))
-         & " match=" & Natural'Image (Matches)
-         & " diverge=" & Natural'Image (Diverges));
+         "total=" & Natural_Text (Natural (Scenarios.Length))
+         & " match=" & Natural_Text (Matches)
+         & " diverge=" & Natural_Text (Diverges));
       return To_String (Output);
    end Format;
 end Differential.Report;

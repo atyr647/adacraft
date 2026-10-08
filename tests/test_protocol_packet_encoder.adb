@@ -209,6 +209,28 @@ procedure Test_Protocol_Packet_Encoder is
    end Check_Long;
 
 begin
+   --  T1 packet-ID vectors (VarInt encodings).
+   Check_Id (0, PE.Byte_Array'(1 => 16#00#), "T1 id 0");
+   Check_Id (127, PE.Byte_Array'(1 => 16#7F#), "T1 id 127");
+   Check_Id (128, PE.Byte_Array'(16#80#, 16#01#), "T1 id 128");
+   Check_Id (255, PE.Byte_Array'(16#FF#, 16#01#), "T1 id 255");
+   Check_Id
+     (2_147_483_647,
+      PE.Byte_Array'(16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#07#),
+      "T1 id max");
+
+   --  T1 negative ID -> Invalid_Packet_Id, zero bytes.
+   declare
+      E   : PE.Encoder;
+      Buf : PE.Byte_Array (1 .. 8) := (others => 16#AA#);
+   begin
+      PE.Start (E);
+      PE.Write_Packet_Id (E, Buf, -1);
+      Check (PE.Status_Of (E) = PE.Invalid_Packet_Id, "T1 id -1 status");
+      Check (PE.Body_Length (E) = 0, "T1 id -1 length");
+      Check (Buf = PE.Byte_Array'(1 .. 8 => 16#AA#), "T1 id -1 no bytes");
+   end;
+
    Check_Bool (True, 16#01#, "T2 bool true");
    Check_Bool (False, 16#00#, "T2 bool false");
    Check_Byte (127, 16#7F#, "T2 byte 127");

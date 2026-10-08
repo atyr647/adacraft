@@ -40,12 +40,29 @@ procedure Test_Protocol_Login_Encryption is
       return True;
    end Bytes_Equal;
 
+   function Sessions_Equal
+     (A, B : State.Login_Session) return Boolean
+   is
+   begin
+      if State.Has_Valid_Token (A) /= State.Has_Valid_Token (B) then
+         return False;
+      end if;
+      return Bytes_Equal
+        (Octets (State.Get_Verify_Token (A)),
+         Octets (State.Get_Verify_Token (B)));
+   end Sessions_Equal;
+
    Der_Buf : Octets (1 .. 2_048) := (others => 0);
    Der_Len : Natural := 0;
    Der_Ok  : Boolean := False;
 
    Tok_A : LE.Token_Bytes := (others => 0);
    Tok_Ok : Boolean := False;
+
+   --  Snapshot of per-connection login state used to prove failure
+   --  paths leave login/world state unchanged (T5..T9 tail assertion).
+   Session_Before : State.Login_Session := State.Initial_Login_Session;
+   Session_Check  : State.Login_Session := State.Initial_Login_Session;
 begin
    --  Init once.
    Check (LE.Ensure_Initialized, "T1 ensure initialized");
@@ -127,6 +144,11 @@ begin
       end if;
       Check (not Same, "T10 two tokens differ");
    end;
+
+   --  Seed the reference login session from a fresh token so the
+   --  failure-path tail assertion has a meaningful "unchanged" value.
+   State.Issue_Token (Session_Before, Tok_A);
+   Session_Check := Session_Before;
 
    --  T2: request encode, pinned ID + VarInt prefixes, True/False.
    declare
@@ -250,6 +272,354 @@ begin
          end if;
       end;
    end;
+
+   --  T5: bad token yields verify-token-mismatch, no secret.
+   declare
+      Secret_Known : constant Octets (1 .. 16) :=
+        (16#01#, 16#02#, 16#03#, 16#04#, 16#05#, 16#06#, 16#07#, 16#08#,
+         16#09#, 16#0A#, 16#0B#, 16#0C#, 16#0D#, 16#0E#, 16#0F#, 16#10#);
+      Tok      : LE.Token_Bytes := (others => 0);
+      Tok_Bad  : LE.Token_Bytes := (others => 0);
+      Ok       : Boolean := False;
+   begin
+      LE.Generate_Verify_Token (Tok, Ok);
+      Check (Ok, "T5 token ok");
+      Tok_Bad := Tok;
+      Tok_Bad (Tok_Bad'First) := Tok_Bad (Tok_Bad'First) xor 16#FF#;
+      if Bytes_Equal (Octets (Tok), Octets (Tok_Bad)) then
+         Tok_Bad (Tok_Bad'First) :=
+           Tok_Bad (Tok_Bad'First) xor 16#01#;
+      end if;
+      declare
+         Es : LE.Encrypt_Result :=
+           LE.Test_Encrypt_With_Public_Key (Secret_Known);
+         Et : LE.Encrypt_Result :=
+           LE.Test_Encrypt_With_Public_Key (Octets (Tok));
+      begin
+         Check (Es.Status = LE.Encrypt_Ok, "T5 encrypt secret");
+         Check (Et.Status = LE.Encrypt_Ok, "T5 encrypt token");
+         if Es.Status = LE.Encrypt_Ok and then Et.Status = LE.Encrypt_Ok then
+            declare
+               Dec : LE.Encryption_Response;
+               Ver : LE.Verify_Result (LE.Verify_Token_Mismatch);
+            begin
+               Dec.Secret_Cipher := LE.Cipher_Bytes (Es.Data);
+               Dec.Token_Cipher := LE.Cipher_Bytes (Et.Data);
+               Ver := LE.Verify_Response (Dec, Tok_Bad);
+               Check (Ver.Status = LE.Verify_Token_Mismatch,
+                      "T5 bad token mismatch");
+               --  No secret is returned: discriminant is the failure
+               --  kind, so there is no Ver.Secret to read here.
+            end;
+         end if;
+      end;
+      Check (Sessions_Equal (Session_Check, Session_Before),
+             "T5 session unchanged");
+   end;
+
+   --  T6: payload decrypting to /= 16 bytes yields
+   --  wrong-shared-secret-length, no secret (distinct kind).
+   declare
+      Short_Plain : constant Octets (1 .. 8) :=
+        (1, 2, 3, 4, 5, 6, 7, 8);
+      Tok : LE.Token_Bytes := (others => 0);
+      Ok  : Boolean := False;
+   begin
+      LE.Generate_Verify_Token (Tok, Ok);
+      Check (Ok, "T6 token ok");
+      declare
+         Es : LE.Encrypt_Result :=
+           LE.Test_Encrypt_With_Public_Key (Short_Plain);
+         Et : LE.Encrypt_Result :=
+           LE.Test_Encrypt_With_Public_Key (Octets (Tok));
+      begin
+         Check (Es.Status = LE.Encrypt_Ok, "T6 encrypt short secret");
+         Check (Et.Status = LE.Encrypt_Ok, "T6 encrypt token");
+         if Es.Status = LE.Encrypt_Ok and then Et.Status = LE.Encrypt_Ok then
+            declare
+               Dec : LE.Encryption_Response;
+               Ver : LE.Verify_Result (LE.Wrong_Shared_Secret_Length);
+            begin
+               Dec.Secret_Cipher := LE.Cipher_Bytes (Es.Data);
+               Dec.Token_Cipher := LE.Cipher_Bytes (Et.Data);
+               Ver := LE.Verify_Response (Dec, Tok);
+               Check (Ver.Status = LE.Wrong_Shared_Secret_Length,
+                      "T6 wrong secret length");
+               Check (Ver.Status /= LE.Verify_Token_Mismatch
+                      and then Ver.Status /= LE.Decryption_Padding_Failure,
+                      "T6 kind distinct");
+            end;
+         end if;
+      end;
+      Check (Sessions_Equal (Session_Check, Session_Before),
+             "T6 session unchanged");
+   end;
+
+   --  T7: garbage / wrong-key ciphertext yields
+   --  decryption/padding-failure without crashing.
+   declare
+      Tok : LE.Token_Bytes := (others => 0);
+      Ok  : Boolean := False;
+   begin
+      LE.Generate_Verify_Token (Tok, Ok);
+      Check (Ok, "T7 token ok");
+      declare
+         Et : LE.Encrypt_Result :=
+           LE.Test_Encrypt_With_Public_Key (Octets (Tok));
+      begin
+         Check (Et.Status = LE.Encrypt_Ok, "T7 encrypt token");
+         if Et.Status = LE.Encrypt_Ok then
+            --  Garbage secret ciphertext (all zeros): PKCS#1 v1.5
+            --  padding check must fail, never raise.
+            declare
+               Dec : LE.Encryption_Response;
+               Ver : LE.Verify_Result (LE.Decryption_Padding_Failure);
+            begin
+               Dec.Secret_Cipher := (others => 0);
+               Dec.Token_Cipher := LE.Cipher_Bytes (Et.Data);
+               Ver := LE.Verify_Response (Dec, Tok);
+               Check (Ver.Status = LE.Decryption_Padding_Failure,
+                      "T7 garbage yields padding failure");
+            end;
+            --  Wrong-key stand-in: ciphertext corrupted after a valid
+            --  public-key encryption must not verify and must not raise.
+            declare
+               Secret_Known : constant Octets (1 .. 16) :=
+                 (16#10#, 16#20#, 16#30#, 16#40#, 16#50#, 16#60#, 16#70#,
+                  16#80#, 16#90#, 16#A0#, 16#B0#, 16#C0#, 16#D0#, 16#E0#,
+                  16#F0#, 16#00#);
+               Es : LE.Encrypt_Result :=
+                 LE.Test_Encrypt_With_Public_Key (Secret_Known);
+            begin
+               Check (Es.Status = LE.Encrypt_Ok, "T7 encrypt secret");
+               if Es.Status = LE.Encrypt_Ok then
+                  declare
+                     Dec : LE.Encryption_Response;
+                     Ver : LE.Verify_Result (LE.Decryption_Padding_Failure);
+                  begin
+                     Dec.Secret_Cipher := LE.Cipher_Bytes (Es.Data);
+                     Dec.Secret_Cipher (1) :=
+                       Dec.Secret_Cipher (1) xor 16#FF#;
+                     Dec.Secret_Cipher (LE.Cipher_Bytes'Last) :=
+                       Dec.Secret_Cipher (LE.Cipher_Bytes'Last) xor 16#01#;
+                     Dec.Token_Cipher := LE.Cipher_Bytes (Et.Data);
+                     Ver := LE.Verify_Response (Dec, Tok);
+                     Check (Ver.Status = LE.Decryption_Padding_Failure,
+                            "T7 wrong-key/corrupt yields padding failure");
+                     Check (Ver.Status /= LE.Verify_Token_Mismatch
+                            and then Ver.Status /=
+                              LE.Wrong_Shared_Secret_Length,
+                            "T7 kind distinct");
+                  end;
+               end if;
+            end;
+         end if;
+      end;
+      Check (Sessions_Equal (Session_Check, Session_Before),
+             "T7 session unchanged");
+   end;
+
+   --  T8: truncated / bad VarInt / oversized / length /= 128 / trailing
+   --  all decode errors, no exception escaping.
+   declare
+      Secret_Plain : constant Octets (1 .. 16) :=
+        (16#AA#, 16#BB#, 16#CC#, 16#DD#, 16#EE#, 16#FF#, 16#00#, 16#11#,
+         16#22#, 16#33#, 16#44#, 16#55#, 16#66#, 16#77#, 16#88#, 16#99#);
+      Es : LE.Encrypt_Result :=
+        LE.Test_Encrypt_With_Public_Key (Secret_Plain);
+      Et : LE.Encrypt_Result :=
+        LE.Test_Encrypt_With_Public_Key (Octets (Tok_A));
+      Valid : Octets (1 .. 1 + 2 + 128 + 2 + 128) := (others => 0);
+      Resp_Id : constant Natural :=
+        Adacraft.Protocol.Ids.Protocol_Id
+          (Adacraft.Protocol.Ids.Sb_Login_Key);
+      Have_Valid : constant Boolean :=
+        Es.Status = LE.Encrypt_Ok and then Et.Status = LE.Encrypt_Ok;
+      D : LE.Decode_Result (LE.Truncated);
+   begin
+      Check (Have_Valid, "T8 encrypt fixtures");
+      if Have_Valid then
+         Valid (1) := Octet (Resp_Id);
+         Valid (2) := 16#80#;
+         Valid (3) := 16#01#;
+         Valid (4 .. 131) := Octets (Es.Data);
+         Valid (132) := 16#80#;
+         Valid (133) := 16#01#;
+         Valid (134 .. 261) := Octets (Et.Data);
+
+         --  Truncated packet (cut in the middle of the secret cipher).
+         D := LE.Decode_Encryption_Response
+           (Valid (1 .. 100), State.Login, State.Serverbound);
+         Check (D.Status /= LE.Decode_Ok, "T8 truncated rejected");
+
+         --  Empty input is truncated too.
+         declare
+            Empty : Octets (1 .. 0) := (others => <>);
+            D2 : LE.Decode_Result (LE.Truncated);
+         begin
+            D2 := LE.Decode_Encryption_Response
+              (Empty, State.Login, State.Serverbound);
+            Check (D2.Status /= LE.Decode_Ok, "T8 empty rejected");
+         end;
+
+         --  Overlong VarInt length prefix (5 continuation bytes).
+         declare
+            P : constant Octets (1 .. 6) :=
+              (Octet (Resp_Id), 16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#7F#);
+            D2 : LE.Decode_Result (LE.Bad_Varint);
+         begin
+            D2 := LE.Decode_Encryption_Response
+              (P, State.Login, State.Serverbound);
+            Check (D2.Status /= LE.Decode_Ok, "T8 overlong varint rejected");
+         end;
+
+         --  Negative length: VarInt(-1) = FF FF FF FF 0F as first array len.
+         declare
+            P : constant Octets (1 .. 6) :=
+              (Octet (Resp_Id), 16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#0F#);
+            D2 : LE.Decode_Result (LE.Bad_Length);
+         begin
+            D2 := LE.Decode_Encryption_Response
+              (P, State.Login, State.Serverbound);
+            Check (D2.Status /= LE.Decode_Ok, "T8 negative length rejected");
+         end;
+
+         --  Oversized: declared 128 but far fewer bytes remain.
+         declare
+            P : Octets (1 .. 1 + 2 + 10) := (others => 0);
+            D2 : LE.Decode_Result (LE.Truncated);
+         begin
+            P (1) := Octet (Resp_Id);
+            P (2) := 16#80#;
+            P (3) := 16#01#;
+            D2 := LE.Decode_Encryption_Response
+              (P, State.Login, State.Serverbound);
+            Check (D2.Status /= LE.Decode_Ok, "T8 oversized rejected");
+         end;
+
+         --  First array length /= 128 (16 instead).
+         declare
+            P : Octets (1 .. 1 + 1 + 16 + 2 + 128) := (others => 0);
+            D2 : LE.Decode_Result (LE.Bad_Length);
+            Pos : Natural := 1;
+         begin
+            P (1) := Octet (Resp_Id);
+            P (2) := 16;
+            for I in 1 .. 16 loop
+               P (2 + I) := Octet (I);
+            end loop;
+            Pos := 2 + 16 + 1;
+            P (Pos) := 16#80#;
+            P (Pos + 1) := 16#01#;
+            P (Pos + 2 .. P'Last) := Octets (Et.Data);
+            D2 := LE.Decode_Encryption_Response
+              (P, State.Login, State.Serverbound);
+            Check (D2.Status = LE.Bad_Length, "T8 secret len != 128");
+         end;
+
+         --  Second array length /= 128 (64 instead).
+         declare
+            P : Octets (1 .. 1 + 2 + 128 + 1 + 64) := (others => 0);
+            D2 : LE.Decode_Result (LE.Bad_Length);
+         begin
+            P (1) := Octet (Resp_Id);
+            P (2) := 16#80#;
+            P (3) := 16#01#;
+            P (4 .. 131) := Octets (Es.Data);
+            P (132) := 64;
+            for I in 1 .. 64 loop
+               P (132 + I) := Octet (I mod 256);
+            end loop;
+            D2 := LE.Decode_Encryption_Response
+              (P, State.Login, State.Serverbound);
+            Check (D2.Status = LE.Bad_Length, "T8 token len != 128");
+         end;
+
+         --  Trailing bytes after two valid fields.
+         declare
+            P : Octets (1 .. Valid'Length + 1) := (others => 0);
+            D2 : LE.Decode_Result (LE.Trailing_Bytes);
+         begin
+            P (1 .. Valid'Length) := Valid;
+            P (P'Last) := 0;
+            D2 := LE.Decode_Encryption_Response
+              (P, State.Login, State.Serverbound);
+            Check (D2.Status = LE.Trailing_Bytes, "T8 trailing rejected");
+         end;
+
+         --  Wrong packet id is its own decode error, still no exception.
+         declare
+            P : Octets := Valid;
+            D2 : LE.Decode_Result (LE.Bad_Packet_Id);
+         begin
+            P (1) := Octet ((Resp_Id + 1) mod 128);
+            D2 := LE.Decode_Encryption_Response
+              (P, State.Login, State.Serverbound);
+            Check (D2.Status = LE.Bad_Packet_Id, "T8 bad packet id");
+         end;
+      end if;
+      Check (Sessions_Equal (Session_Check, Session_Before),
+             "T8 session unchanged");
+   end;
+
+   --  T9: wrong state / direction rejected (section 19 guards).
+   declare
+      Tok_Fixed : constant LE.Token_Bytes :=
+        (16#AA#, 16#BB#, 16#CC#, 16#DD#);
+      Der_Slice : Octets renames Der_Buf (1 .. Der_Len);
+      R_Bad_State : LE.Encode_Result (LE.Wrong_State_Or_Direction);
+      R_Bad_Dir   : LE.Encode_Result (LE.Wrong_State_Or_Direction);
+      R_Bad_Both  : LE.Encode_Result (LE.Wrong_State_Or_Direction);
+      D_Bad_State : LE.Decode_Result (LE.Wrong_State_Or_Direction);
+      D_Bad_Dir   : LE.Decode_Result (LE.Wrong_State_Or_Direction);
+      Valid : Octets (1 .. 1 + 2 + 128 + 2 + 128) := (others => 0);
+      Es : LE.Encrypt_Result :=
+        LE.Test_Encrypt_With_Public_Key (Octets (Tok_Fixed));
+      Et : LE.Encrypt_Result :=
+        LE.Test_Encrypt_With_Public_Key (Octets (Tok_A));
+   begin
+      R_Bad_State := LE.Encode_Encryption_Request
+        (Der_Slice, Tok_Fixed, True, State.Play, State.Clientbound);
+      Check (R_Bad_State.Status = LE.Wrong_State_Or_Direction,
+             "T9 request wrong state rejected");
+      R_Bad_Dir := LE.Encode_Encryption_Request
+        (Der_Slice, Tok_Fixed, True, State.Login, State.Serverbound);
+      Check (R_Bad_Dir.Status = LE.Wrong_State_Or_Direction,
+             "T9 request wrong direction rejected");
+      R_Bad_Both := LE.Encode_Encryption_Request
+        (Der_Slice, Tok_Fixed, True, State.Handshake, State.Serverbound);
+      Check (R_Bad_Both.Status = LE.Wrong_State_Or_Direction,
+             "T9 request wrong state+dir rejected");
+
+      if Es.Status = LE.Encrypt_Ok and then Et.Status = LE.Encrypt_Ok then
+         Valid (1) := Octet (Natural (Adacraft.Protocol.Ids.Protocol_Id
+           (Adacraft.Protocol.Ids.Sb_Login_Key)));
+         Valid (2) := 16#80#;
+         Valid (3) := 16#01#;
+         Valid (4 .. 131) := Octets (Es.Data);
+         Valid (132) := 16#80#;
+         Valid (133) := 16#01#;
+         Valid (134 .. 261) := Octets (Et.Data);
+         D_Bad_State := LE.Decode_Encryption_Response
+           (Valid, State.Play, State.Serverbound);
+         Check (D_Bad_State.Status = LE.Wrong_State_Or_Direction,
+                "T9 response wrong state rejected");
+         D_Bad_Dir := LE.Decode_Encryption_Response
+           (Valid, State.Login, State.Clientbound);
+         Check (D_Bad_Dir.Status = LE.Wrong_State_Or_Direction,
+                "T9 response wrong direction rejected");
+      else
+         Check (False, "T9 fixtures encrypted");
+      end if;
+      Check (Sessions_Equal (Session_Check, Session_Before),
+             "T9 session unchanged");
+   end;
+
+   --  Failure paths must leave connection/world state unchanged.
+   Check (Sessions_Equal (Session_Check, Session_Before),
+          "T5-T9 login state unchanged");
+   Check (State.Has_Valid_Token (Session_Check),
+          "T5-T9 token still valid");
 
    if Failures = 0 then
       Ada.Text_IO.Put_Line ("login encryption tests passed");

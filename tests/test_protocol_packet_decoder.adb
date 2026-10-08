@@ -330,6 +330,55 @@ procedure Test_Protocol_Packet_Decoder is
         (Buf_Ptr.all (1 .. N), Single_Layout (D.Long), "R2 long");
    end Check_Truncated_R2;
 
+   --  R3: overlong VarInt (6 bytes, continuation bit still set on byte 5).
+   --  Per A3: input ending inside a VarInt under the 5-byte limit is
+   --  truncation; once the limit is exceeded it is overlong whatever
+   --  follows, unless the constitution says otherwise. Constitution
+   --  ingress authority demands rejection of malformed/overlong input
+   --  (see pre-flight notes); spec enumerator Rejected used (A2, Q1 TODO
+   --  above). No decoder/spec edits; each case checks fail plus reason
+   --  via Assert_Rejects.
+   procedure Check_Overlong_VarInt_R3 is
+      Overlong : constant Octets (1 .. 6) :=
+        (16#80#, 16#80#, 16#80#, 16#80#, 16#80#, 16#00#);
+      Empty_Layout : D.Layout_Type;
+      Buf_Ptr : Scratch_Access := new Octets (1 .. 16);
+   begin
+      --  Case A: overlong sequence as packet-ID at offset 0.
+      Assert_Rejects
+        (Payload => Overlong,
+         Layout  => Empty_Layout,
+         Msg     => "R3 overlong varint as packet id");
+      --  Case B: overlong sequence as VarInt field after a valid ID.
+      Buf_Ptr.all (1) := 16#07#;
+      for I in Overlong'Range loop
+         Buf_Ptr.all (1 + I) := Overlong (I);
+      end loop;
+      Assert_Rejects
+        (Payload => Buf_Ptr.all (1 .. 7),
+         Layout  => Single_Layout (D.VarInt),
+         Msg     => "R3 overlong varint as field");
+   end Check_Overlong_VarInt_R3;
+
+   --  R4: overlong VarLong (11 bytes, continuation bit still set on
+   --  byte 10). Per A3 limit rule as above; asserts the overlong reason
+   --  (= spec Rejected) with fail-plus-reason checks only.
+   procedure Check_Overlong_VarLong_R4 is
+      Overlong : constant Octets (1 .. 11) :=
+        (16#80#, 16#80#, 16#80#, 16#80#, 16#80#, 16#80#,
+         16#80#, 16#80#, 16#80#, 16#80#, 16#00#);
+      Buf_Ptr : Scratch_Access := new Octets (1 .. 16);
+   begin
+      Buf_Ptr.all (1) := 16#07#;
+      for I in Overlong'Range loop
+         Buf_Ptr.all (1 + I) := Overlong (I);
+      end loop;
+      Assert_Rejects
+        (Payload => Buf_Ptr.all (1 .. 12),
+         Layout  => Single_Layout (D.VarLong),
+         Msg     => "R4 overlong varlong as field");
+   end Check_Overlong_VarLong_R4;
+
    procedure Check_VarInt (Value : Interfaces.Integer_32; Name : String) is
       Buf_Ptr : Scratch_Access := new Octets (1 .. 16);
       Fields_P : Field_Array_Access := new D.Field_Array;
@@ -651,6 +700,10 @@ procedure Test_Protocol_Packet_Decoder is
    end Check_Mixed;
 
 begin
+   Check_Empty_R1;
+   Check_Truncated_R2;
+   Check_Overlong_VarInt_R3;
+   Check_Overlong_VarLong_R4;
    Check_VarInt (0, "varint 0");
    Check_VarInt (-1, "varint -1");
    Check_VarInt (Interfaces.Integer_32'First, "varint first");

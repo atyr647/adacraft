@@ -1,5 +1,4 @@
 with Ada.Exceptions;
-with Ada.Strings.Fixed;
 with GNAT.Sockets;
 with Adacraft.Protocol.State;
 with Differential.Capture.Wire;
@@ -88,11 +87,9 @@ package body Differential.Capture is
                Message : constant String :=
                  Ada.Exceptions.Exception_Message (E);
             begin
-               if Ada.Strings.Fixed.Index (Message, "invalid frame") > 0
-                 or else Ada.Strings.Fixed.Index (Message, "encode") > 0
-               then
+               if Message = "invalid frame" then
                   Result.Outcome := T.Decode_Error;
-               elsif Ada.Strings.Fixed.Index (Message, "timed out") > 0 then
+               elsif Message = "timed out" then
                   Result.Outcome := T.Timeout;
                else
                   Result.Outcome := T.Closed_By_Peer;

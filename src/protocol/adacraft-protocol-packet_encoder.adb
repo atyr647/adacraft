@@ -52,7 +52,6 @@ package body Adacraft.Protocol.Packet_Encoder is
       Staging : Adacraft.Protocol.Octets (1 .. Max_Varint_Bytes) := (others => 0);
       Written : Natural := 0;
       Vs      : Varnum.Status_Type;
-      Ready   : Boolean := False;
       Cap     : Natural;
    begin
       if E.St /= Ok then
@@ -80,15 +79,16 @@ package body Adacraft.Protocol.Packet_Encoder is
          E.St := Body_Too_Long;
          return;
       end if;
-      Ready := True;
-      if Ready then
-         for I in 0 .. Written - 1 loop
-            Buf (Buf'First + E.Len + I) := Staging (Staging'First + I);
-         end loop;
-         E.Len := E.Len + Written;
-         E.Id_Written := True;
-      end if;
+      for I in 0 .. Written - 1 loop
+         Buf (Buf'First + E.Len + I) := Staging (Staging'First + I);
+      end loop;
+      E.Len := E.Len + Written;
+      E.Id_Written := True;
    end Write_Packet_Id;
+
+   --  Task 1 stubs: sticky status + ordering guards only.
+   --  Full field encoding belongs to later tasks. Bodies match the
+   --  spec profiles exactly; nothing public is added here.
 
    procedure Write_Boolean
      (E   : in out Encoder;

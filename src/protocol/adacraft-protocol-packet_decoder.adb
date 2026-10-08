@@ -2,6 +2,15 @@ with Interfaces;
 with Adacraft.Protocol.Varnum;
 
 package body Adacraft.Protocol.Packet_Decoder is
+   use type Interfaces.Integer_8;
+   use type Interfaces.Integer_16;
+   use type Interfaces.Integer_32;
+   use type Interfaces.Integer_64;
+   use type Interfaces.Unsigned_8;
+   use type Interfaces.Unsigned_16;
+   use type Interfaces.Unsigned_32;
+   use type Interfaces.Unsigned_64;
+   use type Varnum.Status_Type;
 
    procedure Decode
      (Input     : in  Octets;

@@ -10,8 +10,13 @@ procedure Test_Protocol_Packet_Encoder is
    package Packet renames Adacraft.Protocol.Packet_Encoder;
    package Frame renames Adacraft.Protocol.Frame;
 
+   use type Ada.Streams.Stream_Element;
+   use type Ada.Streams.Stream_Element_Array;
    use type Ada.Streams.Stream_Element_Offset;
    use type Frame.Encode_Status;
+   use type Interfaces.Integer_8;
+   use type Interfaces.Integer_32;
+   use type Interfaces.Integer_64;
 
    Failures : Natural := 0;
 
@@ -46,7 +51,7 @@ procedure Test_Protocol_Packet_Encoder is
             Check_Bool
               (Output (Ada.Streams.Stream_Element_Offset (I - Expected'First + 2))
                  = Expected (I),
-               Name & " byte" & Integer'Image (I - Expected'First + 1));
+               Name & " byte" & Integer'Image (Integer (I - Expected'First + 1)));
          end loop;
       end if;
    end Check_Bytes;

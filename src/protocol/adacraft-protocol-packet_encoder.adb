@@ -6,6 +6,8 @@ with Adacraft.Protocol.Varnum;
 
 package body Adacraft.Protocol.Packet_Encoder is
    use type Ada.Streams.Stream_Element_Offset;
+   use type Interfaces.Unsigned_32;
+   use type Interfaces.Unsigned_64;
    use type Adacraft.Protocol.Varnum.Status_Type;
    use type Adacraft.Protocol.Frame.Encode_Status;
 

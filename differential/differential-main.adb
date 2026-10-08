@@ -275,72 +275,19 @@ procedure Differential.Main is
             begin
                if Expect_Oracle then
                   begin
-                     Oracle_Set := False;
-                     declare
-                        Save_O : constant Boolean := Cand_Set;
-                     begin
-                        Cand_Set := True;
-                        Split_Host_Port (A);
-                        Cand_Set := Save_O;
-                        Oracle_Set := True;
-                        --  Split wrote to oracle slot because Oracle_Set was False
-                        --  on entry; re-split correctly by moving last parse:
-                        null;
-                     end;
-                  exception
-                     when others =>
-                        Fail ("bad --oracle value '" & A & "'");
-                        return;
-                  end;
-                  --  Above helper splits by slot state; redo simply:
-                  Oracle_Set := False;
-                  declare
-                     Tmp_C_Set : constant Boolean := Cand_Set;
-                     Tmp_C_H   : String (1 .. 256) := Cand_Host;
-                     Tmp_C_L   : constant Natural := Cand_Host_Len;
-                     Tmp_C_P   : constant Natural := Cand_Port;
-                  begin
-                     Split_Host_Port (A);
-                     --  Split wrote into oracle slot; but if candidate was
-                     --  already set it wrote into candidate slot, so restore
-                     --  candidate when it was set before.
-                     if Tmp_C_Set and then Cand_Set then
-                        --  Ambiguous; keep oracle from this parse: the value
-                        --  just parsed landed in candidate slot, move it.
-                        Oracle_Host (1 .. Cand_Host_Len) := Cand_Host (1 .. Cand_Host_Len);
-                        Oracle_Host_Len := Cand_Host_Len;
-                        Oracle_Port := Cand_Port;
-                        Cand_Host := Tmp_C_H;
-                        Cand_Host_Len := Tmp_C_L;
-                        Cand_Port := Tmp_C_P;
-                     end if;
+                     Split_Into
+                       (A, Oracle_Host, Oracle_Host_Len, Oracle_Port);
                      Oracle_Set := True;
                   exception
                      when others =>
-                        Cand_Host := Tmp_C_H;
-                        Cand_Host_Len := Tmp_C_L;
-                        Cand_Port := Tmp_C_P;
                         Fail ("bad --oracle value '" & A & "'");
                         return;
                   end;
                   Expect_Oracle := False;
                elsif Expect_Cand then
                   begin
-                     if not Oracle_Set then
-                        --  Force write to candidate slot.
-                        Oracle_Set := True;
-                        Split_Host_Port (A);
-                        --  Landed in candidate slot only if oracle set; move back
-                        Cand_Host (1 .. Oracle_Host_Len) := Oracle_Host (1 .. Oracle_Host_Len);
-                        Cand_Host_Len := Oracle_Host_Len;
-                        Cand_Port := Oracle_Port;
-                        Oracle_Set := False;
-                        Oracle_Host_Len := 0;
-                        Oracle_Port := 0;
-                        Cand_Set := True;
-                     else
-                        Split_Host_Port (A);
-                     end if;
+                     Split_Into (A, Cand_Host, Cand_Host_Len, Cand_Port);
+                     Cand_Set := True;
                   exception
                      when others =>
                         Fail ("bad --candidate value '" & A & "'");
@@ -423,9 +370,6 @@ procedure Differential.Main is
       --  All waits use Check_Selector + Real_Time deadlines; per-read and
       --  per-scenario deadlines enforced by callers via Deadline params.
 
-      Max_Frame_Len : constant := 2_097_151;
-      --  Minecraft length-prefix ceiling (2**21 - 1). Larger => malformed.
-
       Max_Slice : constant Duration := 0.050;
       --  Single Check_Selector slice; outer loop re-checks Deadline so
       --  per-read/per-scenario caps hold even on portable platforms.
@@ -473,8 +417,10 @@ procedure Differential.Main is
          Buf      : in out Frame_Storage;
          Len      : out Natural;
          Status   : out Recv_Status);
-      --  Reads one length-prefixed frame: VarInt length (max 5 bytes,
-      --  minimal encoding, 0 .. Max_Frame_Len) then Length payload bytes.
+      --  Reads one length-prefixed frame: VarInt length decoded via
+      --  #115 Varnum.Decode_Varint (max Max_Varint_Bytes, ceiling
+      --  Max_Packet_Length / Frame.Max_Frame_Body_Length) then Length
+      --  payload bytes.
       --  Payload is stored in Buf(1..Len) for the caller to frame/decode;
       --  D_Net never interprets it. Oversize/overlong/negative/truncated
       --  encodings => Malformed (never raises). Peer close with zero bytes
@@ -686,9 +632,6 @@ procedure Differential.Main is
       is
          use Adacraft.Protocol;
          Value      : Natural := 0;
-         Shift      : Natural := 0;
-         Used       : Natural := 0;
-         Prefix_Buf : Octets (1 .. Max_Varint_Bytes) := (others => 0);
       begin
          Len := 0;
          Status := Malformed;
@@ -749,7 +692,11 @@ procedure Differential.Main is
                   end;
                end;
             end loop;
-            if Value > Max_Packet_Length or else Value > Max_Frame_Len then
+            if Value > Max_Packet_Length
+              or else Value
+                > Natural
+                    (Adacraft.Protocol.Frame.Max_Frame_Body_Length)
+            then
                Status := Malformed;
                return;
             end if;

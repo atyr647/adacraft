@@ -320,9 +320,13 @@ package body Adacraft.Protocol.Packet_Encoder is
       Bytes     : Byte_Array;
       Max_Bytes : Natural)
    is
-      pragma Unreferenced (Buf);
-      pragma Unreferenced (Bytes);
-      pragma Unreferenced (Max_Bytes);
+      use type Varnum.Status_Type;
+      Staging : Adacraft.Protocol.Octets (1 .. Max_Varint_Bytes) := (others => 0);
+      Written : Natural := 0;
+      Vs      : Varnum.Status_Type;
+      Ready   : Boolean := False;
+      Len32   : Interfaces.Integer_32;
+      Total   : Natural;
    begin
       if E.St /= Ok then
          return;
@@ -331,7 +335,36 @@ package body Adacraft.Protocol.Packet_Encoder is
          E.St := Invalid_Sequence;
          return;
       end if;
-      null;
+      if Bytes'Length > Max_Bytes then
+         E.St := String_Too_Long;
+         return;
+      end if;
+      if Bytes'Length > 2_147_483_647 then
+         E.St := String_Too_Long;
+         return;
+      end if;
+      Len32 := Interfaces.Integer_32 (Bytes'Length);
+      Varnum.Encode (Len32, Staging, Staging'First, Written, Vs);
+      if Vs /= Varnum.Ok then
+         E.St := String_Too_Long;
+         return;
+      end if;
+      if Bytes'Length > Natural'Last - Written then
+         E.St := String_Too_Long;
+         return;
+      end if;
+      Total := Written + Bytes'Length;
+      Reserve (E, Buf, Total, Ready);
+      if not Ready then
+         return;
+      end if;
+      for I in 0 .. Written - 1 loop
+         Buf (Buf'First + E.Len + I) := Staging (Staging'First + I);
+      end loop;
+      for I in 0 .. Bytes'Length - 1 loop
+         Buf (Buf'First + E.Len + Written + I) := Bytes (Bytes'First + I);
+      end loop;
+      E.Len := E.Len + Total;
    end Write_String;
 
    procedure Write_Bytes

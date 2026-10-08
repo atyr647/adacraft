@@ -237,8 +237,10 @@ package body Adacraft.Ingress is
                                     --  but never used. Derive vanilla
                                     --  UUIDv3 and send exactly one Success.
                                     --  No Encryption Request, no Set
-                                    --  Compression.
-                                    Identity := Auth.Offline_UUID_For_Name (Name);
+                                    --  Compression. Record the identity as
+                                    --  offline/unauthenticated.
+                                    S.Identity := Auth.Offline_Identity_For_Name (Name);
+                                    Identity := S.Identity.UUID;
                                     Name_Copy (1 .. Start.Name_Len) := Name;
                                     Protocol.Packets.Encode_Login_Success
                                       (Body_W,

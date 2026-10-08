@@ -1,5 +1,11 @@
 with Ada.Streams;
+with Adacraft.Ingress;
 with Adacraft.Protocol;
+with Adacraft.Protocol.Frame;
+with Adacraft.Protocol.State;
+with Adacraft.Protocol.Varnum;
+with Differential.Transcript;
+with GNAT.Sockets;
 
 package body Differential.Capture.Wire is
 
@@ -36,13 +42,10 @@ package body Differential.Capture.Wire is
    end Close;
 
    procedure Send_Body
-     (Sock      : GNAT.Sockets.Socket_Type;
-      Current   : Adacraft.Protocol.State.Connection_State;
-      Packet_Id : Natural;
-      Body      : Adacraft.Protocol.Frame.Byte_Array;
-      Ok        : out Boolean)
+     (Sock    : GNAT.Sockets.Socket_Type;
+      Payload : Adacraft.Protocol.Frame.Byte_Array;
+      Ok      : out Boolean)
    is
-      pragma Unreferenced (Current, Packet_Id);
       Wire : Adacraft.Protocol.Frame.Byte_Array (1 .. 8_192);
       Last : Ada.Streams.Stream_Element_Offset;
       Enc  : Adacraft.Protocol.Frame.Encode_Status;
@@ -50,7 +53,7 @@ package body Differential.Capture.Wire is
       From : Ada.Streams.Stream_Element_Offset;
    begin
       Ok := False;
-      Adacraft.Protocol.Frame.Encode (Body, Wire, Last, Enc);
+      Adacraft.Protocol.Frame.Encode (Payload, Wire, Last, Enc);
       if Enc /= Adacraft.Protocol.Frame.Ok then
          return;
       end if;
@@ -66,59 +69,28 @@ package body Differential.Capture.Wire is
          Ok := False;
    end Send_Body;
 
-   function Body_Packet_Id
-     (Body : Adacraft.Protocol.Frame.Byte_Array) return Natural
-   is
-      Buf : Adacraft.Protocol.Octets (1 .. Body'Length);
-      Res : Adacraft.Protocol.Varnum.Varint_Result;
-   begin
-      if Body'Length = 0 then
-         return 0;
-      end if;
-      for I in 1 .. Body'Length loop
-         Buf (I) := Adacraft.Protocol.Octet (Body (Body'First + I - 1));
-      end loop;
-      Res := Adacraft.Protocol.Varnum.Decode_Varint (Buf, 1);
-      if Res.Status /= Adacraft.Protocol.Ok then
-         return 0;
-      end if;
-      if Res.Value > Adacraft.Protocol.Varnum.Varint_Result'(Res).Value'Last then
-         return 0;
-      end if;
-      return Natural (Res.Value);
-   end Body_Packet_Id;
-
-   procedure Dummy_Body (Data : Adacraft.Protocol.Frame.Byte_Array) is
-      pragma Unreferenced (Data);
-   begin
-      null;
-   end Dummy_Body;
-
-   procedure Dummy_Close is
-   begin
-      null;
-   end Dummy_Close;
-
    procedure Recv_Until_Terminal
      (Sock : GNAT.Sockets.Socket_Type;
       Data : out Recv_Data)
    is
-      Conn   : Adacraft.Ingress.Connection_Type;
-      Chunk  : Ada.Streams.Stream_Element_Array (1 .. 2_048);
-      Last   : Ada.Streams.Stream_Element_Offset;
-      Hold   : Adacraft.Protocol.Octets (1 .. 8_192) := (others => 0);
-      Used   : Natural := 0;
-      Feed_St : Adacraft.Protocol.Frame.Feed_Status;
-      procedure On_Frame (Frame : Adacraft.Protocol.Frame.Byte_Array) is
-         pragma Unreferenced (Frame);
+      Conn  : Adacraft.Ingress.Connection_Type;
+      Chunk : Ada.Streams.Stream_Element_Array (1 .. 2_048);
+      Last  : Ada.Streams.Stream_Element_Offset;
+      Hold  : Adacraft.Protocol.Octets (1 .. 8_192) := (others => 0);
+      Used  : Natural := 0;
+      procedure On_Body (Item : Adacraft.Protocol.Frame.Byte_Array) is
+         pragma Unreferenced (Item);
       begin
          null;
-      end On_Frame;
-      Decoder : Adacraft.Protocol.Frame.Decoder_Type;
+      end On_Body;
+      procedure On_Close is
+      begin
+         null;
+      end On_Close;
    begin
       Data := (others => <>);
       Adacraft.Ingress.Initialize
-        (Conn, Dummy_Body'Access, Dummy_Close'Access);
+        (Conn, On_Body'Access, On_Close'Access);
       loop
          begin
             GNAT.Sockets.Receive_Socket (Sock, Chunk, Last);
@@ -140,11 +112,6 @@ package body Differential.Capture.Wire is
                Data.Outcome := Differential.Transcript.Protocol_Error;
                return;
             end if;
-            Adacraft.Protocol.Frame.Feed (Decoder, Bytes, On_Frame'Access, Feed_St);
-            if Feed_St /= Adacraft.Protocol.Frame.Success then
-               Data.Outcome := Differential.Transcript.Protocol_Error;
-               return;
-            end if;
             for I in Bytes'Range loop
                exit when Used = Hold'Last;
                Used := Used + 1;
@@ -162,10 +129,7 @@ package body Differential.Capture.Wire is
                   Data.Outcome := Differential.Transcript.Protocol_Error;
                   return;
                else
-                  if Data.Count < Max_Packets_Per_Read then
-                     Data.Count := Data.Count + 1;
-                     Data.Ids (Data.Count) := D.Packet_Id;
-                  end if;
+                  Data.Ids.Append (D.Packet_Id);
                   if D.Next > Used then
                      Used := 0;
                   else

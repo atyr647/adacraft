@@ -9,12 +9,14 @@ with Adacraft.Protocol.Varnum;
 procedure Test_Protocol_Packet_Decoder is
    package Enc renames Adacraft.Protocol.Packet_Encoder;
    package Dec renames Adacraft.Protocol.Packet_Decoder;
+   package Varnum renames Adacraft.Protocol.Varnum;
    use type Ada.Streams.Stream_Element;
    use type Ada.Streams.Stream_Element_Offset;
    use type Interfaces.Integer_32;
    use type Interfaces.Integer_64;
    use type Dec.Field_Kind;
    use type Dec.Fail_Reason;
+   use type Varnum.Status_Type;
 
    subtype SEA is Ada.Streams.Stream_Element_Array;
    subtype SEO is Ada.Streams.Stream_Element_Offset;
@@ -322,7 +324,8 @@ begin
       Pkt := Cat (Pkt, Enc_Varint (-300));       -- varint
       Pkt := Cat (Pkt, Enc_Varlong (-9_876_543_210)); -- varlong
       Pkt := Cat (Pkt, Enc_Varint (2));          -- string len 2
-      Pkt := Cat (Pkt, SEA'(1 .. 2 => Character'Pos ('h')));
+      Pkt := Cat (Pkt, SEA'(1 => SE (Character'Pos ('h')),
+                            2 => SE (Character'Pos ('h'))));
       declare
          R : Dec.Decode_Result := Dec.Decode
            (Pkt, Dec.Layout_Array'
@@ -414,17 +417,17 @@ begin
 
    --  T-8: overlong VarInt/VarLong fields => respective reason.
    declare
-      Pkt : SEA := Cat (SEA'(1 .. 1 => 0),
-                         SEA'(1 .. 5 => (16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#7F#)));
+      Pkt : SEA := Cat (SEA'(1 => 0),
+                         SEA'(16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#7F#));
       R : Dec.Decode_Result :=
         Dec.Decode (Pkt, Dec.Layout_Array'(1 => Dec.FK_Varint));
    begin
       Check (not R.Ok and then R.Reason = Dec.Overlong_Varint, "T-8 overlong varint");
    end;
    declare
-      Pkt : SEA := Cat (SEA'(1 .. 1 => 0),
-                         SEA'(1 .. 10 => (16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#FF#,
-                                          16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#02#)));
+      Pkt : SEA := Cat (SEA'(1 => 0),
+                         SEA'(16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#FF#,
+                              16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#02#));
       R : Dec.Decode_Result :=
         Dec.Decode (Pkt, Dec.Layout_Array'(1 => Dec.FK_Varlong));
    begin
@@ -432,7 +435,7 @@ begin
    end;
    --  T-8b: truncated varint/varlong field => Truncated, no partial packet.
    declare
-      Pkt : SEA (1 .. 2) := (0, 16#80#);
+      Pkt : SEA (1 .. 2) := (SE (0), SE (16#80#));
       R : Dec.Decode_Result :=
         Dec.Decode (Pkt, Dec.Layout_Array'(1 => Dec.FK_Varint));
    begin
@@ -442,14 +445,14 @@ begin
 
    --  T-9: string negative / Max+1 / beyond-remaining.
    declare
-      Pkt : SEA := Cat (SEA'(1 .. 1 => 0), Enc_Varint (-1));
+      Pkt : SEA := Cat (SEA'(1 => 0), Enc_Varint (-1));
       R : Dec.Decode_Result :=
         Dec.Decode (Pkt, Dec.Layout_Array'(1 => Dec.FK_String));
    begin
       Check (not R.Ok and then R.Reason = Dec.String_Length_Invalid, "T-9 neg len");
    end;
    declare
-      Pkt : SEA := Cat (SEA'(1 .. 1 => 0),
+      Pkt : SEA := Cat (SEA'(1 => 0),
                          Enc_Varint (Interfaces.Integer_32 (Dec.String_Max + 1)));
       R : Dec.Decode_Result :=
         Dec.Decode (Pkt, Dec.Layout_Array'(1 => Dec.FK_String));
@@ -457,8 +460,9 @@ begin
       Check (not R.Ok and then R.Reason = Dec.String_Over_Max, "T-9 over max");
    end;
    declare
-      Pkt : SEA := Cat (Cat (SEA'(1 .. 1 => 0), Enc_Varint (5)),
-                         SEA'(1 .. 2 => (Character'Pos ('a'), Character'Pos ('b'))));
+      Pkt : SEA := Cat (Cat (SEA'(1 => 0), Enc_Varint (5)),
+                         SEA'(1 => SE (Character'Pos ('a')),
+                             2 => SE (Character'Pos ('b'))));
       R : Dec.Decode_Result :=
         Dec.Decode (Pkt, Dec.Layout_Array'(1 => Dec.FK_String));
    begin

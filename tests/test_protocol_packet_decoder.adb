@@ -63,7 +63,7 @@ begin
    Enc.Start_Packet (E, 0);
    declare
       R : constant Dec.Decode_Result :=
-        Dec.Decode (Get_Body_Of (E), Dec.Layout_Array'(1 => Dec.Kind_Boolean)(1 .. 0));
+        Dec.Decode (Get_Body_Of (E), Dec.Layout_Array'(1 .. 0 => Dec.Kind_Boolean));
    begin
       Check (R.Status = Adacraft.Protocol.Ok and then R.Reason = Dec.Reason_None
              and then R.Packet_Id = 0, "T1 id0");

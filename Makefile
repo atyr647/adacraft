@@ -14,6 +14,18 @@ bin/test_protocol_state: tests/test_protocol_state.adb
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_protocol_state.adb -o $@
 
+bin/test_protocol_handshake: tests/test_protocol_handshake.adb
+	mkdir -p bin obj
+	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_protocol_handshake.adb -o $@
+
+bin/test_protocol_status: tests/test_protocol_status.adb
+	mkdir -p bin obj
+	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_protocol_status.adb -o $@
+
+bin/test_idle_timeout: tests/test_idle_timeout.adb
+	mkdir -p bin obj
+	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_idle_timeout.adb -o $@
+
 bin/adacraft_tests: tests/adacraft_tests.adb
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/adacraft_tests.adb -o $@

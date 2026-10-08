@@ -1,6 +1,5 @@
 with Ada.Command_Line;
 with Ada.Text_IO;
-with Interfaces;
 with Adacraft.Protocol;
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Handshake_Exchange;
@@ -59,6 +58,16 @@ procedure Test_Handshake_Exchange is
      (1 => 1, 2 => 16#F9#, 3 => 16#05#,
       4 => 3, 5 => Character'Pos ('a'), 6 => Character'Pos ('b'),
       7 => Character'Pos ('c'), 8 => 16#63#, 9 => 16#DD#, 10 => 1);
+
+   procedure Check_Invalid (Packet : P.Octets) is
+      Current : S.Connection_State := S.Handshake;
+      Version : Natural;
+      Result  : H.Disposition_Kind;
+   begin
+      Try (Packet, Current, Version, Result);
+      Check (Result = H.Silent_Close and Current = S.Handshake and Version = 0,
+             "invalid handshake closes without changing state");
+   end Check_Invalid;
 begin
    declare
       Current : S.Connection_State := S.Handshake;
@@ -80,17 +89,11 @@ begin
              "valid Login intention transitions and records version");
    end;
 
-   for Packet of (Invalid_Intent, Truncated, Overlong, Trailing, Wrong_Id) loop
-      declare
-         Current : S.Connection_State := S.Handshake;
-         Version : Natural;
-         Result  : H.Disposition_Kind;
-      begin
-         Try (Packet, Current, Version, Result);
-         Check (Result = H.Silent_Close and Current = S.Handshake and Version = 0,
-                "invalid handshake closes without changing state");
-      end;
-   end loop;
+   Check_Invalid (Invalid_Intent);
+   Check_Invalid (Truncated);
+   Check_Invalid (Overlong);
+   Check_Invalid (Trailing);
+   Check_Invalid (Wrong_Id);
 
    if Failures = 0 then
       Ada.Text_IO.Put_Line ("handshake exchange tests passed");

@@ -104,6 +104,7 @@ package body Adacraft.Protocol.Packets is
    is
       use type Interfaces.Integer_32;
       use type Interfaces.Integer_64;
+      use type Interfaces.Unsigned_8;
       use type Interfaces.Unsigned_32;
       use type Interfaces.Unsigned_64;
 

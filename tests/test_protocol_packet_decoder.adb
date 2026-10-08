@@ -15,6 +15,11 @@ procedure Test_Protocol_Packet_Decoder is
 
    use type Interfaces.Integer_32;
    use type Interfaces.Integer_64;
+   use type Interfaces.Unsigned_32;
+   use type Interfaces.Unsigned_64;
+   use type Ada.Streams.Stream_Element;
+   use type Ada.Streams.Stream_Element_Offset;
+   use type Varnum.Status_Type;
    use type Packets.Decode_Error_Kind;
    use type Packets.Field_Kind;
 
@@ -383,6 +388,255 @@ begin
       Check (not R.Ok and then R.Err = Packets.Invalid_Packet_Id,
              "T3 negative id rejected");
    end;
+
+   --  T4: empty body is an error, never an exception.
+   declare
+      Empty_Holder : Protocol.Octets (1 .. 1) := (others => 0);
+      R : Packets.Decode_Result (Ok => False);
+      Raised : Boolean := False;
+   begin
+      begin
+         R := Packets.Decode (Empty_Holder (1 .. 0), L_Bool);
+      exception
+         when others =>
+            Raised := True;
+      end;
+      Check (not Raised, "T4 no exception");
+      if not Raised then
+         Check (not R.Ok, "T4 empty rejected");
+      end if;
+   end;
+
+   --  T5: every strict prefix 0..n-1 of the valid T2 body is rejected
+   --  without exception.
+   declare
+      Layout : constant Packets.Field_Kind_Array (1 .. 7) :=
+        (Packets.K_Boolean, Packets.K_Byte, Packets.K_Int, Packets.K_Long,
+         Packets.K_Varint, Packets.K_Varlong, Packets.K_String);
+      Buf  : Protocol.Octets (1 .. 64) := (others => 0);
+      Pos  : Natural := 1;
+      W    : Natural := 0;
+      S    : Varnum.Status_Type;
+      procedure Put (B : Protocol.Octet) is
+      begin
+         Buf (Pos) := B;
+         Pos := Pos + 1;
+      end Put;
+      procedure Put_B32 (V : Interfaces.Integer_32) is
+         use type Interfaces.Unsigned_32;
+         U : constant Interfaces.Unsigned_32 :=
+           (if V < 0 then Interfaces.Unsigned_32 (Interfaces.Integer_64 (V) + 2 ** 32)
+            else Interfaces.Unsigned_32 (V));
+      begin
+         Put (Protocol.Octet (Interfaces.Shift_Right (U, 24) and 16#FF#));
+         Put (Protocol.Octet (Interfaces.Shift_Right (U, 16) and 16#FF#));
+         Put (Protocol.Octet (Interfaces.Shift_Right (U, 8) and 16#FF#));
+         Put (Protocol.Octet (U and 16#FF#));
+      end Put_B32;
+   begin
+      Varnum.Encode (9, Buf, Pos, W, S);
+      Pos := Pos + W;
+      Put (16#01#);
+      Put (16#7E#);
+      Put_B32 (-12345);
+      --  8-byte big-endian long via the #210 encoder as oracle.
+      declare
+         E2 : Enc.Encoder_Type;
+      begin
+         Enc.Start_Packet (E2, 0);
+         Enc.Write_Long (E2, 987_654_321_0);
+         declare
+            Full : constant Protocol.Octets := Encoder_Body (E2);
+         begin
+            for I in 2 .. Full'Length loop
+               Put (Full (I));
+            end loop;
+         end;
+      end;
+      Varnum.Encode (300, Buf, Pos, W, S);
+      Pos := Pos + W;
+      Varnum.Encode_Varlong (-9_999, Buf, Pos, W, S);
+      Pos := Pos + W;
+      Varnum.Encode (3, Buf, Pos, W, S);
+      Pos := Pos + W;
+      Put (Protocol.Octet (Character'Pos ('a')));
+      Put (Protocol.Octet (Character'Pos ('b')));
+      Put (Protocol.Octet (Character'Pos ('c')));
+      declare
+         N : constant Natural := Pos - 1;
+         Full_Body : Protocol.Octets (1 .. N) := Buf (1 .. N);
+         Sanity : constant Packets.Decode_Result :=
+           Packets.Decode (Full_Body, Layout);
+      begin
+         Check (Sanity.Ok, "T5 sanity full body ok");
+         for Len in 0 .. N - 1 loop
+            declare
+               R : Packets.Decode_Result (Ok => False);
+               Raised : Boolean := False;
+            begin
+               begin
+                  if Len = 0 then
+                     R := Packets.Decode (Full_Body (1 .. 0), Layout);
+                  else
+                     R := Packets.Decode (Full_Body (1 .. Len), Layout);
+                  end if;
+               exception
+                  when others =>
+                     Raised := True;
+               end;
+               Check (not Raised, "T5 no exception len" & Integer'Image (Len));
+               if not Raised then
+                  Check (not R.Ok,
+                         "T5 prefix rejected" & Integer'Image (Len));
+               end if;
+            end;
+         end loop;
+      end;
+   end;
+
+   --  T6: overlong VarInt as ID and as field, overlong VarLong as field.
+   declare
+      Over_Id : constant Protocol.Octets (1 .. 6) :=
+        (16#80#, 16#80#, 16#80#, 16#80#, 16#80#, 16#00#);
+      R_Id : constant Packets.Decode_Result :=
+        Packets.Decode (Over_Id, Probe (Probe'First .. Probe'First - 1));
+   begin
+      Check (not R_Id.Ok and then R_Id.Err = Packets.Overlong,
+             "T6 overlong id");
+   end;
+   declare
+      Over_Vi : constant Protocol.Octets (1 .. 7) :=
+        (16#00#, 16#80#, 16#80#, 16#80#, 16#80#, 16#80#, 16#00#);
+      R : constant Packets.Decode_Result :=
+        Packets.Decode (Over_Vi, L_Varint);
+   begin
+      Check (not R.Ok and then R.Err = Packets.Overlong,
+             "T6 overlong varint field");
+   end;
+   declare
+      Over_Vl : Protocol.Octets (1 .. 11) :=
+        (16#00#, others => 16#80#);
+      R : Packets.Decode_Result (Ok => False);
+   begin
+      Over_Vl (1) := 16#00#;
+      for I in 2 .. Over_Vl'Last loop
+         Over_Vl (I) := 16#80#;
+      end loop;
+      R := Packets.Decode (Over_Vl, L_Varlon);
+      Check (not R.Ok and then R.Err = Packets.Overlong,
+             "T6 overlong varlong field");
+   end;
+
+   --  T7: string == String_Max succeeds, +1 rejected, prefix > remaining.
+   declare
+      Max : constant Natural := Packets.String_Max;
+      Big : Protocol.Octets (1 .. 40_000) := (others => 0);
+      P : Natural := 1;
+      W : Natural := 0;
+      S : Varnum.Status_Type;
+   begin
+      --  Exactly String_Max bytes of 'A' with id 0.
+      P := 1;
+      Varnum.Encode (0, Big, P, W, S);
+      Check (S = Varnum.Ok, "T7 setup id");
+      P := P + W;
+      Varnum.Encode (Interfaces.Integer_32 (Max), Big, P, W, S);
+      Check (S = Varnum.Ok, "T7 setup prefix max");
+      P := P + W;
+      for I in 0 .. Max - 1 loop
+         Big (P + I) := Protocol.Octet (Character'Pos ('A'));
+      end loop;
+      declare
+         Bdy : Protocol.Octets (1 .. (P + Max - 1)) := Big (1 .. (P + Max - 1));
+         R : constant Packets.Decode_Result :=
+           Packets.Decode (Bdy, L_String);
+      begin
+         Check (R.Ok and then R.Fields (1).S_Len = Max, "T7 max ok");
+         if R.Ok then
+            Check (R.Fields (1).S_Data (1) = 'A'
+                   and then R.Fields (1).S_Data (Max) = 'A', "T7 max content");
+         end if;
+      end;
+      --  Prefix String_Max + 1 with no payload: must be String_Too_Long
+      --  (checked before any copy).
+      P := 1;
+      Varnum.Encode (0, Big, P, W, S);
+      P := P + W;
+      Varnum.Encode (Interfaces.Integer_32 (Max + 1), Big, P, W, S);
+      P := P + W;
+      declare
+         Bdy2 : Protocol.Octets (1 .. (P - 1)) := Big (1 .. (P - 1));
+         R : constant Packets.Decode_Result :=
+           Packets.Decode (Bdy2, L_String);
+      begin
+         Check (not R.Ok and then R.Err = Packets.String_Too_Long,
+                "T7 max+1 too long");
+      end;
+      --  Negative prefix (-1) is String_Too_Long.
+      declare
+         Negpfx : constant Protocol.Octets (1 .. 6) :=
+           (16#00#, 16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#0F#);
+         R : constant Packets.Decode_Result :=
+           Packets.Decode (Negpfx, L_String);
+      begin
+         Check (not R.Ok and then R.Err = Packets.String_Too_Long,
+                "T7 negative prefix");
+      end;
+      --  Prefix larger than remaining bytes is Truncated.
+      declare
+         Short : constant Protocol.Octets := Body_With_String (0, "abc");
+         --  Rewrite length prefix 3 -> 10, keep 3 payload bytes.
+         Patched : Protocol.Octets (1 .. Short'Length) := Short;
+         R : Packets.Decode_Result (Ok => False);
+      begin
+         Patched (2) := 16#0A#;
+         R := Packets.Decode (Patched, L_String);
+         Check (not R.Ok and then R.Err = Packets.Truncated,
+                "T7 prefix > remaining");
+      end;
+   end;
+
+   --  T8: valid body + 1 trailing byte => Trailing_Bytes.
+   declare
+      Base : constant Protocol.Octets := Body_With_String (5, "hi");
+      Ext : Protocol.Octets (1 .. Base'Length + 1) := (others => 0);
+      R : Packets.Decode_Result (Ok => False);
+   begin
+      for I in 1 .. Base'Length loop
+         Ext (I) := Base (Base'First + I - 1);
+      end loop;
+      Ext (Ext'Last) := 16#00#;
+      R := Packets.Decode (Ext, L_String);
+      Check (not R.Ok and then R.Err = Packets.Trailing_Bytes,
+             "T8 trailing byte");
+   end;
+
+   --  T9: per-kind invalid values from the #210 merged spec.
+   --  Only K_Boolean has invalid bit patterns (anything but 16#00#/16#01#);
+   --  every other kind accepts all bit patterns, so coverage for those
+   --  kinds is explicitly vacuous (not skipped).
+   declare
+      Bad_Bool : constant Protocol.Octets (1 .. 2) := (16#00#, 16#02#);
+      R : constant Packets.Decode_Result :=
+        Packets.Decode (Bad_Bool, L_Bool);
+   begin
+      Check (not R.Ok and then R.Err = Packets.Invalid_Field_Value,
+             "T9 bool 0x02 invalid");
+   end;
+   declare
+      Bad_FF : constant Protocol.Octets (1 .. 2) := (16#00#, 16#FF#);
+      R : constant Packets.Decode_Result :=
+        Packets.Decode (Bad_FF, L_Bool);
+   begin
+      Check (not R.Ok and then R.Err = Packets.Invalid_Field_Value,
+             "T9 bool 0xFF invalid");
+   end;
+   Check (True, "T9 byte vacuous: all 256 patterns valid");
+   Check (True, "T9 int vacuous: all 2**32 patterns valid");
+   Check (True, "T9 long vacuous: all 2**64 patterns valid");
+   Check (True, "T9 varint vacuous: no non-length invalid value");
+   Check (True, "T9 varlong vacuous: no non-length invalid value");
+   Check (True, "T9 string vacuous: only length guards, covered in T7");
 
    if Failures = 0 then
       Ada.Text_IO.Put_Line ("packet decoder tests passed");

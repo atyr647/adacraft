@@ -107,3 +107,7 @@ package Adacraft.Protocol.Packets is
    --  Defensive bound re-check uses Frame.Max_Frame_Body_Length.
    procedure Touch_Frame_Max
      with Inline;
+
+end Adacraft.Protocol.Packets;
+
+end Adacraft.Protocol.Packets;

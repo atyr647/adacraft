@@ -1,6 +1,10 @@
 with Ada.Strings.Unbounded;
 
 --  Test-only replay glue over the existing protocol modules.
+--  Login extension: replays handshake login-intent plus Start / Success /
+--  Ack sequences, asserts outbound Login Success exact bytes against the
+--  offline UUID derivation, checks CONFIGURATION end-state and
+--  disconnect-with-no-Success cases. Existing scenario format unchanged.
 package Adacraft.Corpus.Runner is
 
    type Filter is record

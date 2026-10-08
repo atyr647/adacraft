@@ -107,7 +107,10 @@ package body Adacraft.Corpus.Loader is
    begin
       Result := PS.Handshake;
       Ok := False;
-      for X in PS.Parent_State loop
+      --  Accept pending states (LOGIN_AWAITING_ACK, ...) as well as the
+      --  parent states so login Start -> Success -> Ack -> CONFIGURATION
+      --  scenarios can assert intermediate state_after values.
+      for X in PS.Connection_State loop
          if PS.Connection_State'Image (X) = Value then
             Result := X;
             Ok := True;

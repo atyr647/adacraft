@@ -1,6 +1,7 @@
 with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
+with Adacraft.Auth;
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Ids;
@@ -124,9 +125,53 @@ package body Adacraft.Corpus.Runner is
       end;
    end Feed;
 
+   --  Login session-local ordering for one replay. Mirrors the ingress
+   --  Start -> Success (once) -> wait Ack -> CONFIGURATION path without
+   --  touching framing/transport. Client UUID is decoded but never used;
+   --  Success bytes are derived from the vanilla offline UUID.
+   type Login_Track is record
+      Start_Seen       : Boolean := False;
+      Success_Emitted  : Boolean := False;
+      Success_Verified : Boolean := False;
+      Name_Len         : Natural := 0;
+      Name             : String (1 .. 16) := (others => ' ');
+      UUID             : Auth.Digest := (others => 0);
+      Frame_Bytes      : Byte_Vectors.Vector;
+   end record;
+
+   function Valid_Login_Name (N : String) return Boolean is
+   begin
+      if N'Length < 1 or else N'Length > 16 then
+         return False;
+      end if;
+      for C of N loop
+         if Character'Pos (C) < 16#21#
+           or else Character'Pos (C) > 16#7E#
+         then
+            return False;
+         end if;
+      end loop;
+      return True;
+   end Valid_Login_Name;
+
+   function Input_Equals (Input : P.Octets; V : Byte_Vectors.Vector)
+     return Boolean is
+   begin
+      if Natural (V.Length) /= Input'Length then
+         return False;
+      end if;
+      for I in Input'Range loop
+         if V (Natural (I - Input'First)) /= Input (I) then
+            return False;
+         end if;
+      end loop;
+      return True;
+   end Input_Equals;
+
    procedure Replay (S : Scenario; Failure : out Unbounded_String) is
       State : PS.Connection_State := S.Initial_State;
       Idx   : Natural := 0;
+      Login : Login_Track;
 
       procedure Fail (Expected, Actual, Detail : String) is
       begin
@@ -136,6 +181,17 @@ package body Adacraft.Corpus.Runner is
       end Fail;
    begin
       Failure := Null_Unbounded_String;
+      --  Offline derivation runs only when configuration selects offline.
+      --  Corpus login scenarios are offline cases, so replay offline
+      --  unless the scenario id explicitly names an online case.
+      Auth.Online_Mode := False;
+      declare
+         Id_Low : constant String := Low (To_String (S.Id));
+      begin
+         if Ada.Strings.Fixed.Index (Id_Low, "online") > 0 then
+            Auth.Online_Mode := True;
+         end if;
+      end;
       for St of S.Steps loop
          Idx := Idx + 1;
          declare
@@ -147,6 +203,118 @@ package body Adacraft.Corpus.Runner is
                Input (I) := St.Input (I);
             end loop;
             Feed (State, St.Dir, Input, R);
+            --  Login ordering / Success exact-bytes layer. Runs on top of
+            --  the state-machine result in R without changing framing.
+            if Length (Failure) = 0 and then R.Category = Null_Unbounded_String
+              and then R.Actual = Accepted
+            then
+               declare
+                  Is_Start : constant Boolean :=
+                    St.Dir = Serverbound
+                    and then R.Pid =
+                      P.Ids.Protocol_Id (P.Ids.Sb_Login_Hello);
+                  Is_Ack : constant Boolean :=
+                    St.Dir = Serverbound
+                    and then R.Pid =
+                      P.Ids.Protocol_Id (P.Ids.Sb_Login_Login_Acknowledged);
+                  Is_Success : constant Boolean :=
+                    St.Dir = Clientbound
+                    and then R.Pid =
+                      P.Ids.Protocol_Id (P.Ids.Cb_Login_Login_Finished);
+                  Parent_Before : constant PS.Connection_State :=
+                    (if Before = PS.Login_Awaiting_Ack then PS.Login
+                     else Before);
+               begin
+                  if Is_Start and then Parent_Before = PS.Login then
+                     --  Re-decode payload strictly: truncation, bad length
+                     --  or trailing bytes must close with no Success.
+                     declare
+                        F0 : constant P.Frame.Frame_Decode :=
+                          P.Frame.Decode_Frame (Input, 1);
+                        Payload : constant P.Octets :=
+                          Input (F0.Payload_First .. F0.Payload_Last);
+                        Start : constant P.Packets.Login_Start :=
+                          P.Packets.Decode_Login_Start (Payload);
+                     begin
+                        if Start.Status /= P.Ok then
+                           Fail ("rejected", "accepted",
+                                 "login start malformed but accepted");
+                           return;
+                        elsif not Valid_Login_Name
+                          (Start.Name (1 .. Start.Name_Len))
+                        then
+                           Fail ("rejected", "accepted",
+                                 "invalid name but accepted");
+                           return;
+                        elsif Auth.Online_Mode then
+                           Fail ("rejected", "accepted",
+                                 "online mode must not send success");
+                           return;
+                        elsif Login.Start_Seen then
+                           Fail ("rejected", "accepted",
+                                 "duplicate login start but accepted");
+                           return;
+                        else
+                           Login.Start_Seen := True;
+                           Login.Name_Len := Start.Name_Len;
+                           Login.Name (1 .. Start.Name_Len) :=
+                             Start.Name (1 .. Start.Name_Len);
+                           Login.UUID :=
+                             Auth.Offline_UUID_For_Name
+                               (Start.Name (1 .. Start.Name_Len));
+                           --  Derive exact outbound Success frame bytes.
+                           declare
+                              Body_W : P.Buffer.Writer (64);
+                              Framed : P.Buffer.Writer (96);
+                           begin
+                              P.Packets.Encode_Login_Success
+                                (Body_W, P.Octets (Login.UUID),
+                                 Login.Name (1 .. Login.Name_Len));
+                              if Body_W.Failed
+                                or else not P.Packets.Frame (Framed, Body_W)
+                                or else Framed.Failed
+                              then
+                                 Fail ("rejected", "accepted",
+                                       "success encode failed");
+                                 return;
+                              end if;
+                              Login.Frame_Bytes.Clear;
+                              for I in 1 .. Framed.Len loop
+                                 Login.Frame_Bytes.Append
+                                   (Framed.Data (I));
+                              end loop;
+                              Login.Success_Emitted := True;
+                           end;
+                        end if;
+                     end;
+                  elsif Is_Success then
+                     if not Login.Success_Emitted
+                       or else Login.Success_Verified
+                     then
+                        Fail ("rejected", "accepted",
+                              "success without start or duplicate success");
+                        return;
+                     elsif not Input_Equals (Input, Login.Frame_Bytes) then
+                        Fail ("success exact bytes", "success bytes differ",
+                              "outbound login success mismatch");
+                        return;
+                     else
+                        Login.Success_Verified := True;
+                     end if;
+                  elsif Is_Ack
+                    and then (Before = PS.Login
+                              or else Before = PS.Login_Awaiting_Ack)
+                  then
+                     if not Login.Success_Verified then
+                        Fail ("rejected", "accepted",
+                              "acknowledged before success but accepted");
+                        return;
+                     end if;
+                  end if;
+               end;
+            end if;
+            --  A rejected step must never have emitted a Success for that
+            --  step; Feed already stopped the replay on terminal steps.
             if R.Actual /= St.Expected then
                Fail (Low (Outcome'Image (St.Expected)),
                      Low (Outcome'Image (R.Actual)), To_String (R.Detail));

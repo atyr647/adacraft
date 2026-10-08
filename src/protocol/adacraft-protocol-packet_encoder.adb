@@ -437,7 +437,6 @@ package body Adacraft.Protocol.Packet_Encoder is
       S       :    out Status)
    is
       use type Ada.Streams.Stream_Element_Offset;
-      Need : Natural;
    begin
       Out_Last := Out_Buf'First - 1;
       if E.St /= Ok then
@@ -456,11 +455,8 @@ package body Adacraft.Protocol.Packet_Encoder is
          S := Overflow;
          return;
       end if;
-      Need := E.Len + Adacraft.Protocol.Frame.Max_Frame_Prefix_Bytes;
-      if Out_Buf'Length < Need then
-         S := Overflow;
-         return;
-      end if;
+      --  Output sizing is delegated to Frame.Encode; a too-small
+      --  Out_Buf reports Output_Too_Small without partial bytes.
       declare
          Len_Off : constant Ada.Streams.Stream_Element_Offset :=
            Ada.Streams.Stream_Element_Offset (E.Len);

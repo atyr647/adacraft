@@ -403,9 +403,224 @@ procedure Differential_Main is
       end Parse;
    end D_Args;
 
+   package D_Report is
+      --  Deterministic human-readable report (AC 6, FR-8).
+      --  Only Ada.Text_IO.Put_Line (LF-terminated lines), fixed field
+      --  widths, CLI scenario order, no wall-clock / PIDs / map order.
+      --  Format per scenario:
+      --    scenario: <name>
+      --    oracle: <n> entries outcome=<outcome>
+      --    oracle[   1]: state=    0 dir=S2C id=    0
+      --    ...
+      --    candidate: <n> entries outcome=<outcome>
+      --    candidate[   1]: ...
+      --    MATCH | DIVERGE index=<i> [oracle=<entry>] [candidate=<entry>]
+      --  Pure Put_Line wrappers except for I/O itself; Entry/Outcome
+      --  images are pure functions (deterministic, byte-identical re-run).
+      function Outcome_Image (O : D_Defs.Outcome) return String;
+      function Entry_Image (E : D_Defs.Entry) return String;
+      procedure Report_Scenario
+        (Name       : String;
+         Oracle_T   : D_Defs.Transcript;
+         Cand_T     : D_Defs.Transcript;
+         Any_Diverge : in out Boolean);
+   end D_Report;
+
+   package body D_Report is
+      function Pad_Left (S : String; Width : Positive) return String is
+      begin
+         if S'Length >= Width then
+            return S;
+         end if;
+         declare
+            P : String (1 .. Width - S'Length) := (others => ' ');
+         begin
+            return P & S;
+         end;
+      end Pad_Left;
+
+      function Num (N : Natural; Width : Positive) return String is
+         T : constant String :=
+           Ada.Strings.Fixed.Trim (Natural'Image (N), Ada.Strings.Both);
+      begin
+         return Pad_Left (T, Width);
+      end Num;
+
+      function Outcome_Image (O : D_Defs.Outcome) return String is
+      begin
+         case O is
+            when D_Defs.Closed_By_Peer   => return "closed_by_peer";
+            when D_Defs.Still_Open_At_End => return "still_open_at_end";
+            when D_Defs.Timeout          => return "timeout";
+            when D_Defs.Connect_Failed   => return "connect_failed";
+            when D_Defs.Malformed_Input  => return "malformed_input";
+         end case;
+      end Outcome_Image;
+
+      function Dir_Image (D : D_Defs.Direction) return String is
+      begin
+         case D is
+            when D_Defs.S2C => return "S2C";
+         end case;
+      end Dir_Image;
+
+      function Entry_Image (E : D_Defs.Entry) return String is
+      begin
+         return "state=" & Num (E.State, 5) & " dir=" & Dir_Image (E.Dir) &
+           " id=" & Num (E.Id, 5);
+      end Entry_Image;
+
+      procedure Put_Transcript
+        (Label : String; T : D_Defs.Transcript)
+      is
+      begin
+         Ada.Text_IO.Put_Line
+           (Label & ": " & Num (T.Count, 4) & " entries outcome=" &
+            Outcome_Image (T.Result));
+         for I in 1 .. T.Count loop
+            Ada.Text_IO.Put_Line
+              (Label & "[" & Num (I, 4) & "]: " &
+               Entry_Image (D_Defs.Get (T, I)));
+         end loop;
+      end Put_Transcript;
+
+      procedure Report_Scenario
+        (Name       : String;
+         Oracle_T   : D_Defs.Transcript;
+         Cand_T     : D_Defs.Transcript;
+         Any_Diverge : in out Boolean)
+      is
+         Idx : constant Natural :=
+           D_Compare.First_Divergence_Index (Oracle_T, Cand_T);
+      begin
+         --  Scenario name first, then oracle lines, then candidate lines,
+         --  then verdict. Caller preserves CLI order.
+         Ada.Text_IO.Put_Line ("scenario: " & Name);
+         Put_Transcript ("oracle", Oracle_T);
+         Put_Transcript ("candidate", Cand_T);
+         if Idx = 0 then
+            Ada.Text_IO.Put_Line ("MATCH");
+         else
+            Any_Diverge := True;
+            if Idx <= Oracle_T.Count and then Idx <= Cand_T.Count then
+               Ada.Text_IO.Put_Line
+                 ("DIVERGE index=" &
+                  Ada.Strings.Fixed.Trim
+                    (Natural'Image (Idx), Ada.Strings.Both) &
+                  " oracle=(" & Entry_Image (D_Defs.Get (Oracle_T, Idx)) &
+                  ") candidate=(" & Entry_Image (D_Defs.Get (Cand_T, Idx)) &
+                  ")");
+            elsif Oracle_T.Count /= Cand_T.Count then
+               Ada.Text_IO.Put_Line
+                 ("DIVERGE index=" &
+                  Ada.Strings.Fixed.Trim
+                    (Natural'Image (Idx), Ada.Strings.Both) &
+                  " oracle-count=" &
+                  Ada.Strings.Fixed.Trim
+                    (Natural'Image (Oracle_T.Count), Ada.Strings.Both) &
+                  " candidate-count=" &
+                  Ada.Strings.Fixed.Trim
+                    (Natural'Image (Cand_T.Count), Ada.Strings.Both));
+            else
+               --  Entry sequences (incl. counts) equal, outcomes differ.
+               Ada.Text_IO.Put_Line
+                 ("DIVERGE index=" &
+                  Ada.Strings.Fixed.Trim
+                    (Natural'Image (Idx), Ada.Strings.Both) &
+                  " oracle-outcome=" & Outcome_Image (Oracle_T.Result) &
+                  " candidate-outcome=" & Outcome_Image (Cand_T.Result));
+            end if;
+         end if;
+      end Report_Scenario;
+   end D_Report;
+
+   package D_Main is
+      --  Exit mapping (AC 7):
+      --    bad-args / unreadable scenario            -> 2 (harness error)
+      --    oracle Connect_Failed                     -> 2 (harness error)
+      --    candidate connect/timeout/close failure   -> DIVERGE (exit 1 path)
+      --    all scenarios MATCH                       -> 0
+      --    any scenario DIVERGE                      -> 1
+      --  Pure mapping plus readability pre-check used before any
+      --  network I/O so harness errors never masquerade as DIVERGE.
+      function Map_Exit
+        (Oracle_Connect_Failed : Boolean;
+         Any_Diverge           : Boolean) return Integer;
+      --  2 when Oracle_Connect_Failed, else 1 when Any_Diverge, else 0.
+
+      function Check_Scenarios_Readable return Boolean;
+      --  Tries to open each CLI scenario for reading (Ada.Text_IO only).
+      --  Returns True when all readable; on failure prints
+      --  "differential: unreadable scenario '<p>'" to Standard_Error and
+      --  returns False (caller maps to exit 2).
+
+      procedure Set_Exit (Code : Integer);
+      --  0 -> Success, 1/2 -> numeric exit status via Set_Exit_Status.
+   end D_Main;
+
+   package body D_Main is
+      function Map_Exit
+        (Oracle_Connect_Failed : Boolean;
+         Any_Diverge           : Boolean) return Integer
+      is
+      begin
+         if Oracle_Connect_Failed then
+            return 2;
+         elsif Any_Diverge then
+            return 1;
+         else
+            return 0;
+         end if;
+      end Map_Exit;
+
+      function Check_Scenarios_Readable return Boolean is
+      begin
+         for I in 1 .. D_Args.Scenario_Count loop
+            declare
+               Name : constant String := D_Args.Scenario (I);
+               F    : Ada.Text_IO.File_Type;
+            begin
+               begin
+                  Ada.Text_IO.Open (F, Ada.Text_IO.In_File, Name);
+               exception
+                  when others =>
+                     Ada.Text_IO.Put_Line
+                       (Ada.Text_IO.Standard_Error,
+                        "differential: unreadable scenario '" & Name & "'");
+                     return False;
+               end;
+               begin
+                  if Ada.Text_IO.Is_Open (F) then
+                     Ada.Text_IO.Close (F);
+                  end if;
+               exception
+                  when others =>
+                     null;
+               end;
+            end;
+         end loop;
+         return True;
+      end Check_Scenarios_Readable;
+
+      procedure Set_Exit (Code : Integer) is
+      begin
+         if Code = 0 then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Success);
+         else
+            Ada.Command_Line.Set_Exit_Status
+              (Ada.Command_Line.Exit_Status (Code));
+         end if;
+      end Set_Exit;
+   end D_Main;
+
 begin
    D_Args.Parse;
    if Ada.Command_Line.Exit_Status /= Ada.Command_Line.Success then
+      --  Bad args already reported by D_Args.Fail; Fail sets status 2.
+      return;
+   end if;
+   if not D_Main.Check_Scenarios_Readable then
+      D_Main.Set_Exit (2);
       return;
    end if;
    Ada.Text_IO.Put_Line
@@ -419,5 +634,8 @@ begin
       Ada.Strings.Fixed.Trim (Natural'Image (D_Args.Scenario_Timeout_Secs), Ada.Strings.Both) &
       " scenarios=" &
       Ada.Strings.Fixed.Trim (Natural'Image (D_Args.Scenario_Count), Ada.Strings.Both));
-   Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Success);
+   --  No D_Run yet: no transcripts to compare, no oracle connection
+   --  attempted, so Oracle_Connect_Failed = False, Any_Diverge = False.
+   D_Main.Set_Exit (D_Main.Map_Exit (Oracle_Connect_Failed => False,
+                                     Any_Diverge           => False));
 end Differential_Main;

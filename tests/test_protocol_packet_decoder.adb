@@ -485,6 +485,18 @@ begin
       Check (not R.Ok and then R.Reason = Dec.Trailing_Bytes, "T-10 trailing");
    end;
 
+   --  Invalid boolean byte (not 0/1) is rejected with no partial packet.
+   --  No dedicated Boolean reason exists in Fail_Reason, so the decoder
+   --  reports Truncated; this test pins that mapping exactly.
+   declare
+      Pkt : SEA := Cat (SEA'(1 => 0), SEA'(1 => 2));
+      R : Dec.Decode_Result :=
+        Dec.Decode (Pkt, Dec.Layout_Array'(1 => Dec.FK_Boolean));
+   begin
+      Check (not R.Ok and then R.Reason = Dec.Truncated, "T-11 invalid bool");
+      Check (not R.Ok, "T-11 invalid bool no partial");
+   end;
+
    --  T-11: reason specificity already asserted per-case above (AC-8/AC-10);
    --  extra: truncated Int field is Truncated, not another reason.
    declare

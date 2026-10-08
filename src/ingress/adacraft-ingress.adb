@@ -1,3 +1,4 @@
+with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Handshake_Exchange;
 with Adacraft.Protocol.State;

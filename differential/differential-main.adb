@@ -1395,6 +1395,19 @@ begin
       --  Bad args already reported by D_Args.Fail; Fail sets status 2.
       return;
    end if;
+   if D_Args.Selftest then
+      declare
+         Passed : Boolean;
+      begin
+         D_Selftest.Run (Passed);
+         if Passed then
+            D_Main.Set_Exit (0);
+         else
+            D_Main.Set_Exit (1);
+         end if;
+      end;
+      return;
+   end if;
    if not D_Main.Check_Scenarios_Readable then
       D_Main.Set_Exit (2);
       return;
@@ -1410,8 +1423,35 @@ begin
       Ada.Strings.Fixed.Trim (Natural'Image (D_Args.Scenario_Timeout_Secs), Ada.Strings.Both) &
       " scenarios=" &
       Ada.Strings.Fixed.Trim (Natural'Image (D_Args.Scenario_Count), Ada.Strings.Both));
-   --  No D_Run yet: no transcripts to compare, no oracle connection
-   --  attempted, so Oracle_Connect_Failed = False, Any_Diverge = False.
-   D_Main.Set_Exit (D_Main.Map_Exit (Oracle_Connect_Failed => False,
-                                     Any_Diverge           => False));
+   declare
+      Any_Diverge : Boolean := False;
+      Oracle_Failed : Boolean := False;
+   begin
+      for I in 1 .. D_Args.Scenario_Count loop
+         declare
+            Name : constant String := D_Args.Scenario (I);
+            OT : D_Defs.Transcript;
+            CT : D_Defs.Transcript;
+         begin
+            D_Run.Run_Target
+              (D_Args.Oracle_Image, D_Args.Oracle_Port, Name,
+               D_Args.Read_Timeout_Secs, D_Args.Scenario_Timeout_Secs, OT);
+            if OT.Result = D_Defs.Connect_Failed then
+               Oracle_Failed := True;
+            end if;
+            D_Run.Run_Target
+              (D_Args.Candidate_Image, D_Args.Cand_Port, Name,
+               D_Args.Read_Timeout_Secs, D_Args.Scenario_Timeout_Secs, CT);
+            D_Report.Report_Scenario (Name, OT, CT, Any_Diverge);
+            --  Candidate failure stays DIVERGE (A6); only oracle failure
+            --  escalates to harness error below.
+         end;
+      end loop;
+      if Oracle_Failed then
+         D_Main.Set_Exit (2);
+      else
+         D_Main.Set_Exit (D_Main.Map_Exit (Oracle_Connect_Failed => False,
+                                           Any_Diverge => Any_Diverge));
+      end if;
+   end;
 end Differential_Main;

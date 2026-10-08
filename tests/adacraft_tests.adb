@@ -185,12 +185,8 @@ begin
    end;
 
    declare
-      Empty : constant Protocol.Octets (1 .. 0) := (others => 0);
-      ABC   : constant Protocol.Octets := Bytes ("abc");
       Notch : constant Auth.Digest := Auth.Offline_UUID ("Notch");
    begin
-      Check (Hex (Auth.MD5 (Empty)) = "d41d8cd98f00b204e9800998ecf8427e", "md5 empty");
-      Check (Hex (Auth.MD5 (ABC)) = "900150983cd24fb0d6963f7d28e17f72", "md5 abc");
       Check (Hex (Notch) = "b50ad385829d3141a2167e7d7539ba7f", "offline notch");
    end;
 

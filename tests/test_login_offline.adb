@@ -138,6 +138,54 @@ begin
    Check (not Valid_Name ("bad" & Character'Val (16#7F#)), "DEL is bad char");
    Check (not Valid_Name ("bad" & Character'Val (16#20#)), "0x20 is bad char");
 
+   --  Name rule enforced by ingress (offline mode): bad char disconnects.
+   declare
+      S : Ingress.Session;
+      Payload : constant Protocol.Octets :=
+        Build_Hello_Payload ("bad name", Zero_Uuid);
+      Pid : constant Natural := Ids.Protocol_Id (Ids.Sb_Login_Hello);
+      Incoming : constant Protocol.Octets := Frame_One (Pid, Payload);
+      Outgoing : Buffer.Writer (2048);
+      Consumed : Natural;
+      Close_Now : Boolean;
+      Saved : constant Boolean := Auth.Online_Mode;
+   begin
+      Auth.Online_Mode := False;
+      S.State := Protocol.Login;
+      Ingress.Ingest (S, Incoming, 1, Consumed, Outgoing, Close_Now);
+      Auth.Online_Mode := Saved;
+      Check (Close_Now, "ingress bad char closes");
+      Check (not S.Success_Sent, "ingress bad char no success");
+      Check (S.State = Protocol.Login, "ingress bad char no transition");
+   end;
+
+   --  Name lengths 0 / 17 enforced by ingress (offline mode).
+   declare
+      Saved : constant Boolean := Auth.Online_Mode;
+   begin
+      Auth.Online_Mode := False;
+      for I in 0 .. 1 loop
+         declare
+            N : constant String :=
+              (if I = 0 then "" else "12345678901234567");
+            S : Ingress.Session;
+            Incoming : constant Protocol.Octets :=
+              Frame_One (Ids.Protocol_Id (Ids.Sb_Login_Hello),
+                         Build_Hello_Payload (N, Zero_Uuid));
+            Outgoing : Buffer.Writer (2048);
+            Consumed : Natural;
+            Close_Now : Boolean;
+         begin
+            S.State := Protocol.Login;
+            Ingress.Ingest (S, Incoming, 1, Consumed, Outgoing, Close_Now);
+            Check (Close_Now,
+                   "ingress len rejects " & Integer'Image (N'Length));
+            Check (not S.Success_Sent, "ingress len no success");
+         end;
+      end loop;
+      Auth.Online_Mode := Saved;
+   end;
+
    --  Truncated payload rejected.
    declare
       Full : constant Protocol.Octets := Build_Hello_Payload ("Notch", Zero_Uuid);
@@ -179,63 +227,125 @@ begin
       Check ((U1 = UA) = False, "different names differ (spot)");
    end;
 
-   --  Exact-bytes Success shape: pinned clientbound Login Finished id is 2,
-   --  serverbound Hello 0, Acknowledged 3 (protocol 777). Full encoder lands
-   --  with Encode_Login_Success; until then assert ids + manual body shape.
+   --  Exact-bytes Login Success encode via Encode_Login_Success.
    Check (Ids.Protocol_Id (Ids.Cb_Login_Login_Finished) = 2, "success id 2");
    Check (Ids.Protocol_Id (Ids.Sb_Login_Hello) = 0, "hello id 0");
    Check (Ids.Protocol_Id (Ids.Sb_Login_Login_Acknowledged) = 3, "ack id 3");
    declare
       U : constant Auth.Digest := Auth.Offline_UUID ("Notch");
       W : Buffer.Writer (64);
-      Expect_Len : Natural;
+      Framed : Buffer.Writer (96);
+      Golden_Body : constant Protocol.Octets (1 .. 24) :=
+        (2,
+         16#B5#, 16#0A#, 16#D3#, 16#85#, 16#82#, 16#9D#, 16#31#, 16#41#,
+         16#A2#, 16#16#, 16#7E#, 16#7D#, 16#75#, 16#39#, 16#BA#, 16#7F#,
+         5, 16#4E#, 16#6F#, 16#74#, 16#63#, 16#68#, 0);
+      Golden_Framed : constant Protocol.Octets (1 .. 25) :=
+        (16#18#, 2,
+         16#B5#, 16#0A#, 16#D3#, 16#85#, 16#82#, 16#9D#, 16#31#, 16#41#,
+         16#A2#, 16#16#, 16#7E#, 16#7D#, 16#75#, 16#39#, 16#BA#, 16#7F#,
+         5, 16#4E#, 16#6F#, 16#74#, 16#63#, 16#68#, 0);
    begin
-      Buffer.Put_Varint (W, 2);
-      for B of U loop
-         Buffer.Put_Octet (W, B);
-      end loop;
-      Buffer.Put_String (W, "Notch");
-      Buffer.Put_Varint (W, 0);
-      Expect_Len := W.Len;
-      Check (not W.Failed and then Expect_Len = 1 + 16 + 6 + 1, "success exact-bytes shape");
-      Check (W.Data (1) = 2, "success first byte id");
-      Check (W.Data (W.Len) = 0, "success empty properties");
+      Packets.Encode_Login_Success
+        (W, Protocol.Octets (U), "Notch");
+      Check (not W.Failed, "encode success not failed");
+      Check (W.Len = Golden_Body'Length, "success exact len 24");
+      Check (W.Data (1 .. W.Len) = Golden_Body, "success exact body bytes");
+      Check (Packets.Frame (Framed, W), "success framed");
+      Check (Framed.Len = Golden_Framed'Length, "success framed len 25");
+      Check (Framed.Data (1 .. Framed.Len) = Golden_Framed,
+             "success golden 18 02 B5 0A ..");
    end;
 
-   --  Start -> (Success once) -> Ack -> CONFIGURATION ordering, rejections,
-   --  online-mode no-Success, offline flag: current build answers Login
-   --  Hello with a login disconnect and closes; Success/Ack transition and
-   --  Online_Mode gate arrive with the login-state path item. Assert the
-   --  current confined behavior so the harness is wired and regressions show.
+   --  Offline happy path: Start -> exactly one Success -> Ack -> CONFIGURATION.
    declare
       S : Ingress.Session;
       Payload : constant Protocol.Octets := Build_Hello_Payload ("Notch", Zero_Uuid);
       Pid : constant Natural := Ids.Protocol_Id (Ids.Sb_Login_Hello);
-      Incoming : constant Protocol.Octets := Frame_One (Pid, Payload);
+      Start_F : constant Protocol.Octets := Frame_One (Pid, Payload);
       Outgoing : Buffer.Writer (2048);
       Consumed : Natural;
       Close_Now : Boolean;
+      Saved : constant Boolean := Auth.Online_Mode;
+      Golden_Framed : constant Protocol.Octets (1 .. 25) :=
+        (16#18#, 2,
+         16#B5#, 16#0A#, 16#D3#, 16#85#, 16#82#, 16#9D#, 16#31#, 16#41#,
+         16#A2#, 16#16#, 16#7E#, 16#7D#, 16#75#, 16#39#, 16#BA#, 16#7F#,
+         5, 16#4E#, 16#6F#, 16#74#, 16#63#, 16#68#, 0);
+      Len_After_Start : Natural;
+      Expect_Ident : Auth.Player_Identity;
    begin
+      Auth.Online_Mode := False;
       S.State := Protocol.Login;
-      Ingress.Ingest (S, Incoming, 1, Consumed, Outgoing, Close_Now);
-      Check (Close_Now, "login hello closes (disconnect path)");
-      Check (Outgoing.Len > 0, "login hello emits disconnect, no Success yet");
-      Check (S.State = Protocol.Login, "no state change on hello disconnect");
+      Ingress.Ingest (S, Start_F, 1, Consumed, Outgoing, Close_Now);
+      Expect_Ident := Auth.Offline_Identity_For_Name ("Notch");
+      Check (not Close_Now, "offline start no close");
+      Check (S.Start_Seen and then S.Success_Sent, "offline start flags set");
+      Check (S.State = Protocol.Login, "offline start stays login");
+      Check (Outgoing.Len = Golden_Framed'Length, "exactly one success framed");
+      Check (Outgoing.Data (1 .. Outgoing.Len) = Golden_Framed,
+             "offline success golden bytes");
+      Check (S.Identity.UUID = Expect_Ident.UUID, "identity uuid recorded");
+      Check (S.Identity.Is_Offline, "identity flagged offline");
+      Check (not S.Identity.Authenticated, "identity never online-auth");
+      Len_After_Start := Outgoing.Len;
+      --  Ack moves to CONFIGURATION and sends nothing.
+      declare
+         Empty : Protocol.Octets (1 .. 0) := (others => 0);
+         Ack_F : constant Protocol.Octets :=
+           Frame_One (Ids.Protocol_Id (Ids.Sb_Login_Login_Acknowledged), Empty);
+      begin
+         Ingress.Ingest (S, Ack_F, 1, Consumed, Outgoing, Close_Now);
+         Check (not Close_Now, "ack no close");
+         Check (S.State = Protocol.Configuration, "ack -> configuration");
+         Check (Outgoing.Len = Len_After_Start, "nothing sent in configuration");
+      end;
+      --  Second Start after Success/Ack is rejected with close, no change.
+      Ingress.Ingest (S, Start_F, 1, Consumed, Outgoing, Close_Now);
+      Check (Close_Now, "start after success closes");
+      Check (S.State = Protocol.Configuration, "no change after late start");
+      Auth.Online_Mode := Saved;
    end;
 
-   --  Unknown packet id in LOGIN closes with no state change.
+   --  Second Start while still in LOGIN (after Success, before Ack) closes.
+   declare
+      S : Ingress.Session;
+      Payload : constant Protocol.Octets := Build_Hello_Payload ("Notch", Zero_Uuid);
+      Pid : constant Natural := Ids.Protocol_Id (Ids.Sb_Login_Hello);
+      One : constant Protocol.Octets := Frame_One (Pid, Payload);
+      Outgoing : Buffer.Writer (4096);
+      Consumed : Natural;
+      Close_Now : Boolean;
+      Saved : constant Boolean := Auth.Online_Mode;
+   begin
+      Auth.Online_Mode := False;
+      S.State := Protocol.Login;
+      Ingress.Ingest (S, One, 1, Consumed, Outgoing, Close_Now);
+      Check (not Close_Now, "first start ok");
+      Check (S.Success_Sent, "first start sent success");
+      Ingress.Ingest (S, One, 1, Consumed, Outgoing, Close_Now);
+      Check (Close_Now, "second start closes");
+      Check (S.State = Protocol.Login, "second start no transition");
+      Auth.Online_Mode := Saved;
+   end;
+
+   --  Unknown packet id in LOGIN (clean, empty payload) closes, no change.
    declare
       S : Ingress.Session;
       Outgoing : Buffer.Writer (2048);
       Consumed : Natural;
       Close_Now : Boolean;
-      --  Packet id 99 with empty payload, framed.
-      Incoming : constant Protocol.Octets := Frame_One (99, Protocol.Octets'(1 .. 1 => 0));
+      Empty : Protocol.Octets (1 .. 0) := (others => 0);
+      Incoming : constant Protocol.Octets := Frame_One (99, Empty);
+      Saved : constant Boolean := Auth.Online_Mode;
    begin
+      Auth.Online_Mode := False;
       S.State := Protocol.Login;
       Ingress.Ingest (S, Incoming, 1, Consumed, Outgoing, Close_Now);
+      Auth.Online_Mode := Saved;
       Check (Close_Now, "unknown id in login closes");
       Check (S.State = Protocol.Login, "unknown id no state change");
+      Check (Outgoing.Len = 0, "unknown id sends nothing");
    end;
 
    --  Acknowledged-before-Success (ack id 3, empty payload) closes.
@@ -254,8 +364,7 @@ begin
       Check (S.State = Protocol.Login, "ack-before-success no state change");
    end;
 
-   --  Duplicate Start: two Hellos back to back must not yield Success;
-   --  current build closes on first; assert close and single disconnect.
+   --  Duplicate Start in one ingest: first Success then close on second.
    declare
       S : Ingress.Session;
       Payload : constant Protocol.Octets := Build_Hello_Payload ("Notch", Zero_Uuid);
@@ -265,19 +374,21 @@ begin
       Outgoing : Buffer.Writer (4096);
       Consumed : Natural;
       Close_Now : Boolean;
+      Saved : constant Boolean := Auth.Online_Mode;
    begin
       Both (1 .. One'Length) := One;
       Both (One'Length + 1 .. Both'Last) := One;
+      Auth.Online_Mode := False;
       S.State := Protocol.Login;
       Ingress.Ingest (S, Both, 1, Consumed, Outgoing, Close_Now);
+      Auth.Online_Mode := Saved;
       Check (Close_Now, "duplicate start closes");
       Check (S.State = Protocol.Login, "duplicate start no transition");
+      Check (S.Success_Sent, "duplicate: first success was sent");
+      Check (Outgoing.Len = 25, "duplicate: exactly one success, no second");
    end;
 
-   --  Identity flagged offline / online-mode sends no Success: offline UUID
-   --  path never marks online-authenticated; current build sends only a
-   --  login disconnect (no Cb_Login_Login_Finished bytes 0x02..). The full
-   --  Online_Mode gate is asserted here as "no Success bytes emitted".
+   --  Online mode: Login Start disconnects, sends no Success.
    declare
       S : Ingress.Session;
       Payload : constant Protocol.Octets := Build_Hello_Payload ("Notch", Zero_Uuid);
@@ -287,16 +398,24 @@ begin
       Consumed : Natural;
       Close_Now : Boolean;
       Has_Success : Boolean := False;
+      Saved : constant Boolean := Auth.Online_Mode;
    begin
+      Auth.Online_Mode := True;
       S.State := Protocol.Login;
       Ingress.Ingest (S, Incoming, 1, Consumed, Outgoing, Close_Now);
+      Auth.Online_Mode := Saved;
+      Check (Close_Now, "online start closes");
+      Check (not S.Success_Sent, "online sends no success flag");
+      Check (S.State = Protocol.Login, "online no transition");
+      Check (not S.Identity.Is_Offline, "online identity not offline");
+      Check (not S.Identity.Authenticated, "online never authenticated here");
       for I in 1 .. Outgoing.Len loop
          if Outgoing.Data (I) = 2 then
             Has_Success := True;
          end if;
       end loop;
-      Check (Close_Now, "online/offline gate closes for now");
-      Check (S.State = Protocol.Login, "offline flag: stays login, never online-auth");
+      Check (not Has_Success, "online sends no success bytes");
+      Check (Outgoing.Len > 0, "online emits disconnect text");
    end;
 
    if Failures = 0 then

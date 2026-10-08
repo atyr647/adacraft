@@ -5,6 +5,7 @@ with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 with Adacraft.Corpus;
 with Adacraft.Corpus.Loader;
+with Interfaces;
 with Ada.Real_Time;
 with Ada.Streams;
 with GNAT.Sockets;
@@ -449,17 +450,17 @@ procedure Differential_Main is
       begin
          loop
             declare
-               Rem : constant Duration :=
+               Remaining : constant Duration :=
                  Ada.Real_Time.To_Duration (Deadline - Ada.Real_Time.Clock);
             begin
-               if Rem <= 0.0 then
+               if Remaining <= 0.0 then
                   Obs.Outcome := Open_At_Timeout;
                   return;
                end if;
                GS.Empty (R);
                GS.Empty (W);
                GS.Set (R, Sock);
-               GS.Check_Selector (Sel, R, W, St, Rem);
+               GS.Check_Selector (Sel, R, W, St, Remaining);
             end;
             if St = GS.Expired then
                Obs.Outcome := Open_At_Timeout;

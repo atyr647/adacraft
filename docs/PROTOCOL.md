@@ -50,35 +50,72 @@ Serverbound `minecraft:intention` (handshake id 0):
 
 | Field | Type |
 |---|---|
-| Protocol Version | VarInt |
-| Server Address | String, at most 255 bytes |
-| Server Port | Unsigned Short |
-| Intent | VarInt: 1 status, 2 login |
+| Protocol Version | VarInt, well-formed, stored verbatim |
+| Server Address | String, UTF-8, at most 255 bytes, validated and stored |
+| Server Port | Unsigned Short big-endian, stored verbatim |
+| Intent | VarInt: 1 status, 2 login, 3 login (transfer handover) |
 
-Status is answered for any protocol version, so a client can see that this server is 777. Login is refused unless the version is 777.
+Exactly one handshake is accepted per connection. A second handshake, an
+unknown packet id in HANDSHAKE state, a malformed field, an intent outside
+`{1, 2, 3}`, or extra trailing payload bytes is a violation: the connection
+closes without sending any bytes. After a valid handshake the connection
+stores the protocol version verbatim, the validated server address, the port
+verbatim, the raw intention value, and the mapped target state, and leaves
+HANDSHAKE state. The address is stored only for later use; it never selects
+a virtual host. Status is answered for any protocol version, so a client can
+see that this server is 777. Version-mismatch diagnosis belongs to #122.
 
-Serverbound status request: empty. Clientbound status response: one JSON string.
+Serverbound status request (`0x00`): empty payload only, may repeat; each
+valid request receives exactly one status response and the connection stays
+in STATUS. Serverbound ping request (`0x01`): exactly one signed 64-bit
+big-endian long; a valid ping receives exactly one pong echoing the value
+unchanged, and after the pong is flushed the server closes the connection.
+No further packets are processed after the pong. Short, long, or
+non-empty/extra-byte status payloads are violations and close with no bytes.
+
+Clientbound status response (`0x00`): one Minecraft String containing compact
+JSON with fixed key order `version`, `players`, `description`,
+`enforcesSecureChat`; `version` order is `name`, `protocol`; `players` order
+is `max`, `online`; `description` is `{"text":"<MOTD>"}`. `favicon`,
+`previewsChat`, and `players.sample` are omitted.
 
 ```json
-{"version":{"name":"26.3","protocol":777},"players":{"max":20,"online":0},"description":{"text":"AdaCraft"}}
+{"version":{"name":"26.3","protocol":777},"players":{"max":20,"online":0},"description":{"text":"AdaCraft"},"enforcesSecureChat":false}
 ```
 
-Ping and pong are an unsigned 64-bit value, echoed unchanged.
+The JSON is produced by `Adacraft.Protocol.Status_Json.To_Json` from the
+read-only `Adacraft.Protocol.Status_Info.Status_Info` snapshot (defaults:
+version `"26.3"`, protocol `777`, max `20`, online `0`, MOTD `"AdaCraft"`,
+secure chat `False`, no favicon). MOTD is bounded to 256 UTF-8 bytes and
+validated at construction. Escaping: `\"`, `\\`, `\b \f \n \r \t`, `\u00XX`
+for remaining controls, raw UTF-8 for non-ASCII. The maximum JSON length
+fits the frame maximum by construction. Identical input bytes produce
+identical bytes sent, connection state, and close/no-close decisions; status
+output carries no timestamps, random values, hostnames, or nondeterministic
+key ordering. Handshake and STATUS handling read only the `Status_Info`
+snapshot and connection-local fields; they never touch world, player,
+chunk, permission, or simulation state. HANDSHAKE and STATUS packets are
+never compressed or encrypted.
 
-Serverbound login `minecraft:hello`:
+Idle timeout: 30 s (`Adacraft.Ingress.Default_Idle_Timeout`), reset after
+each successfully completed inbound packet in HANDSHAKE/STATUS (and the
+LOGIN stub below). Timeout closure sends no bytes.
 
-| Field | Type |
-|---|---|
-| Name | String, 1 to 16 bytes |
-| Player UUID | 16 bytes |
+### LOGIN extension point for #122 (`Handle_Login_Stub`)
 
-Offline mode computes UUID version 3 of the UTF-8 bytes of `OfflinePlayer:` concatenated with the name (MD5, version nibble 3, IETF variant). The client UUID must match. That identity is not an online authenticated identity. Online mode (RSA, Mojang session server, AES/CFB8) is specified by the constitution and is not in this build. This build then sends login disconnect:
-
-```json
-{"text":"AdaCraft accepted the offline identity; play is not in this build"}
-```
-
-Login disconnect is clientbound id 0, a JSON text component encoded as a protocol string.
+On intent `2|3` the connection enters LOGIN carrying the stored handshake
+fields (`Stored_Handshake` / `Hs_Version`, `Hs_Address`, `Hs_Port`,
+`Hs_Intent` plus the mapped state; raw intention `2` vs `3` is preserved so
+#122 can distinguish them later). In this item LOGIN is a stub:
+`Adacraft.Ingress.Handle_Login_Stub` closes the connection without sending
+any bytes on any inbound packet in LOGIN, under the same idle timeout. #122
+replaces the body of `Handle_Login_Stub` with real LOGIN handling
+(Login Start/Success/Disconnect, username and UUID policy, session-server
+authentication, online/offline mode, version-mismatch diagnosis using the
+stored protocol version, transfer semantics, encryption, compression); the
+procedure profile and the stored-handshake record are the handover contract.
+`Status_Info` stays a finished read-only contract; later items may extend it
+(favicon, player sample) only with re-pinned goldens.
 
 There is no configuration or play codec yet. Entering those states closes the connection. Registry bytes for that phase are the generated reports, not a second table.
 

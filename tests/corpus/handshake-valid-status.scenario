@@ -1,7 +1,7 @@
 corpus_format: 1
 id: handshake-valid-status
 title: Valid handshake, status intent
-description: Handshake with next-state status is accepted.
+description: Handshake 777/localhost/25565/intent 1 is accepted, stores handshake fields, and moves HANDSHAKE to STATUS.
 category: handshake
 protocol: 777
 provenance: hand-authored

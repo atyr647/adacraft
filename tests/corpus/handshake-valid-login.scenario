@@ -1,7 +1,7 @@
 corpus_format: 1
 id: handshake-valid-login
 title: Valid handshake, login intent
-description: Handshake with next-state login is accepted.
+description: Handshake 777/localhost/25565/intent 2 is accepted, stores handshake fields, and moves HANDSHAKE to LOGIN for Handle_Login_Stub (#122 seam).
 category: handshake
 protocol: 777
 provenance: hand-authored

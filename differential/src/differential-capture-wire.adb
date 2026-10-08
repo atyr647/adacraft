@@ -130,7 +130,6 @@ package body Differential.Capture.Wire is
       Sel_Status : GNAT.Sockets.Selector_Status;
       Pending    : Boolean := False;
       Feed_Res   : Adacraft.Protocol.Frame.Feed_Status;
-      Sel_Open   : Boolean := False;
 
       procedure On_Frame (Frame : in Adacraft.Protocol.Frame.Byte_Array) is
          N : constant Ada.Streams.Stream_Element_Offset := Frame'Length;
@@ -153,7 +152,6 @@ package body Differential.Capture.Wire is
          return;
       end if;
       GNAT.Sockets.Create_Selector (Sel);
-      Sel_Open := True;
       loop
          GNAT.Sockets.Empty (R_Set);
          GNAT.Sockets.Empty (W_Set);
@@ -170,9 +168,11 @@ package body Differential.Capture.Wire is
          exception
             when GNAT.Sockets.Socket_Error =>
                Outcome := Differential.Transcript.Peer_Closed;
+               GNAT.Sockets.Close_Selector (Sel);
                return;
             when others =>
                Outcome := Differential.Transcript.Protocol_Error;
+               GNAT.Sockets.Close_Selector (Sel);
                return;
          end;
          if Chunk_Last < Chunk'First then
@@ -190,12 +190,19 @@ package body Differential.Capture.Wire is
          end if;
          if Pending then
             declare
-               use type Ada.Streams.Stream_Element_Array;
                N : constant Natural :=
                  Natural (Last - Frame_Data'First + 1);
-               Octs : Adacraft.Protocol.Octets (1 .. Positive (N));
-               Res : Adacraft.Protocol.Varnum.Varint_Result;
             begin
+               if N = 0 then
+                  Outcome := Differential.Transcript.Protocol_Error;
+                  Got := False;
+                  GNAT.Sockets.Close_Selector (Sel);
+                  return;
+               end if;
+               declare
+                  Octs : Adacraft.Protocol.Octets (1 .. Positive (N));
+                  Res : Adacraft.Protocol.Varnum.Varint_Result;
+               begin
                for I in 1 .. Positive (N) loop
                   Octs (I) := Adacraft.Protocol.Octet
                     (Frame_Data
@@ -212,6 +219,7 @@ package body Differential.Capture.Wire is
                   GNAT.Sockets.Close_Selector (Sel);
                   return;
                end if;
+               end;
             end;
             Got := True;
             Outcome := Differential.Transcript.Completed;

@@ -6,6 +6,12 @@ with Adacraft.Protocol.Varnum;
 
 package body Adacraft.Protocol.Packet_Encoder is
 
+   use type Adacraft.Protocol.Varnum.Status_Type;
+   use type Ada.Streams.Stream_Element;
+   use type Ada.Streams.Stream_Element_Offset;
+   use type Interfaces.Unsigned_32;
+   use type Interfaces.Unsigned_64;
+
    function To_I32 is new Ada.Unchecked_Conversion
      (Interfaces.Unsigned_32, Interfaces.Integer_32);
    function To_U32 is new Ada.Unchecked_Conversion
@@ -25,32 +31,33 @@ package body Adacraft.Protocol.Packet_Encoder is
          E.Failed := True;
          return;
       end if;
-      E.Storage (E.Count + 1) := V;
+      E.Storage (Ada.Streams.Stream_Element_Offset (E.Count + 1)) := V;
       E.Count := E.Count + 1;
    end Append_Element;
 
    procedure Append_Raw
      (E : in out Encoder_Type; Data : Ada.Streams.Stream_Element_Array) is
+      Data_Len : constant Natural := Natural (Data'Length);
    begin
       if E.Failed or else not E.Started then
          E.Failed := True;
          return;
       end if;
-      if Data'Length = 0 then
+      if Data_Len = 0 then
          return;
       end if;
-      if E.Count + Data'Length > E.Capacity
-        or else E.Count + Data'Length >
+      if E.Count + Data_Len > E.Capacity
+        or else E.Count + Data_Len >
           Adacraft.Protocol.Frame.Max_Frame_Body_Length
       then
          E.Failed := True;
          return;
       end if;
-      for I in 1 .. Data'Length loop
-         E.Storage (E.Count + I) :=
+      for I in 1 .. Data_Len loop
+         E.Storage (Ada.Streams.Stream_Element_Offset (E.Count + I)) :=
            Data (Data'First + Ada.Streams.Stream_Element_Offset (I) - 1);
       end loop;
-      E.Count := E.Count + Data'Length;
+      E.Count := E.Count + Data_Len;
    end Append_Raw;
 
    procedure Start_Packet (E : in out Encoder_Type; Packet_Id : Natural) is
@@ -78,7 +85,8 @@ package body Adacraft.Protocol.Packet_Encoder is
          return;
       end if;
       for I in 1 .. Written loop
-         E.Storage (I) := Ada.Streams.Stream_Element (Buf (I));
+         E.Storage (Ada.Streams.Stream_Element_Offset (I)) :=
+           Ada.Streams.Stream_Element (Buf (I));
       end loop;
       E.Count := Written;
    end Start_Packet;
@@ -149,7 +157,6 @@ package body Adacraft.Protocol.Packet_Encoder is
       Output : out Ada.Streams.Stream_Element_Array;
       Last   : out Ada.Streams.Stream_Element_Offset)
    is
-      use type Ada.Streams.Stream_Element_Offset;
       Prefix     : Adacraft.Protocol.Frame.Prefix_Buffer;
       Prefix_Len : Ada.Streams.Stream_Element_Offset;
       Need       : Ada.Streams.Stream_Element_Offset;
@@ -178,7 +185,7 @@ package body Adacraft.Protocol.Packet_Encoder is
       for I in 1 .. E.Count loop
          Output (Output'First + Prefix_Len +
                  Ada.Streams.Stream_Element_Offset (I) - 1) :=
-           E.Storage (I);
+           E.Storage (Ada.Streams.Stream_Element_Offset (I));
       end loop;
       Last := Output'First + Need - 1;
    end Get_Framed;
@@ -188,8 +195,7 @@ package body Adacraft.Protocol.Packet_Encoder is
       Data  : out Ada.Streams.Stream_Element_Array;
       Last  : out Ada.Streams.Stream_Element_Offset)
    is
-      use type Ada.Streams.Stream_Element_Offset;
-      N : constant Natural := Natural'Min (E.Count, Data'Length);
+      N : constant Natural := Natural'Min (E.Count, Natural (Data'Length));
    begin
       if N = 0 then
          Empty_Last (Data, Last);
@@ -197,7 +203,7 @@ package body Adacraft.Protocol.Packet_Encoder is
       end if;
       for I in 1 .. N loop
          Data (Data'First + Ada.Streams.Stream_Element_Offset (I) - 1) :=
-           E.Storage (I);
+           E.Storage (Ada.Streams.Stream_Element_Offset (I));
       end loop;
       Last := Data'First + Ada.Streams.Stream_Element_Offset (N) - 1;
    end Get_Body;

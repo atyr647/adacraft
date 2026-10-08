@@ -816,6 +816,369 @@ procedure Differential_Main is
       end Recv_Frame;
    end D_Net;
 
+   package D_Run is
+      --  Scenario runner: per scenario per target, independently.
+      --  Self-contained reuse of #114/#115/#116/#117/#118/#119 semantics
+      --  (read-only, no product withs): minimal ordered-C2S view (state,
+      --  id, payload-hex) is read from the scenario file; egress bytes are
+      --  sent as stored frames; ingress uses D_Net.Recv_Frame (length
+      --  limited) plus a local minimal-VarInt packet-ID decode plus local
+      --  state labelling. Bounded: 1024 entries, oversize/overlong/
+      --  truncated => Malformed_Input via frame-boundary handler, never
+      --  escapes, no unchecked access/conversion.
+      procedure Run_Target
+        (Host_Image       : String;
+         Port             : Natural;
+         Scenario_Path    : String;
+         Read_Timeout_S   : Natural;
+         Scenario_Timeout_S : Natural;
+         T                : out D_Defs.Transcript);
+   end D_Run;
+
+   package body D_Run is
+      Max_Raw : constant := 2_097_151 + 8;
+      subtype Raw_Index is Positive range 1 .. Max_Raw;
+
+      function State_Of (Name : String) return Natural is
+         --  HANDSHAKE=0 STATUS=1 LOGIN=2 CONFIGURATION=3 PLAY=4.
+         --  Unknown => 0 (label only, never enforced).
+      begin
+         if Name = "STATUS" then
+            return 1;
+         elsif Name = "LOGIN" then
+            return 2;
+         elsif Name = "CONFIGURATION" then
+            return 3;
+         elsif Name = "PLAY" then
+            return 4;
+         else
+            return 0;
+         end if;
+      end State_Of;
+
+      function Hex_Val (C : Character) return Integer is
+      begin
+         case C is
+            when '0' .. '9' => return Character'Pos (C) - Character'Pos ('0');
+            when 'a' .. 'f' => return Character'Pos (C) - Character'Pos ('a') + 10;
+            when 'A' .. 'F' => return Character'Pos (C) - Character'Pos ('A') + 10;
+            when others => return -1;
+         end case;
+      end Hex_Val;
+
+      procedure Append_Byte
+        (Buf : in out Ada.Streams.Stream_Element_Array;
+         Len : in out Natural;
+         B   : Ada.Streams.Stream_Element;
+         Full : out Boolean)
+      is
+      begin
+         if Len >= Buf'Length then
+            Full := True;
+            return;
+         end if;
+         Full := False;
+         Len := Len + 1;
+         Buf (Buf'First + Ada.Streams.Stream_Element_Offset (Len - 1)) := B;
+      end Append_Byte;
+
+      procedure Decode_Packet_Id
+        (Buf    : D_Net.Frame_Storage;
+         Len    : Natural;
+         Id     : out Natural;
+         Ok     : out Boolean)
+      is
+         Value : Natural := 0;
+         Shift : Natural := 0;
+      begin
+         Id := 0;
+         Ok := False;
+         if Len = 0 then
+            return;
+         end if;
+         for I in 1 .. Natural'Min (Len, 5) loop
+            declare
+               B : constant Natural := Natural (Buf (I));
+               Low7 : constant Natural := B mod 128;
+            begin
+               if Shift >= 28 and then Low7 > 15 then
+                  return;
+               end if;
+               Value := Value + Low7 * (2 ** Shift);
+               if (B / 128) mod 2 = 0 then
+                  --  Minimal encoding check for the ID varint.
+                  if I > 1 and then Value < (2 ** (7 * (I - 1))) then
+                     return;
+                  end if;
+                  Id := Value;
+                  Ok := True;
+                  return;
+               end if;
+               Shift := Shift + 7;
+            end;
+         end loop;
+         --  No terminator within 5 bytes => overlong/malformed.
+         Ok := False;
+      end Decode_Packet_Id;
+
+      procedure Run_Target
+        (Host_Image       : String;
+         Port             : Natural;
+         Scenario_Path    : String;
+         Read_Timeout_S   : Natural;
+         Scenario_Timeout_S : Natural;
+         T                : out D_Defs.Transcript)
+      is
+         use type Ada.Real_Time.Time;
+         Sock : GNAT.Sockets.Socket_Type;
+         Ok   : Boolean;
+         Cur_State : Natural := 0;
+         Scenario_End : Ada.Real_Time.Time;
+         Read_Secs : Natural := Read_Timeout_S;
+         Scen_Secs : Natural := Scenario_Timeout_S;
+         Buf : D_Net.Frame_Storage;
+      begin
+         T := (others => <>);
+         D_Defs.Set_Scenario_Name (T, Scenario_Path);
+         if Read_Secs = 0 then
+            Read_Secs := 5;
+         end if;
+         if Scen_Secs = 0 then
+            Scen_Secs := 30;
+         end if;
+         Scenario_End :=
+           Ada.Real_Time.Clock + Ada.Real_Time.To_Time_Span (Duration (Scen_Secs));
+         --  Load minimal view + send all C2S frames, inside boundary.
+         begin
+            D_Net.Connect (Host_Image, Port, Sock, Ok);
+            if not Ok then
+               T.Result := D_Defs.Connect_Failed;
+               return;
+            end;
+            --  Read scenario file: collect raw frame bytes per
+            --  "input:" line, track state via initial_state/state_after.
+            declare
+               F : Ada.Text_IO.File_Type;
+               Egress : Ada.Streams.Stream_Element_Array (1 .. 65_535);
+               E_Len  : Natural := 0;
+               E_Full : Boolean := False;
+               Line_No : Natural := 0;
+               procedure Flush_Egress is
+                  Send_Ok : Boolean;
+               begin
+                  if E_Len > 0 then
+                     D_Net.Send_All
+                       (Sock, Egress (Egress'First ..
+                         Egress'First + Ada.Streams.Stream_Element_Offset (E_Len - 1)),
+                        Send_Ok);
+                     E_Len := 0;
+                  end if;
+               end Flush_Egress;
+               procedure Handle_Line (L : String) is
+                  function Trimmed (S : String) return String is
+                     A : Natural := S'First;
+                     B : Natural := S'Last;
+                  begin
+                     while A <= B and then (S (A) = ' ' or else S (A) = ASCII.HT
+                       or else S (A) = ASCII.CR) loop
+                        A := A + 1;
+                     end loop;
+                     while B >= A and then (S (B) = ' ' or else S (B) = ASCII.HT
+                       or else S (B) = ASCII.CR) loop
+                        B := B - 1;
+                     end loop;
+                     if B < A then
+                        return "";
+                     end if;
+                     return S (A .. B);
+                  end Trimmed;
+                  TL : constant String := Trimmed (L);
+               begin
+                  if TL'Length >= 13 and then TL (TL'First .. TL'First + 12) = "initial_state" then
+                     declare
+                        C : Natural := 0;
+                     begin
+                        for I in TL'Range loop
+                           if TL (I) = ':' then
+                              C := I;
+                              exit;
+                           end if;
+                        end loop;
+                        if C > 0 then
+                           Cur_State := State_Of (Trimmed (TL (C + 1 .. TL'Last)));
+                        end if;
+                     end;
+                  elsif TL'Length >= 11 and then TL (TL'First .. TL'First + 10) = "state_after" then
+                     --  State_after applies after the current step's send;
+                     --  record pending update by setting state now (egress
+                     --  already queued line-by-line, so ordering holds).
+                     declare
+                        C : Natural := 0;
+                     begin
+                        for I in TL'Range loop
+                           if TL (I) = ':' then
+                              C := I;
+                              exit;
+                           end if;
+                        end loop;
+                        if C > 0 then
+                           Cur_State := State_Of (Trimmed (TL (C + 1 .. TL'Last)));
+                        end if;
+                     end;
+                  elsif TL'Length >= 6 and then TL (TL'First .. TL'First + 5) = "input:" then
+                     declare
+                        V : constant String := Trimmed (TL (TL'First + 6 .. TL'Last));
+                        Hi : Integer := -1;
+                        Full : Boolean;
+                     begin
+                        for Ch of V loop
+                           if Ch = ' ' or else Ch = ASCII.HT then
+                              null;
+                           else
+                              declare
+                                 D : constant Integer := Hex_Val (Ch);
+                              begin
+                                 if D < 0 then
+                                    raise Constraint_Error;
+                                 end if;
+                                 if Hi < 0 then
+                                    Hi := D;
+                                 else
+                                    Append_Byte
+                                      (Egress, E_Len,
+                                       Ada.Streams.Stream_Element (Hi * 16 + D),
+                                       Full);
+                                    Hi := -1;
+                                    if Full or else E_Len >= 60_000 then
+                                       Flush_Egress;
+                                    end if;
+                                 end if;
+                              end;
+                           end if;
+                        end loop;
+                        if Hi >= 0 then
+                           raise Constraint_Error;
+                        end if;
+                        --  Each input line is one frame; send immediately to
+                        --  preserve order and bound buffering.
+                        Flush_Egress;
+                     end;
+                  end if;
+               end Handle_Line;
+            begin
+               Ada.Text_IO.Open (F, Ada.Text_IO.In_File, Scenario_Path);
+               while not Ada.Text_IO.End_Of_File (F) loop
+                  exit when Ada.Real_Time.Clock >= Scenario_End;
+                  declare
+                     L : constant String := Ada.Text_IO.Get_Line (F);
+                  begin
+                     Line_No := Line_No + 1;
+                     Handle_Line (L);
+                  end;
+               end loop;
+               begin
+                  if Ada.Text_IO.Is_Open (F) then
+                     Ada.Text_IO.Close (F);
+                  end if;
+               exception
+                  when others =>
+                     null;
+               end;
+            exception
+               when others =>
+                  begin
+                     if Ada.Text_IO.Is_Open (F) then
+                        Ada.Text_IO.Close (F);
+                     end if;
+                  exception
+                     when others =>
+                        null;
+                  end;
+                  --  Parse/send failure on readable file: still observe
+                  --  ingress; state stays as parsed so far.
+                  null;
+            end;
+            --  Ingress loop.
+            declare
+               Overflow : Boolean := False;
+            begin
+               loop
+                  if Ada.Real_Time.Clock >= Scenario_End then
+                     T.Result := D_Defs.Still_Open_At_End;
+                     exit;
+                  end if;
+                  if T.Count >= D_Defs.Max_Entries then
+                     Overflow := True;
+                     T.Result := D_Defs.Still_Open_At_End;
+                     exit;
+                  end if;
+                  declare
+                     Now : constant Ada.Real_Time.Time := Ada.Real_Time.Clock;
+                     Read_Deadline : constant Ada.Real_Time.Time :=
+                       Now + Ada.Real_Time.To_Time_Span (Duration (Read_Secs));
+                     Deadline : Ada.Real_Time.Time :=
+                       (if Read_Deadline < Scenario_End then Read_Deadline
+                        else Scenario_End);
+                     Len : Natural;
+                     St  : D_Net.Recv_Status;
+                  begin
+                     D_Net.Recv_Frame (Sock, Deadline, Buf, Len, St);
+                     case St is
+                        when D_Net.Got_Frame =>
+                           declare
+                              Id : Natural;
+                              Is_Ok : Boolean;
+                              Full : Boolean;
+                           begin
+                              Decode_Packet_Id (Buf, Len, Id, Is_Ok);
+                              if not Is_Ok then
+                                 T.Result := D_Defs.Malformed_Input;
+                                 exit;
+                              end if;
+                              D_Defs.Append
+                                (T, (State => Cur_State,
+                                     Dir   => D_Defs.S2C,
+                                     Id    => Id), Full);
+                              if Full then
+                                 T.Result := D_Defs.Still_Open_At_End;
+                                 exit;
+                              end if;
+                           end;
+                        when D_Net.Peer_Closed =>
+                           T.Result := D_Defs.Closed_By_Peer;
+                           exit;
+                        when D_Net.Timeout_Expired =>
+                           if Ada.Real_Time.Clock >= Scenario_End then
+                              T.Result := D_Defs.Still_Open_At_End;
+                           else
+                              T.Result := D_Defs.Timeout;
+                           end if;
+                           exit;
+                        when D_Net.Malformed =>
+                           T.Result := D_Defs.Malformed_Input;
+                           exit;
+                     end case;
+                  end;
+               end loop;
+               pragma Unreferenced (Overflow);
+            end;
+            D_Net.Close (Sock);
+         exception
+            when others =>
+               begin
+                  D_Net.Close (Sock);
+               exception
+                  when others =>
+                     null;
+               end;
+               --  Never escape: frame-boundary mapping.
+               if T.Result = D_Defs.Still_Open_At_End and then T.Count = 0 then
+                  T.Result := D_Defs.Malformed_Input;
+               end if;
+         end;
+      end Run_Target;
+   end D_Run;
+
    package D_Report is
       --  Deterministic human-readable report (AC 6, FR-8).
       --  Only Ada.Text_IO.Put_Line (LF-terminated lines), fixed field

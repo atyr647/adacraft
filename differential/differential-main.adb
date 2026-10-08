@@ -250,7 +250,11 @@ procedure Differential_Main is
 
    function Outcome_Name (O : Outcome_Kind) return String is
    begin
-      return Outcome_Kind'Image (O);
+      case O is
+         when Closed_By_Server  => return "Closed_By_Server";
+         when Open_At_Timeout   => return "Open_At_Timeout";
+         when Malformed_Response => return "Malformed_Response";
+      end case;
    end Outcome_Name;
 
    function Summary (O : Observation) return String is
@@ -311,7 +315,8 @@ procedure Differential_Main is
       use type Interfaces.Unsigned_32;
 
       Cap       : constant := 2 * 1024 * 1024;
-      Endpoint  : constant String := Host & ":" & Natural'Image (Port);
+      Endpoint  : constant String :=
+        Host & ":" & Img (Long_Long_Integer (Port));
       Sock      : GS.Socket_Type;
       Sel       : GS.Selector_Type;
       Connected : Boolean := False;
@@ -334,7 +339,9 @@ procedure Differential_Main is
             V : constant P.Varnum.Varint_Result :=
               P.Varnum.Decode_Varint (Buf (1 .. N), 1);
          begin
-            if V.Status /= P.Ok or else V.Value > 1_000_000 then
+            if V.Status /= P.Ok
+              or else V.Value > Interfaces.Unsigned_32 (Integer'Last)
+            then
                Bad := True;
                return;
             end if;
@@ -351,14 +358,12 @@ procedure Differential_Main is
                end if;
                State := T.Next_State;
                Obs.Final_State := State;
-               if Obs.Count >= Max_Packets then
-                  --  List capacity exceeded: surfaced as a malformed run
-                  --  rather than silently truncating.
-                  Bad := True;
-                  return;
+               --  Informational list: stop recording when full; this never
+               --  affects state or outcome.
+               if Obs.Count < Max_Packets then
+                  Obs.Count := Obs.Count + 1;
+                  Obs.Packets (Obs.Count) := (Id => Ev.Id, State => State);
                end if;
-               Obs.Count := Obs.Count + 1;
-               Obs.Packets (Obs.Count) := (Id => Ev.Id, State => State);
             end;
          end;
       end On_Frame;
@@ -505,15 +510,24 @@ procedure Differential_Main is
          declare
             H    : constant GS.Host_Entry_Type := GS.Get_Host_By_Name (Host);
             Addr : constant GS.Inet_Addr_Type := GS.Addresses (H, 1);
+            Srv  : GS.Sock_Addr_Type :=
+              (Family => GS.Family_Inet, Addr => Addr,
+               Port   => GS.Port_Type (Port));
+            Stat : GS.Selector_Status;
+            CT   : constant Duration :=
+              Duration'Min (Duration (Timeout) / 1000.0, 3600.0);
          begin
             if Addr.Family /= GS.Family_Inet then
                Fail ("error: unsupported address for " & Endpoint);
             end if;
             GS.Create_Socket (Sock);
             Connected := True;
-            GS.Connect_Socket
-              (Sock, (Family => GS.Family_Inet, Addr => Addr,
-                      Port   => GS.Port_Type (Port)));
+            GS.Connect_Socket (Sock, Srv, CT, null, Stat);
+            if Stat /= GS.Completed then
+               GS.Close_Socket (Sock);
+               Connected := False;
+               Fail ("error: cannot connect to endpoint " & Endpoint);
+            end if;
          end;
       exception
          when GS.Socket_Error | GS.Host_Error =>

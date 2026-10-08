@@ -1,3 +1,6 @@
+with Differential;
+with Differential.Transcript;
+
 package Differential.Report is
 
    --  Deterministic formatting only for the differential driver.
@@ -29,15 +32,15 @@ package Differential.Report is
 
    function Entry_Detail
      (Index           : Positive;
-      Expected_Entry  : Differential.Transcript.Entry;
-      Got_Entry       : Differential.Transcript.Entry) return String;
+      Expected_Entry  : Differential.Transcript.Transcript_Entry;
+      Got_Entry       : Differential.Transcript.Transcript_Entry) return String;
 
    function Outcome_Detail
      (Expected : Differential.Outcome;
       Got      : Differential.Outcome) return String;
 
    function Entry_Image
-     (Item : Differential.Transcript.Entry) return String;
+     (Item : Differential.Transcript.Transcript_Entry) return String;
 
    function Outcome_Image (Value : Differential.Outcome) return String;
 

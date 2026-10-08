@@ -36,7 +36,7 @@ package body Differential.Report is
    end Outcome_Image;
 
    function Entry_Image
-     (Item : Differential.Transcript.Entry) return String
+     (Item : Differential.Transcript.Transcript_Entry) return String
    is
       State_Txt : constant String :=
         Adacraft.Protocol.State.Connection_State'Image (Item.State);
@@ -86,8 +86,8 @@ package body Differential.Report is
 
    function Entry_Detail
      (Index           : Positive;
-      Expected_Entry  : Differential.Transcript.Entry;
-      Got_Entry       : Differential.Transcript.Entry) return String
+      Expected_Entry  : Differential.Transcript.Transcript_Entry;
+      Got_Entry       : Differential.Transcript.Transcript_Entry) return String
    is
    begin
       return "index=" & Nat_Image (Index)
@@ -150,7 +150,7 @@ package body Differential.Report is
          when Differential.Divergence =>
             Ada.Command_Line.Set_Exit_Status (1);
          when Differential.Environment_Error =>
-            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            Ada.Command_Line.Set_Exit_Status (2);
       end case;
    end Apply_Exit;
 

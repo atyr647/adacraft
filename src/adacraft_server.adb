@@ -5,6 +5,7 @@ with GNAT.Sockets;
 with Interfaces;
 with Adacraft;
 with Adacraft.Protocol;
+with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.State;
 with Adacraft.Protocol.Handshake_Exchange;
 with Adacraft.Protocol.Status_Exchange;
@@ -25,17 +26,35 @@ procedure Adacraft_Server is
       Data   : Adacraft.Protocol.Octets)
    is
       use type Ada.Streams.Stream_Element_Offset;
-      Msg  : Ada.Streams.Stream_Element_Array
+      use type Adacraft.Protocol.Frame.Encode_Status;
+      Body_Msg : Ada.Streams.Stream_Element_Array
         (1 .. Ada.Streams.Stream_Element_Offset (Data'Length));
-      Sent : Ada.Streams.Stream_Element_Offset;
       Idx  : Natural := 0;
+      Frame_Out : Ada.Streams.Stream_Element_Array (1 .. 4096 + 3);
+      Last : Ada.Streams.Stream_Element_Offset;
+      Enc  : Adacraft.Protocol.Frame.Encode_Status;
+      Sent : Ada.Streams.Stream_Element_Offset;
+      Next : Ada.Streams.Stream_Element_Offset;
    begin
+      if Data'Length = 0 then
+         return;
+      end if;
       for B of Data loop
          Idx := Idx + 1;
-         Msg (Ada.Streams.Stream_Element_Offset (Idx)) :=
+         Body_Msg (Ada.Streams.Stream_Element_Offset (Idx)) :=
            Ada.Streams.Stream_Element (B);
       end loop;
-      GNAT.Sockets.Send_Socket (Socket, Msg, Sent);
+      Adacraft.Protocol.Frame.Encode (Body_Msg, Frame_Out, Last, Enc);
+      if Enc /= Adacraft.Protocol.Frame.Ok then
+         return;
+      end if;
+      Next := Frame_Out'First;
+      while Next <= Last loop
+         GNAT.Sockets.Send_Socket (Socket, Frame_Out (Next .. Last), Sent);
+         exit when Sent >= Last;
+         exit when Sent < Next;
+         Next := Sent + 1;
+      end loop;
    end Send_Reply;
 
    procedure Close_Silently (Socket : GNAT.Sockets.Socket_Type) is
@@ -51,14 +70,16 @@ procedure Adacraft_Server is
       Current        : in out Adacraft.Protocol.State.Connection_State;
       Packet_Id      : Integer;
       Payload        : Adacraft.Protocol.Octets;
-      Client_Version : out Integer;
+      Client_Version : in out Integer;
       Close_Now      : out Boolean)
    is
       H_Outcome : Adacraft.Protocol.Handshake_Exchange.Outcome :=
         Adacraft.Protocol.Handshake_Exchange.Handle
           (Current, Packet_Id, Payload);
    begin
-      Client_Version := H_Outcome.Client_Version;
+      if H_Outcome.Accepted then
+         Client_Version := H_Outcome.Client_Version;
+      end if;
       Close_Now := H_Outcome.Close_Requested or else not H_Outcome.Accepted;
       if H_Outcome.Accepted and then H_Outcome.Has_Transition then
          Current := H_Outcome.Next_State;
@@ -99,7 +120,7 @@ procedure Adacraft_Server is
       Payload        : Adacraft.Protocol.Octets;
       Config         : Adacraft.Protocol.Status_Exchange.Status_Config;
       Status_Sent    : in out Boolean;
-      Client_Version : out Integer;
+      Client_Version : in out Integer;
       Close_Now      : out Boolean)
    is
       use type Adacraft.Protocol.State.Connection_State;
@@ -108,12 +129,10 @@ procedure Adacraft_Server is
          Dispatch_Handshake
            (Socket, Current, Packet_Id, Payload, Client_Version, Close_Now);
       elsif Current = Adacraft.Protocol.State.Status then
-         Client_Version := 0;
          Dispatch_Status
            (Socket, Current, Packet_Id, Payload, Config, Status_Sent,
             Close_Now);
       else
-         Client_Version := 0;
          Close_Now := False;
       end if;
    end Dispatch_Packet;
@@ -126,95 +145,48 @@ procedure Adacraft_Server is
       Consumed  : out Natural;
       Close_Now : out Boolean)
    is
-      use type Interfaces.Unsigned_8;
-      Pos      : Natural := From;
-      Pkt_Len  : Natural := 0;
-      Id       : Natural := 0;
-      Id_End   : Natural := 0;
-      Shift    : Natural := 0;
-      B        : Adacraft.Protocol.Octet;
+      Frame    : Adacraft.Protocol.Frame.Frame_Decode;
       Close_Flag : Boolean := False;
-      Client_Ver : Integer := 0;
+      Client_Ver : Integer := S.Client_Version;
+      use type Adacraft.Protocol.Status_Kind;
    begin
       Consumed := 0;
       Close_Now := False;
       if From > Buf'Last then
          return;
       end if;
-      Pkt_Len := 0;
-      Shift := 0;
-      Pos := From;
-      loop
-         if Pos > Buf'Last then
-            return;
-         end if;
-         B := Buf (Pos);
-         if Shift >= 35 then
+      Frame := Adacraft.Protocol.Frame.Decode_Frame (Buf, From);
+      if Frame.Status = Adacraft.Protocol.Need_More then
+         if Frame.Declared_Length > Adacraft.Protocol.Max_Packet_Length then
             Close_Silently (Socket);
             Close_Now := True;
             Consumed := Buf'Last - From + 1;
-            return;
          end if;
-         Pkt_Len := Pkt_Len + Natural (B and 16#7F#) * (2 ** Shift);
-         Shift := Shift + 7;
-         Pos := Pos + 1;
-         exit when (B and 16#80#) = 0;
-         if Shift > 28 then
-            Close_Silently (Socket);
-            Close_Now := True;
-            Consumed := Buf'Last - From + 1;
-            return;
-         end if;
-      end loop;
-      if Pkt_Len = 0 or else Pkt_Len > Adacraft.Protocol.Max_Packet_Length then
+         return;
+      elsif Frame.Status /= Adacraft.Protocol.Ok then
          Close_Silently (Socket);
          Close_Now := True;
-         Consumed := Pos - From;
+         Consumed := Buf'Last - From + 1;
          return;
       end if;
-      if Buf'Last - Pos + 1 < Pkt_Len then
-         return;
-      end if;
-      Id := 0;
-      Shift := 0;
-      Id_End := Pos;
-      loop
-         B := Buf (Id_End);
-         if Shift >= 35 then
-            Close_Silently (Socket);
-            Close_Now := True;
-            Consumed := (Pos - From) + Pkt_Len;
-            return;
-         end if;
-         Id := Id + Natural (B and 16#7F#) * (2 ** Shift);
-         Shift := Shift + 7;
-         Id_End := Id_End + 1;
-         exit when (B and 16#80#) = 0;
-      end loop;
-      declare
-         Pay_First : constant Natural := Id_End;
-         Pay_Last  : constant Natural := Pos + Pkt_Len - 1;
-         Frame_End : constant Natural := Pos + Pkt_Len;
-      begin
-         if Pay_First > Pay_Last then
-            declare
-               Empty : constant Adacraft.Protocol.Octets (1 .. 0) :=
-                 (1 .. 0 => <>);
-            begin
-               Dispatch_Packet
-                 (Socket, S.Current, Id, Empty, S.Config,
-                  S.Status_Sent, Client_Ver, Close_Flag);
-            end;
-         else
+      if Frame.Payload_First > Frame.Payload_Last then
+         declare
+            Empty : constant Adacraft.Protocol.Octets (1 .. 0) :=
+              (1 .. 0 => <>);
+         begin
             Dispatch_Packet
-              (Socket, S.Current, Id,
-               Buf (Pay_First .. Pay_Last), S.Config,
+              (Socket, S.Current, Frame.Packet_Id, Empty, S.Config,
                S.Status_Sent, Client_Ver, Close_Flag);
-         end if;
-         S.Client_Version := Client_Ver;
-         Consumed := Frame_End - From;
-         Close_Now := Close_Flag;
-      end;
+         end;
+      else
+         Dispatch_Packet
+           (Socket, S.Current, Frame.Packet_Id,
+            Buf (Frame.Payload_First .. Frame.Payload_Last), S.Config,
+            S.Status_Sent, Client_Ver, Close_Flag);
+      end if;
+      S.Client_Version := Client_Ver;
+      Consumed := Frame.Next - From;
+      Close_Now := Close_Flag;
    end Serve_Packet;
 
    procedure Serve_Client (Socket : GNAT.Sockets.Socket_Type) is
@@ -283,7 +255,7 @@ procedure Adacraft_Server is
       loop
          Accept_Socket (Server, Client, Peer);
          Serve_Client (Client);
-         Close_Socket (Client);
+         Close_Silently (Client);
       end loop;
    end Serve;
 

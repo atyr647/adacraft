@@ -180,7 +180,10 @@ procedure Differential_Main is
    end Fail;
 
    --  Loads and validates one #119 scenario; returns its output name.
-   function Load_Scenario (Path : String) return String is
+   procedure Load_Scenario
+     (Path : String; Name : out Unbounded_String;
+      Scn  : out Adacraft.Corpus.Scenario)
+   is
       use Ada.Streams.Stream_IO;
       F    : File_Type;
       Size : Natural := 0;
@@ -229,12 +232,65 @@ procedure Differential_Main is
             end loop;
             raise Setup_Error;
          end if;
+         Scn := S;
          if Length (S.Id) > 0 then
-            return To_String (S.Id);
+            Name := S.Id;
+         else
+            Name := To_Unbounded_String (Ada.Directories.Base_Name (Path));
          end if;
-         return Ada.Directories.Base_Name (Path);
       end;
    end Load_Scenario;
+
+   function Img (N : Long_Long_Integer) return String is
+      T : constant String := Long_Long_Integer'Image (N);
+   begin
+      if T (T'First) = ' ' then
+         return T (T'First + 1 .. T'Last);
+      end if;
+      return T;
+   end Img;
+
+   function Outcome_Name (O : Outcome_Kind) return String is
+   begin
+      return Outcome_Kind'Image (O);
+   end Outcome_Name;
+
+   function Summary (O : Observation) return String is
+   begin
+      return Adacraft.Protocol.State.Connection_State'Image (O.Final_State)
+        & "/" & Outcome_Name (O.Outcome);
+   end Summary;
+
+   function List_Image (O : Observation) return String is
+      R : Unbounded_String;
+   begin
+      if O.Count = 0 then
+         return "none";
+      end if;
+      for I in 1 .. O.Count loop
+         if I > 1 then
+            Append (R, ", ");
+         end if;
+         Append
+           (R, Img (Long_Long_Integer (O.Packets (I).Id)) & "@"
+            & Adacraft.Protocol.State.Connection_State'Image
+                (O.Packets (I).State));
+      end loop;
+      return To_String (R);
+   end List_Image;
+
+   function Same_Lists (A, B : Observation) return Boolean is
+   begin
+      if A.Count /= B.Count then
+         return False;
+      end if;
+      for I in 1 .. A.Count loop
+         if A.Packets (I) /= B.Packets (I) then
+            return False;
+         end if;
+      end loop;
+      return True;
+   end Same_Lists;
 
    --  Replays one scenario against one endpoint and records the observation.
    procedure Run_Endpoint
@@ -480,13 +536,56 @@ begin
    --  Validate every scenario up front; no network I/O yet.
    for J in First_Scen .. Ada.Command_Line.Argument_Count loop
       declare
-         Name : constant String := Load_Scenario (Ada.Command_Line.Argument (J));
-         pragma Unreferenced (Name);
+         Name : Unbounded_String;
+         Scn  : Adacraft.Corpus.Scenario;
       begin
-         null;
+         Load_Scenario (Ada.Command_Line.Argument (J), Name, Scn);
       end;
    end loop;
-   Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Success);
+   declare
+      Any_Mismatch : Boolean := False;
+      O_Obs, S_Obs : Observation;
+   begin
+      for J in First_Scen .. Ada.Command_Line.Argument_Count loop
+         declare
+            Name : Unbounded_String;
+            Scn  : Adacraft.Corpus.Scenario;
+         begin
+            Load_Scenario (Ada.Command_Line.Argument (J), Name, Scn);
+            Run_Endpoint
+              (To_String (Oracle_Host), Oracle_Port, Scn, Timeout_Ms,
+               Oracle, O_Obs);
+            Run_Endpoint
+              (To_String (Subject_Host), Subject_Port, Scn, Timeout_Ms,
+               Subject, S_Obs);
+            if O_Obs.Final_State = S_Obs.Final_State
+              and then O_Obs.Outcome = S_Obs.Outcome
+            then
+               Ada.Text_IO.Put_Line ("MATCH " & To_String (Name));
+               if not Same_Lists (O_Obs, S_Obs) then
+                  Ada.Text_IO.Put_Line
+                    ("  oracle-packets: " & List_Image (O_Obs));
+                  Ada.Text_IO.Put_Line
+                    ("  subject-packets: " & List_Image (S_Obs));
+               end if;
+            else
+               Any_Mismatch := True;
+               Ada.Text_IO.Put_Line
+                 ("MISMATCH " & To_String (Name) & " oracle="
+                  & Summary (O_Obs) & " subject=" & Summary (S_Obs));
+               Ada.Text_IO.Put_Line
+                 ("  oracle-packets: " & List_Image (O_Obs));
+               Ada.Text_IO.Put_Line
+                 ("  subject-packets: " & List_Image (S_Obs));
+            end if;
+         end;
+      end loop;
+      if Any_Mismatch then
+         Ada.Command_Line.Set_Exit_Status (1);
+      else
+         Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Success);
+      end if;
+   end;
 exception
    when Setup_Error =>
       Ada.Command_Line.Set_Exit_Status (2);

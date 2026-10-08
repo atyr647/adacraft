@@ -1,0 +1,14 @@
+corpus_format: 1
+id: idle-timeout
+title: Idle timeout closes with no bytes
+description: A quiet connection with a partial frame idles past the 30 s injected-clock deadline and closes with no bytes sent.
+category: handshake
+protocol: 777
+provenance: hand-authored
+initial_state: HANDSHAKE
+final_state: HANDSHAKE
+
+step:
+  direction: serverbound
+  input: 10 00
+  outcome: incomplete

@@ -1,0 +1,14 @@
+corpus_format: 1
+id: ping-short-payload
+title: Short ping payload
+description: A ping frame declaring 8 payload bytes but carrying fewer bytes is incomplete and closes with no bytes on idle timeout via the injected clock.
+category: status
+protocol: 777
+provenance: hand-authored
+initial_state: STATUS
+final_state: STATUS
+
+step:
+  direction: serverbound
+  input: 09 01 00 00 00 00
+  outcome: incomplete

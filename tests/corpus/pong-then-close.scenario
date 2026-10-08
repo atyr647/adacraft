@@ -1,0 +1,21 @@
+corpus_format: 1
+id: pong-then-close
+title: Pong flush then close
+description: A valid ping is accepted and the pong is flushed before close; any further bytes after the pong are rejected with no bytes.
+category: status
+protocol: 777
+provenance: hand-authored
+initial_state: STATUS
+final_state: STATUS
+
+step:
+  direction: serverbound
+  input: 09 01 00 00 00 00 00 00 00 01
+  outcome: accepted
+  packet_id: 0x01
+  state_after: STATUS
+
+step:
+  direction: serverbound
+  input: 01 7F
+  outcome: rejected

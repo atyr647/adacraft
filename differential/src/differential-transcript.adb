@@ -1,5 +1,7 @@
 package body Differential.Transcript is
 
+   use type Ada.Containers.Count_Type;
+
    function Empty_Transcript
      (Outcome : Terminal_Outcome := Completed) return Transcript
    is
@@ -11,7 +13,7 @@ package body Differential.Transcript is
 
    procedure Append (T : in out Transcript; E : Transcript_Entry) is
    begin
-      if Natural (Entry_Vectors.Length (T.Entries)) < Max_Entries then
+      if Entry_Vectors.Length (T.Entries) < Max_Entries then
          Entry_Vectors.Append (T.Entries, E);
       end if;
    end Append;

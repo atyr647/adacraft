@@ -3,7 +3,6 @@ with Differential.Capture.Wire;
 
 package body Differential.Capture is
 
-   use type Adacraft.Protocol.State.Connection_State;
    use type Adacraft.Protocol.State.Result_Kind;
    use type Differential.Transcript.Direction_T;
    use type Differential.Transcript.Terminal_Outcome;
@@ -43,6 +42,7 @@ package body Differential.Capture is
              Dir       => Dir,
              Packet_Id => Pkt));
    end Track_And_Append;
+   pragma Unreferenced (Track_And_Append);
 
    procedure Capture_Single
      (Host           : in String;
@@ -56,6 +56,8 @@ package body Differential.Capture is
       Cur : Adacraft.Protocol.State.Connection_State :=
         Adacraft.Protocol.State.Initial_State;
       Abort_Flag : Boolean := False;
+      pragma Unreferenced (Cur);
+      pragma Unreferenced (Abort_Flag);
    begin
       T := Differential.Transcript.Empty_Transcript
         (Differential.Transcript.Completed);
@@ -75,8 +77,6 @@ package body Differential.Capture is
       --  (Wire send + #118 transition via Track_And_Append) is
       --  preserved for the future loader without changing
       --  behaviour today.
-      pragma Unreferenced (Cur);
-      pragma Unreferenced (Abort_Flag);
       Differential.Transcript.Set_Outcome
         (T, Differential.Transcript.Completed);
       Differential.Capture.Wire.Close (C);

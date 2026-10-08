@@ -1,10 +1,7 @@
-with Ada.Streams;
-with GNAT.Sockets;
+with Ada.Unchecked_Deallocation;
 with Adacraft.Protocol;
-with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Packet_Encoder;
 with Adacraft.Protocol.Varnum;
-with Differential.Transcript;
 
 package body Differential.Capture.Wire is
 
@@ -75,8 +72,12 @@ package body Differential.Capture.Wire is
       Payload   : in Ada.Streams.Stream_Element_Array;
       Outcome   : out Differential.Transcript.Terminal_Outcome)
    is
+      type Framed_Access is access Ada.Streams.Stream_Element_Array;
+      procedure Free is new Ada.Unchecked_Deallocation
+        (Ada.Streams.Stream_Element_Array, Framed_Access);
       Enc    : Adacraft.Protocol.Packet_Encoder.Encoder_Type;
-      Framed : Ada.Streams.Stream_Element_Array (1 .. 2_097_151 + 3);
+      Framed : Framed_Access :=
+        new Ada.Streams.Stream_Element_Array (1 .. 2_097_151 + 3);
       Last   : Ada.Streams.Stream_Element_Offset;
       Sent   : Ada.Streams.Stream_Element_Offset;
       First  : Ada.Streams.Stream_Element_Offset;
@@ -94,9 +95,10 @@ package body Differential.Capture.Wire is
          Outcome := Differential.Transcript.Protocol_Error;
          return;
       end if;
-      Adacraft.Protocol.Packet_Encoder.Get_Framed (Enc, Framed, Last);
+      Adacraft.Protocol.Packet_Encoder.Get_Framed (Enc, Framed.all, Last);
       if Adacraft.Protocol.Packet_Encoder.Has_Failed (Enc) then
          Outcome := Differential.Transcript.Protocol_Error;
+         Free (Framed);
          return;
       end if;
       begin
@@ -113,6 +115,7 @@ package body Differential.Capture.Wire is
          when others =>
             Outcome := Differential.Transcript.Protocol_Error;
       end;
+      Free (Framed);
    end Send_Packet;
 
    procedure Receive_Frame

@@ -237,23 +237,27 @@ package body Adacraft.Corpus.Runner is
                           P.Packets.Decode_Login_Start (Payload);
                      begin
                         if Start.Status /= P.Ok then
-                           Fail ("rejected", "accepted",
-                                 "login start malformed but accepted");
-                           return;
+                           R.Actual := Rejected;
+                           R.Category := To_Unbounded_String ("malformed_packet");
+                           R.Detail := To_Unbounded_String
+                             ("login start malformed but accepted");
                         elsif not Valid_Login_Name
                           (Start.Name (1 .. Start.Name_Len))
                         then
-                           Fail ("rejected", "accepted",
-                                 "invalid name but accepted");
-                           return;
+                           R.Actual := Rejected;
+                           R.Category := To_Unbounded_String ("malformed_packet");
+                           R.Detail := To_Unbounded_String
+                             ("invalid name but accepted");
                         elsif Auth.Online_Mode then
-                           Fail ("rejected", "accepted",
-                                 "online mode must not send success");
-                           return;
+                           R.Actual := Rejected;
+                           R.Category := To_Unbounded_String ("malformed_packet");
+                           R.Detail := To_Unbounded_String
+                             ("online mode must not send success");
                         elsif Login.Start_Seen then
-                           Fail ("rejected", "accepted",
-                                 "duplicate login start but accepted");
-                           return;
+                           R.Actual := Rejected;
+                           R.Category := To_Unbounded_String ("malformed_packet");
+                           R.Detail := To_Unbounded_String
+                             ("duplicate login start but accepted");
                         else
                            Login.Start_Seen := True;
                            Login.Name_Len := Start.Name_Len;
@@ -262,6 +266,7 @@ package body Adacraft.Corpus.Runner is
                            Login.UUID :=
                              Auth.Offline_UUID_For_Name
                                (Start.Name (1 .. Start.Name_Len));
+                           if R.Actual = Accepted then
                            --  Derive exact outbound Success frame bytes.
                            declare
                               Body_W : P.Buffer.Writer (64);
@@ -274,17 +279,20 @@ package body Adacraft.Corpus.Runner is
                                 or else not P.Packets.Frame (Framed, Body_W)
                                 or else Framed.Failed
                               then
-                                 Fail ("rejected", "accepted",
-                                       "success encode failed");
-                                 return;
+                                 R.Actual := Rejected;
+                                 R.Category := To_Unbounded_String ("malformed_packet");
+                                 R.Detail := To_Unbounded_String
+                                   ("success encode failed");
+                              else
+                                 Login.Frame_Bytes.Clear;
+                                 for I in 1 .. Framed.Len loop
+                                    Login.Frame_Bytes.Append
+                                      (Framed.Data (I));
+                                 end loop;
+                                 Login.Success_Emitted := True;
                               end if;
-                              Login.Frame_Bytes.Clear;
-                              for I in 1 .. Framed.Len loop
-                                 Login.Frame_Bytes.Append
-                                   (Framed.Data (I));
-                              end loop;
-                              Login.Success_Emitted := True;
                            end;
+                           end if;
                         end if;
                      end;
                   elsif Is_Success then
@@ -306,9 +314,10 @@ package body Adacraft.Corpus.Runner is
                               or else Before = PS.Login_Awaiting_Ack)
                   then
                      if not Login.Success_Verified then
-                        Fail ("rejected", "accepted",
-                              "acknowledged before success but accepted");
-                        return;
+                        R.Actual := Rejected;
+                        R.Category := To_Unbounded_String ("malformed_packet");
+                        R.Detail := To_Unbounded_String
+                          ("acknowledged before success but accepted");
                      end if;
                   end if;
                end;

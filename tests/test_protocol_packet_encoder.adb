@@ -1,8 +1,10 @@
 with Ada.Streams;
 with Ada.Text_IO;
 with Interfaces;
+with Adacraft.Protocol;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Packet_Encoder;
+with Adacraft.Protocol.Varnum;
 
 procedure Test_Protocol_Packet_Encoder is
    package Enc renames Adacraft.Protocol.Packet_Encoder;
@@ -311,6 +313,71 @@ begin
          Check (Res.Values (4).Kind = Enc.Field_Long
            and then Res.Values (4).Long_Val = 16#0102030405060708#,
            "T2 field long");
+      end;
+
+      --  T-3: every strict prefix 0 .. n-1 of the valid T-2 multi-field
+      --  body rejects as Truncated (AC-7/AC-11).
+      declare
+         Layout : constant Enc.Layout_Array (0 .. 3) :=
+           (Enc.Field_Boolean, Enc.Field_Byte, Enc.Field_Int, Enc.Field_Long);
+         Full : constant Enc.Body_Bytes (0 .. 14) :=
+           (16#05#, 16#01#, 16#AB#,
+            16#01#, 16#02#, 16#03#, 16#04#,
+            16#01#, 16#02#, 16#03#, 16#04#,
+            16#05#, 16#06#, 16#07#, 16#08#);
+         Empty_Body : constant Enc.Body_Bytes (1 .. 0) :=
+           (others => 0);
+         R : Enc.Decode_Result;
+      begin
+         Enc.Decode (Empty_Body, Layout, R);
+         Check (R.Status = Enc.Truncated, "T3 prefix 0 truncated");
+         for N in 1 .. Full'Length - 1 loop
+            Enc.Decode (Full (Full'First .. Full'First + N - 1), Layout, R);
+            Check (R.Status = Enc.Truncated, "T3 prefix truncated");
+         end loop;
+         --  Sanity: the full body decodes Ok.
+         Enc.Decode (Full, Layout, R);
+         Check (R.Status = Enc.Ok
+           and then R.Packet_Id = 5
+           and then R.Count = 4, "T3 full ok");
+      end;
+
+      --  T-4: overlong VarInt ID (6 bytes) => Overlong_Varint; 11-byte
+      --  VarLong encoding => Varnum Overlong (decoder has no VarLong
+      --  field kind in shipped #210, so the VarLong leg is covered at
+      --  the Varnum codec the decoder delegates to; the decoder's
+      --  Overlong_Varlong status is retained for that mapping).
+      declare
+         Empty : constant Enc.Layout_Array (1 .. 0) :=
+           (others => Enc.Field_Boolean);
+         Over_Id : constant Enc.Body_Bytes (0 .. 5) :=
+           (16#80#, 16#80#, 16#80#, 16#80#, 16#80#, 16#01#);
+         R : Enc.Decode_Result;
+         Buf : Adacraft.Protocol.Octets (1 .. 11) := (others => 16#80#);
+         Val : Interfaces.Integer_64 := 0;
+         Consumed : Natural := 0;
+         St : Adacraft.Protocol.Varnum.Status_Type;
+      begin
+         Enc.Decode (Over_Id, Empty, R);
+         Check (R.Status = Enc.Overlong_Varint, "T4 overlong varint id");
+         Buf (11) := 16#01#;
+         Adacraft.Protocol.Varnum.Decode_Varlong (Buf, 1, Val, Consumed, St);
+         Check (St = Adacraft.Protocol.Varnum.Overlong,
+           "T4 overlong varlong");
+         Check (Enc.Overlong_Varlong /= Enc.Ok, "T4 status present");
+      end;
+
+      --  T-5: hand-crafted negative VarInt ID (-1) => Id_Out_Of_Range
+      --  (shipped #210 packet-ID range is Natural/non-negative).
+      declare
+         Empty : constant Enc.Layout_Array (1 .. 0) :=
+           (others => Enc.Field_Boolean);
+         Neg_Id : constant Enc.Body_Bytes (0 .. 4) :=
+           (16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#0F#);
+         R : Enc.Decode_Result;
+      begin
+         Enc.Decode (Neg_Id, Empty, R);
+         Check (R.Status = Enc.Id_Out_Of_Range, "T5 negative id range");
       end;
    end;
 

@@ -1,5 +1,6 @@
 with Ada.Streams;
 with Interfaces;
+with Adacraft.Auth;
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Frame;
 
@@ -31,8 +32,11 @@ package Adacraft.Ingress is
    function Is_Closed (Connection : Connection_Type) return Boolean;
 
    type Session is record
-      State    : Protocol.Protocol_State := Protocol.Handshake;
-      Version  : Interfaces.Unsigned_32 := 0;
+      State        : Protocol.Protocol_State := Protocol.Handshake;
+      Version      : Interfaces.Unsigned_32 := 0;
+      Start_Seen   : Boolean := False;
+      Success_Sent : Boolean := False;
+      Identity     : Auth.Player_Identity;
    end record;
 
    procedure Ingest

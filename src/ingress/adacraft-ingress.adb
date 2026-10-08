@@ -189,28 +189,101 @@ package body Adacraft.Ingress is
                   end if;
 
                when Protocol.Login =>
-                  if Frame.Packet_Id /= Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Login_Hello) then
-                     Close_Now := True;
-                  else
-                     declare
-                        Hello : constant Protocol.Packets.Login_Hello :=
-                          Protocol.Packets.Decode_Login_Hello (Payload);
-                        Expected : Auth.Digest;
-                     begin
-                        if Hello.Status /= Protocol.Ok then
-                           Disconnect (Outgoing, "Malformed login", Close_Now);
-                        else
-                           Expected := Auth.Offline_UUID (Hello.Name (1 .. Hello.Name_Len));
-                           if not Same_UUID (Hello.Uuid, Expected) then
-                              Disconnect (Outgoing, "Offline UUID does not match the player name", Close_Now);
+                  if Frame.Packet_Id = Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Login_Hello) then
+                     --  Second Login Start is always rejected, even after
+                     --  Success was sent; no state change, no further bytes.
+                     if S.Start_Seen or else S.Success_Sent then
+                        Close_Now := True;
+                     else
+                        declare
+                           Start : constant Protocol.Packets.Login_Start :=
+                             Protocol.Packets.Decode_Login_Start (Payload);
+                        begin
+                           if Start.Status /= Protocol.Ok then
+                              --  Truncated, bad length, or trailing bytes:
+                              --  close with no Success.
+                              Close_Now := True;
                            else
-                              Disconnect
-                                (Outgoing,
-                                 "AdaCraft accepted the offline identity; play is not in this build",
-                                 Close_Now);
+                              declare
+                                 Name      : constant String :=
+                                   Start.Name (1 .. Start.Name_Len);
+                                 Name_Ok   : Boolean := True;
+                                 Identity  : Auth.Digest;
+                                 Body_W    : Protocol.Buffer.Writer (64);
+                                 Framed    : Protocol.Buffer.Writer (96);
+                                 Name_Copy : String (1 .. 16) := (others => ' ');
+                              begin
+                                 if Start.Name_Len < 1 or else Start.Name_Len > 16 then
+                                    Name_Ok := False;
+                                 else
+                                    for Ch of Name loop
+                                       if Character'Pos (Ch) < 16#21#
+                                         or else Character'Pos (Ch) > 16#7E#
+                                       then
+                                          Name_Ok := False;
+                                          exit;
+                                       end if;
+                                    end loop;
+                                 end if;
+                                 if not Name_Ok then
+                                    Disconnect (Outgoing, "invalid player name", Close_Now);
+                                 elsif Auth.Online_Mode then
+                                    Disconnect
+                                      (Outgoing,
+                                       "online authentication is unavailable",
+                                       Close_Now);
+                                 else
+                                    --  Offline mode: client UUID is decoded
+                                    --  but never used. Derive vanilla
+                                    --  UUIDv3 and send exactly one Success.
+                                    --  No Encryption Request, no Set
+                                    --  Compression.
+                                    Identity := Auth.Offline_UUID_For_Name (Name);
+                                    Name_Copy (1 .. Start.Name_Len) := Name;
+                                    Protocol.Packets.Encode_Login_Success
+                                      (Body_W,
+                                       Protocol.Octets (Identity),
+                                       Name_Copy (1 .. Start.Name_Len));
+                                    if Body_W.Failed then
+                                       Close_Now := True;
+                                    elsif Protocol.Packets.Frame (Framed, Body_W) then
+                                       Append (Outgoing, Framed);
+                                       if Outgoing.Failed then
+                                          Close_Now := True;
+                                       else
+                                          S.Start_Seen := True;
+                                          S.Success_Sent := True;
+                                       end if;
+                                    else
+                                       Close_Now := True;
+                                    end if;
+                                 end if;
+                              end;
                            end if;
-                        end if;
-                     end;
+                        end;
+                     end if;
+                  elsif Frame.Packet_Id =
+                    Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Login_Login_Acknowledged)
+                  then
+                     --  Ack is only valid after Success was sent.
+                     if not S.Success_Sent then
+                        Close_Now := True;
+                     else
+                        declare
+                           Ack : constant Protocol.Packets.Login_Acknowledged :=
+                             Protocol.Packets.Decode_Login_Acknowledged (Payload);
+                        begin
+                           if Ack.Status /= Protocol.Ok then
+                              Close_Now := True;
+                           else
+                              --  Rest in CONFIGURATION; send nothing.
+                              S.State := Protocol.Configuration;
+                           end if;
+                        end;
+                     end if;
+                  else
+                     --  Wrong-state / unknown ID in LOGIN: close, no change.
+                     Close_Now := True;
                   end if;
 
                when Protocol.Configuration | Protocol.Play =>

@@ -1,12 +1,28 @@
 corpus_format: 1
 id: status-ping
-title: Status ping in STATUS
-description: A ping request is accepted and keeps the connection in STATUS.
+title: Handshake to status ping pong
+description: Handshake with status intent, status request, then ping request; each is accepted and the connection stays in STATUS.
 category: status
 protocol: 777
 provenance: hand-authored
-initial_state: STATUS
+initial_state: HANDSHAKE
 final_state: STATUS
+
+step:
+  direction: serverbound
+  input: 10 00 89 06 09 6C 6F 63 61 6C 68 6F 73 74 63 DD 01
+  outcome: accepted
+  packet_id: 0x00
+  state_after: STATUS
+  canonical: true
+
+step:
+  direction: serverbound
+  input: 01 00
+  outcome: accepted
+  packet_id: 0x00
+  state_after: STATUS
+  canonical: true
 
 step:
   direction: serverbound
@@ -14,3 +30,4 @@ step:
   outcome: accepted
   packet_id: 0x01
   state_after: STATUS
+  canonical: true

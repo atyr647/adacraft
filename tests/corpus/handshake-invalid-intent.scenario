@@ -12,3 +12,4 @@ step:
   direction: serverbound
   input: 10 00 89 06 09 6C 6F 63 61 6C 68 6F 73 74 63 DD 05
   outcome: rejected
+  rejection_category: invalid_handshake_intent

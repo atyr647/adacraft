@@ -105,6 +105,7 @@ package body Differential.Capture.Wire is
          First := Framed'First;
          while First <= Last loop
             GNAT.Sockets.Send_Socket (C.Sock, Framed (First .. Last), Sent);
+            exit when Sent >= Last;
             exit when Sent < First;
             First := Sent + 1;
          end loop;

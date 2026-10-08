@@ -433,8 +433,12 @@ procedure Differential.Main is
       type Recv_Status is
         (Got_Frame, Peer_Closed, Timeout_Expired, Malformed);
 
+      --  Small bounded store: only the frame head needed for the packet-ID
+      --  label is kept; remaining payload bytes are consumed and discarded
+      --  so the stream stays in sync. Avoids a multi-MiB stack frame.
+      Frame_Store_Len : constant := 8_192;
       type Frame_Storage is
-        array (1 .. Max_Frame_Len) of Ada.Streams.Stream_Element;
+        array (1 .. Frame_Store_Len) of Ada.Streams.Stream_Element;
 
       procedure Connect
         (Host_Image : String;
@@ -808,7 +812,9 @@ procedure Differential.Main is
                        Natural (Last - Item'First + 1);
                   begin
                      for I in 0 .. N - 1 loop
-                        Buf (Have + I + 1) := Item (Item'First + Ada.Streams.Stream_Element_Offset (I));
+                        if Have + I + 1 <= Buf'Last then
+                           Buf (Have + I + 1) := Item (Item'First + Ada.Streams.Stream_Element_Offset (I));
+                        end if;
                      end loop;
                      Have := Have + N;
                   end;
@@ -822,6 +828,11 @@ procedure Differential.Main is
                end if;
                Len := 0;
                return;
+            end if;
+            if Len > Buf'Length then
+               --  Head retained, tail discarded; caller decodes the ID
+               --  from the head only, stream already consumed in full.
+               Len := Buf'Length;
             end if;
          end;
          Status := Got_Frame;

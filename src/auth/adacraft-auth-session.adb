@@ -55,12 +55,7 @@ package body Adacraft.Auth.Session is
    -- JSON scan --
    ---------------
 
-   --  Parser state over a String with 1-based slice indices.
    --  All routines are total: they return Ok=False instead of raising.
-
-   type Parser is record
-      Text : String (1 .. 1);
-   end record;
 
    procedure Skip_WS (S : String; P : in out Natural) is
    begin
@@ -159,14 +154,15 @@ package body Adacraft.Auth.Session is
       Ok := False;
    end Parse_String;
 
+   --  Forward: structural string skip used by Skip_Value so long
+   --  string values (e.g. unknown keys like "extra":"hello") validate.
+   procedure Skip_String (S : String; P : in out Natural; Ok : out Boolean);
+
    --  Skip one generic JSON value with structural validation.
    procedure Skip_Value (S : String; P : in out Natural; Ok : out Boolean) is
       Depth_O : Natural := 0;
       Depth_A : Natural := 0;
-      Dummy   : String (1 .. 4) := [others => ' '];
-      DLen    : Natural;
       SOk     : Boolean;
-      Q       : Natural;
    begin
       Ok := False;
       Skip_WS (S, P);
@@ -175,20 +171,8 @@ package body Adacraft.Auth.Session is
       end if;
       case S (P) is
          when '"' =>
-            Parse_String (S, P, Dummy, 1, DLen, SOk);
-            --  Dummy cap is tiny; retry with large cap to validate only.
-            if not SOk and then DLen = 0 then
-               --  May be overflow of dummy; re-scan structurally.
-               Q := P; --  P already advanced? recompute below
-               null;
-            end if;
-            --  Re-validate with generous scan to avoid dummy overflow
-            --  false negatives: do a structural skip instead.
+            Skip_String (S, P, SOk);
             Ok := SOk;
-            if not SOk then
-               --  Structural re-scan: P was consumed partially; fail closed.
-               Ok := False;
-            end if;
             return;
          when '{' =>
             P := P + 1;
@@ -202,18 +186,11 @@ package body Adacraft.Auth.Session is
                   Ok := True;
                   return;
                end if;
-               --  key
-               declare
-                  Kb  : String (1 .. 65_536) := [others => ' '];
-                  pragma Unreferenced (Kb);
-               begin
-                  null;
-               end;
                --  Use bounded structural walk: strings validated inline.
                if S (P) /= '"' then
                   return;
                end if;
-               --  skip string structurally
+               --  skip key string structurally with escape validation
                P := P + 1;
                while P <= S'Last loop
                   if S (P) = '\' then
@@ -224,9 +201,19 @@ package body Adacraft.Auth.Session is
                         if P + 5 > S'Last then
                            return;
                         end if;
+                        for K in P + 2 .. P + 5 loop
+                           if not Is_Hex (S (K)) then
+                              return;
+                           end if;
+                        end loop;
                         P := P + 6;
                      else
-                        P := P + 2;
+                        case S (P + 1) is
+                           when '"' | '\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' =>
+                              P := P + 2;
+                           when others =>
+                              return;
+                        end case;
                      end if;
                   elsif S (P) = '"' then
                      P := P + 1;

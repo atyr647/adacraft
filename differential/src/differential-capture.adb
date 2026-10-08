@@ -47,7 +47,6 @@ package body Differential.Capture is
      (Dir : Adacraft.Protocol.State.Packet_Direction;
       Id  : Adacraft.Protocol.State.Packet_Id)
    is
-      use type Adacraft.Protocol.State.Transition_Result;
       Ev : constant Adacraft.Protocol.State.Packet_Event :=
         (Direction => Dir, Id => Id, Intent => 0);
       TR : constant Adacraft.Protocol.State.Transition_Result :=
@@ -63,7 +62,7 @@ package body Differential.Capture is
          return;
       end if;
       declare
-         E : constant Differential.Transcript.Entry :=
+         E : constant Differential.Transcript.Transcript_Entry :=
            (State => Current_State, Direction => Dir, Id => Id);
       begin
          Differential.Transcript.Append (Current_Result.Entries, E, Ok);
@@ -79,7 +78,6 @@ package body Differential.Capture is
    end Note_Entry;
 
    procedure On_Frame_Body (Data : Adacraft.Ingress.Byte_Array) is
-      use type Interfaces.Unsigned_32;
    begin
       if Current_Bad or else Current_Result = null then
          return;
@@ -90,15 +88,8 @@ package body Differential.Capture is
          Current_Outcome := Differential.Malformed_Frame;
          return;
       end if;
-      --  Decoder #203 validation hook through shipped Frame unit:
-      --  run Decode_Frame over a length-prefixed copy when it fits.
-      declare
-         Oct : constant Adacraft.Protocol.Octets := To_Octets (Data);
-         pragma Unreferenced (Oct);
-      begin
-         null;
-      end;
-      --  Packet-Id via VarInt codec #208 (shipped Varnum unit).
+      --  Clientbound packet-id via shipped VarInt #208; framing already
+      --  done by Ingress #204, state via #118 in Note_Entry.
       declare
          Oct : constant Adacraft.Protocol.Octets := To_Octets (Data);
          R : constant Adacraft.Protocol.Varnum.Varint_Result :=

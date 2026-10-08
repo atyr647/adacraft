@@ -1,0 +1,15 @@
+corpus_format: 1
+id: handshake-bad-address-utf8
+title: Handshake with invalid UTF-8 address
+description: A handshake whose server address bytes are not valid UTF-8 is rejected with no bytes sent.
+category: handshake
+protocol: 777
+provenance: hand-authored
+initial_state: HANDSHAKE
+final_state: HANDSHAKE
+
+step:
+  direction: serverbound
+  input: 09 00 89 06 01 FF 63 DD 01 00
+  outcome: rejected
+  rejection_category: malformed_packet

@@ -1,0 +1,15 @@
+corpus_format: 1
+id: handshake-trailing-bytes
+title: Handshake with trailing bytes
+description: A handshake with one extra byte after the intention field violates exact consumption and is rejected with no bytes sent.
+category: handshake
+protocol: 777
+provenance: hand-authored
+initial_state: HANDSHAKE
+final_state: HANDSHAKE
+
+step:
+  direction: serverbound
+  input: 11 00 89 06 09 6C 6F 63 61 6C 68 6F 73 74 63 DD 01 00
+  outcome: rejected
+  rejection_category: malformed_packet

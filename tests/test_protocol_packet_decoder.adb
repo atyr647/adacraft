@@ -150,7 +150,18 @@ begin
    begin
       Check (R.Status = Adacraft.Protocol.Ok
              and then R.Fields (1).Int_Value = Interfaces.Integer_32'First,
-             "T-Valid-Int");
+             "T-Valid-Int-First");
+   end;
+
+   Enc.Start_Packet (E, 2);
+   Enc.Write_Int (E, Interfaces.Integer_32'Last);
+   declare
+      R : constant Dec.Decode_Result :=
+        Dec.Decode (Get_Body_Of (E), Dec.Layout_Array'(1 => Dec.Kind_Int));
+   begin
+      Check (R.Status = Adacraft.Protocol.Ok
+             and then R.Fields (1).Int_Value = Interfaces.Integer_32'Last,
+             "T-Valid-Int-Last");
    end;
 
    --  Long.
@@ -162,7 +173,18 @@ begin
    begin
       Check (R.Status = Adacraft.Protocol.Ok
              and then R.Fields (1).Long_Value = Interfaces.Integer_64'First,
-             "T-Valid-Long");
+             "T-Valid-Long-First");
+   end;
+
+   Enc.Start_Packet (E, 2);
+   Enc.Write_Long (E, Interfaces.Integer_64'Last);
+   declare
+      R : constant Dec.Decode_Result :=
+        Dec.Decode (Get_Body_Of (E), Dec.Layout_Array'(1 => Dec.Kind_Long));
+   begin
+      Check (R.Status = Adacraft.Protocol.Ok
+             and then R.Fields (1).Long_Value = Interfaces.Integer_64'Last,
+             "T-Valid-Long-Last");
    end;
 
    --  VarInt field (manual: id 0 + varint 300 = 16#AC#, 16#02#).
@@ -225,11 +247,16 @@ begin
             if K = 0 then
                Check (R.Reason = Dec.Reason_Empty_Body, "T-Trunc-Prefix-0");
             elsif K = 1 then
-               --  Only ID byte present; bool field truncated.
+               --  Only ID byte present; boolean field where input ran out.
                Check (R.Reason = Dec.Reason_Truncated_Field, "T-Trunc-Prefix-1 bool");
-            else
+            elsif K = 2 then
+               --  ID + boolean present; int field where input ran out (0 of 4 bytes).
                Check (R.Reason = Dec.Reason_Truncated_Field,
-                      "T-Trunc-Prefix-" & Integer'Image (K));
+                      "T-Trunc-Prefix-2 int-missing");
+            else
+               --  ID + boolean + partial int; int field where input ran out.
+               Check (R.Reason = Dec.Reason_Truncated_Field,
+                      "T-Trunc-Prefix-" & Integer'Image (K) & " int-partial");
             end if;
             Check (R.Status = Adacraft.Protocol.Rejected, "T-Trunc rejected");
          end;

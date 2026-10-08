@@ -3,7 +3,6 @@ with Interfaces;
 with Adacraft.Protocol.Frame;
 
 package Adacraft.Protocol.Packet_Encoder
-  with SPARK_Mode => On
 is
 
    subtype Byte is Ada.Streams.Stream_Element;
@@ -81,15 +80,16 @@ is
    end record;
 
    procedure Decode
-     (Body   : in Body_Bytes;
-      Layout : in Layout_Array;
-      Result : out Decode_Result)
+     (Body_Data : in Body_Bytes;
+      Layout    : in Layout_Array;
+      Result    : out Decode_Result)
    with
+     SPARK_Mode => On,
      Global => null,
      Pre  =>
-       Body'Length <= Adacraft.Protocol.Frame.Max_Frame_Body_Length
+       Body_Data'Length <= Adacraft.Protocol.Frame.Max_Frame_Body_Length
        and then Layout'Length <= Max_Decoded_Fields,
-     Depends => (Result => (Body, Layout));
+     Depends => (Result => (Body_Data, Layout));
    --  Pure decoder (C-5): decodes the packet ID via Varnum then each layout
    --  field in order. Empty body => Truncated. ID with > 5 VarInt bytes =>
    --  Overlong_Varint; negative or out-of-Natural ID => Id_Out_Of_Range.

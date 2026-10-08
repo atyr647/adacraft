@@ -388,7 +388,8 @@ package body Adacraft.Protocol.Packet_Encoder is
       Out_Last :   out Natural;
       S       :    out Status)
    is
-      pragma Unreferenced (Buf);
+      use type Ada.Streams.Stream_Element_Offset;
+      Need : Natural;
    begin
       Out_Last := Out_Buf'First - 1;
       if E.St /= Ok then
@@ -399,8 +400,56 @@ package body Adacraft.Protocol.Packet_Encoder is
          S := Invalid_Sequence;
          return;
       end if;
-      --  Full framing delegation is implemented in a later task.
-      S := Frame_Error;
+      if E.Len = 0 then
+         S := Invalid_Sequence;
+         return;
+      end if;
+      if E.Len > Buf'Length then
+         S := Overflow;
+         return;
+      end if;
+      Need := E.Len + Adacraft.Protocol.Frame.Max_Frame_Prefix_Bytes;
+      if Out_Buf'Length < Need then
+         S := Overflow;
+         return;
+      end if;
+      declare
+         Len_Off : constant Ada.Streams.Stream_Element_Offset :=
+           Ada.Streams.Stream_Element_Offset (E.Len);
+         Out_Len : constant Ada.Streams.Stream_Element_Offset :=
+           Ada.Streams.Stream_Element_Offset (Out_Buf'Length);
+         Payload : Ada.Streams.Stream_Element_Array (1 .. Len_Off);
+         Output  : Ada.Streams.Stream_Element_Array (1 .. Out_Len);
+         Enc_Last : Ada.Streams.Stream_Element_Offset;
+         Enc_St   : Adacraft.Protocol.Frame.Encode_Status;
+      begin
+         for I in 0 .. E.Len - 1 loop
+            Payload
+              (Ada.Streams.Stream_Element_Offset (I + 1)) :=
+              Ada.Streams.Stream_Element
+                (Buf (Buf'First + I));
+         end loop;
+         Adacraft.Protocol.Frame.Encode
+           (Payload => Payload,
+            Output  => Output,
+            Last    => Enc_Last,
+            Status  => Enc_St);
+         case Enc_St is
+            when Adacraft.Protocol.Frame.Ok =>
+               for I in 1 .. Enc_Last loop
+                  Out_Buf
+                    (Out_Buf'First + Natural (I - 1)) :=
+                    Interfaces.Unsigned_8 (Output (I));
+               end loop;
+               Out_Last :=
+                 Out_Buf'First + Natural (Enc_Last) - 1;
+               S := Ok;
+            when Adacraft.Protocol.Frame.Body_Too_Long =>
+               S := Body_Too_Long;
+            when Adacraft.Protocol.Frame.Output_Too_Small =>
+               S := Overflow;
+         end case;
+      end;
    end Frame;
 
 end Adacraft.Protocol.Packet_Encoder;

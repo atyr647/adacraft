@@ -604,6 +604,131 @@ begin
       Check (PE.Body_Length (E) = Total, "T8 plus1 length");
    end;
 
+   --  T9: Frame wrapper equals Frame.Encode for 1-byte body.
+   declare
+      use type Adacraft.Protocol.Frame.Encode_Status;
+      E        : PE.Encoder;
+      Buf      : PE.Byte_Array (1 .. 8) := (others => 16#AA#);
+      Out_Buf  : PE.Byte_Array (1 .. 8) := (others => 16#AA#);
+      Out_Last : Natural := 0;
+      S        : PE.Status;
+      Payload  : Ada.Streams.Stream_Element_Array (1 .. 1);
+      Expected : Ada.Streams.Stream_Element_Array (1 .. 8) :=
+        (others => 0);
+      Exp_Last : Ada.Streams.Stream_Element_Offset;
+      Exp_St   : Adacraft.Protocol.Frame.Encode_Status;
+   begin
+      PE.Start (E);
+      PE.Write_Packet_Id (E, Buf, 0);
+      Check (PE.Status_Of (E) = PE.Ok, "T9 1byte setup");
+      Payload (1) := Ada.Streams.Stream_Element (Buf (Buf'First));
+      Adacraft.Protocol.Frame.Encode
+        (Payload => Payload, Output => Expected,
+         Last => Exp_Last, Status => Exp_St);
+      Check (Exp_St = Adacraft.Protocol.Frame.Ok, "T9 1byte ref ok");
+      PE.Frame (E, Buf, Out_Buf, Out_Last, S);
+      Check (S = PE.Ok, "T9 1byte status");
+      if S = PE.Ok then
+         Check
+           (Out_Last = Out_Buf'First + Natural (Exp_Last) - 1,
+            "T9 1byte last");
+         for I in 0 .. Natural (Exp_Last) - 1 loop
+            if Out_Buf (Out_Buf'First + I) /=
+              Interfaces.Unsigned_8 (Expected (Expected'First + I))
+            then
+               Check (False, "T9 1byte byte");
+            end if;
+         end loop;
+      end if;
+   end;
+
+   --  T9: Frame wrapper equals Frame.Encode for body needing 3-byte prefix.
+   declare
+      use type Adacraft.Protocol.Frame.Encode_Status;
+      Body_Len : constant Natural := 16_384;
+      E        : PE.Encoder;
+      Buf      : PE.Byte_Array (1 .. 16_384) := (others => 16#55#);
+      Out_Buf  : PE.Byte_Array (1 .. 16_384 + 3) := (others => 16#AA#);
+      Out_Last : Natural := 0;
+      S        : PE.Status;
+      Payload  : Ada.Streams.Stream_Element_Array
+        (1 .. Ada.Streams.Stream_Element_Offset (Body_Len));
+      Expected : Ada.Streams.Stream_Element_Array
+        (1 .. Ada.Streams.Stream_Element_Offset (Body_Len + 3)) :=
+        (others => 0);
+      Exp_Last : Ada.Streams.Stream_Element_Offset;
+      Exp_St   : Adacraft.Protocol.Frame.Encode_Status;
+   begin
+      PE.Start (E);
+      PE.Write_Packet_Id (E, Buf, 0);
+      for I in 1 .. Body_Len - 1 loop
+         PE.Write_Bytes (E, Buf, PE.Byte_Array'(1 => 16#55#));
+         exit when PE.Status_Of (E) /= PE.Ok;
+      end loop;
+      Check (PE.Status_Of (E) = PE.Ok, "T9 3byte setup");
+      Check (PE.Body_Length (E) = Body_Len, "T9 3byte length");
+      for I in 0 .. Body_Len - 1 loop
+         Payload (Payload'First + I) :=
+           Ada.Streams.Stream_Element (Buf (Buf'First + I));
+      end loop;
+      Adacraft.Protocol.Frame.Encode
+        (Payload => Payload, Output => Expected,
+         Last => Exp_Last, Status => Exp_St);
+      Check (Exp_St = Adacraft.Protocol.Frame.Ok, "T9 3byte ref ok");
+      Check
+        (Natural (Exp_Last) = Body_Len + 3, "T9 3byte prefix len");
+      PE.Frame (E, Buf, Out_Buf, Out_Last, S);
+      Check (S = PE.Ok, "T9 3byte status");
+      if S = PE.Ok then
+         Check
+           (Out_Last = Out_Buf'First + Natural (Exp_Last) - 1,
+            "T9 3byte last");
+         for I in 0 .. Natural (Exp_Last) - 1 loop
+            if Out_Buf (Out_Buf'First + I) /=
+              Interfaces.Unsigned_8 (Expected (Expected'First + I))
+            then
+               Check (False, "T9 3byte byte");
+            end if;
+         end loop;
+      end if;
+   end;
+
+   --  T9: too-small frame output buffer -> non-Ok, no bytes written.
+   declare
+      E        : PE.Encoder;
+      Buf      : PE.Byte_Array (1 .. 8) := (others => 0);
+      Out_Buf  : PE.Byte_Array (1 .. 1) := (others => 16#AA#);
+      Out_Last : Natural := 0;
+      S        : PE.Status;
+   begin
+      PE.Start (E);
+      PE.Write_Packet_Id (E, Buf, 0);
+      PE.Frame (E, Buf, Out_Buf, Out_Last, S);
+      Check (S /= PE.Ok, "T9 small status");
+      Check (Out_Last = Out_Buf'First - 1, "T9 small last");
+      Check (Out_Buf = PE.Byte_Array'(1 => 16#AA#), "T9 small unchanged");
+   end;
+
+   --  T9 closure: finish/frame with no ID -> Invalid_Sequence.
+   declare
+      E        : PE.Encoder;
+      Buf      : PE.Byte_Array (1 .. 8) := (others => 0);
+      Out_Buf  : PE.Byte_Array (1 .. 8) := (others => 16#AA#);
+      Last     : Natural := 0;
+      Out_Last : Natural := 0;
+      S        : PE.Status;
+   begin
+      PE.Start (E);
+      PE.Finish (E, Buf, Last, S);
+      Check (S = PE.Invalid_Sequence, "T9 finish-no-id");
+      PE.Frame (E, Buf, Out_Buf, Out_Last, S);
+      Check (S = PE.Invalid_Sequence, "T9 frame-no-id");
+      Check (Out_Last = Out_Buf'First - 1, "T9 frame-no-id last");
+      Check
+        (Out_Buf = PE.Byte_Array'(1 .. 8 => 16#AA#),
+         "T9 frame-no-id unchanged");
+   end;
+
    if Failures = 0 then
       Ada.Text_IO.Put_Line ("packet encoder tests passed");
    else

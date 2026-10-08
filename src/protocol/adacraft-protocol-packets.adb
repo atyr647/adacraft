@@ -1,3 +1,4 @@
+with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Ids;
 with Adacraft.Protocol.Varnum;
 
@@ -89,6 +90,258 @@ package body Adacraft.Protocol.Packets is
       end if;
       return (Status => Ok, Value => Buffer.Decode_U64 (Payload, Payload'First));
    end Decode_Ping;
+
+   procedure Touch_Frame_Max is
+      Dummy : Natural := Adacraft.Protocol.Frame.Max_Frame_Body_Length;
+      pragma Unreferenced (Dummy);
+   begin
+      null;
+   end Touch_Frame_Max;
+
+   function Decode
+     (Body   : Byte_Array;
+      Layout : Field_Kind_Array) return Decode_Result
+   is
+      use type Interfaces.Integer_32;
+      use type Interfaces.Integer_64;
+      use type Interfaces.Unsigned_32;
+      use type Interfaces.Unsigned_64;
+
+      Ok_Res   : Decode_Result (Ok => True);
+      Pos      : Natural := 0;
+      Last     : Natural := 0;
+      Idone    : Boolean := False;
+
+      function Remaining return Natural is
+        (if Pos > Last then 0 else Last - Pos + 1);
+
+      procedure Fail (E : Decode_Error_Kind; R : out Decode_Result) is
+      begin
+         R := (Ok => False, Err => E);
+      end Fail;
+   begin
+      if Body'Length = 0 then
+         return (Ok => False, Err => Truncated);
+      end if;
+      if Body'Length > Adacraft.Protocol.Frame.Max_Frame_Body_Length then
+         return (Ok => False, Err => Invalid_Field_Value);
+      end if;
+      if Layout'Length > Max_Decode_Fields then
+         return (Ok => False, Err => Invalid_Field_Value);
+      end if;
+
+      Pos := Body'First;
+      Last := Body'First + Body'Length - 1;
+
+      --  Packet ID via Varnum VarInt.
+      declare
+         V : Interfaces.Integer_32 := 0;
+         C : Natural := 0;
+         S : Varnum.Status_Type := Varnum.Truncated;
+      begin
+         if Pos < Body'First or else Pos > Last then
+            return (Ok => False, Err => Truncated);
+         end if;
+         Varnum.Decode (Body, Pos, V, C, S);
+         case S is
+            when Varnum.Ok =>
+               null;
+            when Varnum.Truncated =>
+               return (Ok => False, Err => Truncated);
+            when Varnum.Overlong =>
+               return (Ok => False, Err => Overlong);
+            when Varnum.Buffer_Too_Small =>
+               return (Ok => False, Err => Truncated);
+         end case;
+         if V < 0 then
+            return (Ok => False, Err => Invalid_Packet_Id);
+         end if;
+         Ok_Res.Id := Natural (V);
+         Pos := Pos + C;
+      end;
+      Idone := True;
+
+      Ok_Res.Num_Fields := Layout'Length;
+      for I in 1 .. Layout'Length loop
+         declare
+            K : constant Field_Kind := Layout (Layout'First + I - 1);
+         begin
+            case K is
+               when K_Boolean =>
+                  if Pos > Last then
+                     return (Ok => False, Err => Truncated);
+                  end if;
+                  if Body (Pos) = 16#00# then
+                     Ok_Res.Fields (I) := (Kind => K_Boolean, B => False);
+                  elsif Body (Pos) = 16#01# then
+                     Ok_Res.Fields (I) := (Kind => K_Boolean, B => True);
+                  else
+                     return (Ok => False, Err => Invalid_Field_Value);
+                  end if;
+                  Pos := Pos + 1;
+               when K_Byte =>
+                  if Pos > Last then
+                     return (Ok => False, Err => Truncated);
+                  end if;
+                  Ok_Res.Fields (I) := (Kind => K_Byte, Y => Body (Pos));
+                  Pos := Pos + 1;
+               when K_Int =>
+                  if Remaining < 4 then
+                     return (Ok => False, Err => Truncated);
+                  end if;
+                  declare
+                     U : Interfaces.Unsigned_32 :=
+                       Interfaces.Shift_Left
+                         (Interfaces.Unsigned_32 (Body (Pos)), 24)
+                       or Interfaces.Shift_Left
+                         (Interfaces.Unsigned_32 (Body (Pos + 1)), 16)
+                       or Interfaces.Shift_Left
+                         (Interfaces.Unsigned_32 (Body (Pos + 2)), 8)
+                       or Interfaces.Unsigned_32 (Body (Pos + 3));
+                     Sv : Interfaces.Integer_32;
+                  begin
+                     if U >= 2 ** 31 then
+                        Sv := Interfaces.Integer_32
+                          (Interfaces.Integer_64 (U) - 2 ** 32);
+                     else
+                        Sv := Interfaces.Integer_32 (U);
+                     end if;
+                     Ok_Res.Fields (I) := (Kind => K_Int, I32 => Sv);
+                  end;
+                  Pos := Pos + 4;
+               when K_Long =>
+                  if Remaining < 8 then
+                     return (Ok => False, Err => Truncated);
+                  end if;
+                  declare
+                     U : Interfaces.Unsigned_64 :=
+                       Interfaces.Shift_Left
+                         (Interfaces.Unsigned_64 (Body (Pos)), 56)
+                       or Interfaces.Shift_Left
+                         (Interfaces.Unsigned_64 (Body (Pos + 1)), 48)
+                       or Interfaces.Shift_Left
+                         (Interfaces.Unsigned_64 (Body (Pos + 2)), 40)
+                       or Interfaces.Shift_Left
+                         (Interfaces.Unsigned_64 (Body (Pos + 3)), 32)
+                       or Interfaces.Shift_Left
+                         (Interfaces.Unsigned_64 (Body (Pos + 4)), 24)
+                       or Interfaces.Shift_Left
+                         (Interfaces.Unsigned_64 (Body (Pos + 5)), 16)
+                       or Interfaces.Shift_Left
+                         (Interfaces.Unsigned_64 (Body (Pos + 6)), 8)
+                       or Interfaces.Unsigned_64 (Body (Pos + 7));
+                     Sv : Interfaces.Integer_64;
+                  begin
+                     if U >= 2 ** 63 then
+                        Sv := Interfaces.Integer_64 (U - 2 ** 63)
+                          + Interfaces.Integer_64'First;
+                     else
+                        Sv := Interfaces.Integer_64 (U);
+                     end if;
+                     Ok_Res.Fields (I) := (Kind => K_Long, I64 => Sv);
+                  end;
+                  Pos := Pos + 8;
+               when K_Varint =>
+                  declare
+                     V : Interfaces.Integer_32 := 0;
+                     C : Natural := 0;
+                     S : Varnum.Status_Type := Varnum.Truncated;
+                  begin
+                     if Pos > Last then
+                        return (Ok => False, Err => Truncated);
+                     end if;
+                     Varnum.Decode (Body, Pos, V, C, S);
+                     case S is
+                        when Varnum.Ok =>
+                           null;
+                        when Varnum.Truncated =>
+                           return (Ok => False, Err => Truncated);
+                        when Varnum.Overlong =>
+                           return (Ok => False, Err => Overlong);
+                        when Varnum.Buffer_Too_Small =>
+                           return (Ok => False, Err => Truncated);
+                     end case;
+                     Ok_Res.Fields (I) := (Kind => K_Varint, I32 => V);
+                     Pos := Pos + C;
+                  end;
+               when K_Varlong =>
+                  declare
+                     V : Interfaces.Integer_64 := 0;
+                     C : Natural := 0;
+                     S : Varnum.Status_Type := Varnum.Truncated;
+                  begin
+                     if Pos > Last then
+                        return (Ok => False, Err => Truncated);
+                     end if;
+                     Varnum.Decode_Varlong (Body, Pos, V, C, S);
+                     case S is
+                        when Varnum.Ok =>
+                           null;
+                        when Varnum.Truncated =>
+                           return (Ok => False, Err => Truncated);
+                        when Varnum.Overlong =>
+                           return (Ok => False, Err => Overlong);
+                        when Varnum.Buffer_Too_Small =>
+                           return (Ok => False, Err => Truncated);
+                     end case;
+                     Ok_Res.Fields (I) := (Kind => K_Varlong, I64 => V);
+                     Pos := Pos + C;
+                  end;
+               when K_String =>
+                  declare
+                     L32 : Interfaces.Integer_32 := 0;
+                     C   : Natural := 0;
+                     S   : Varnum.Status_Type := Varnum.Truncated;
+                  begin
+                     if Pos > Last then
+                        return (Ok => False, Err => Truncated);
+                     end if;
+                     Varnum.Decode (Body, Pos, L32, C, S);
+                     case S is
+                        when Varnum.Ok =>
+                           null;
+                        when Varnum.Truncated =>
+                           return (Ok => False, Err => Truncated);
+                        when Varnum.Overlong =>
+                           return (Ok => False, Err => Overlong);
+                        when Varnum.Buffer_Too_Small =>
+                           return (Ok => False, Err => Truncated);
+                     end case;
+                     if L32 < 0 then
+                        return (Ok => False, Err => String_Too_Long);
+                     end if;
+                     if L32 > Interfaces.Integer_32 (String_Max) then
+                        return (Ok => False, Err => String_Too_Long);
+                     end if;
+                     Pos := Pos + C;
+                     declare
+                        L : constant Natural := Natural (L32);
+                     begin
+                        if L > Remaining then
+                           return (Ok => False, Err => Truncated);
+                        end if;
+                        Ok_Res.Fields (I) :=
+                          (Kind => K_String, S_Len => L,
+                           S_Data => (others => ' '));
+                        for J in 1 .. L loop
+                           Ok_Res.Fields (I).S_Data (J) :=
+                             Character'Val (Natural (Body (Pos + J - 1)));
+                        end loop;
+                        Pos := Pos + L;
+                     end;
+                  end;
+            end case;
+         end;
+      end loop;
+
+      if Pos /= Last + 1 then
+         return (Ok => False, Err => Trailing_Bytes);
+      end if;
+      return Ok_Res;
+   exception
+      when others =>
+         return (Ok => False, Err => Invalid_Field_Value);
+   end Decode;
 
    function Decode_Login_Hello (Payload : Octets) return Login_Hello is
       Result : Login_Hello;

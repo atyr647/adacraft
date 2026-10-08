@@ -199,8 +199,9 @@ begin
    --  Empty body.
    declare
       Empty : constant SEA (1 .. 0) := (others => 0);
+      Empty_Lay : constant Dec.Layout_Array (1 .. 0) := (1 .. 0 => Dec.Kind_Boolean);
       R : constant Dec.Decode_Result :=
-        Dec.Decode (Empty, Dec.Layout_Array'(1 => Dec.Kind_Boolean)(1 .. 0));
+        Dec.Decode (Empty, Empty_Lay);
    begin
       Check (R.Status = Adacraft.Protocol.Rejected
              and then R.Reason = Dec.Reason_Empty_Body, "T-Empty");
@@ -239,8 +240,9 @@ begin
    declare
       Raw : constant SEA :=
         SEA'(16#80#, 16#80#, 16#80#, 16#80#, 16#80#, 16#01#);
+      Empty_Lay : constant Dec.Layout_Array (1 .. 0) := (1 .. 0 => Dec.Kind_Boolean);
       R : constant Dec.Decode_Result :=
-        Dec.Decode (Raw, Dec.Layout_Array'(1 => Dec.Kind_Boolean)(1 .. 0));
+        Dec.Decode (Raw, Empty_Lay);
    begin
       Check (R.Reason = Dec.Reason_Overlong_Id, "T-Overlong-Id");
    end;
@@ -313,17 +315,16 @@ begin
          Check (R.Status = Adacraft.Protocol.Rejected
                 and then R.Reason = Dec.Reason_Invalid_Boolean,
                 "T-Bad-Bool-" & SE'Image (V));
-         exit when Failures > 0;
       end;
-      exit when Failures > 0;
    end loop;
 
    --  Negative packet id.
    declare
       Raw : constant SEA :=
         SEA'(16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#0F#);
+      Empty_Lay : constant Dec.Layout_Array (1 .. 0) := (1 .. 0 => Dec.Kind_Boolean);
       R : constant Dec.Decode_Result :=
-        Dec.Decode (Raw, Dec.Layout_Array'(1 => Dec.Kind_Boolean)(1 .. 0));
+        Dec.Decode (Raw, Empty_Lay);
    begin
       Check (R.Reason = Dec.Reason_Invalid_Id, "T-Negative-Id");
    end;
@@ -331,8 +332,9 @@ begin
    --  Truncated id: single continuation byte.
    declare
       Raw : constant SEA := SEA'(1 => 16#80#);
+      Empty_Lay : constant Dec.Layout_Array (1 .. 0) := (1 .. 0 => Dec.Kind_Boolean);
       R : constant Dec.Decode_Result :=
-        Dec.Decode (Raw, Dec.Layout_Array'(1 => Dec.Kind_Boolean)(1 .. 0));
+        Dec.Decode (Raw, Empty_Lay);
    begin
       Check (R.Reason = Dec.Reason_Truncated_Id, "T-Trunc-Id");
    end;

@@ -4,6 +4,12 @@ package Differential.Compare is
 
    type Verdict is (Match, Diverge);
 
+   function Entries_Equal
+     (A : Differential.Transcript.Transcript;
+      B : Differential.Transcript.Transcript) return Boolean;
+   --  True iff same length and element-wise (State, Dir, Packet_Id)
+   --  equal. Payload is never compared (not stored).
+
    function Compare
      (A : Differential.Transcript.Transcript;
       B : Differential.Transcript.Transcript) return Verdict;

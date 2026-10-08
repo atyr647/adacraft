@@ -15,7 +15,7 @@ package Differential.Transcript is
       Packet_Id : Natural;
    end record;
 
-   Max_Entries : Ada.Containers.Count_Type := 256;
+   Max_Entries : constant Ada.Containers.Count_Type := 256;
 
    package Entry_Vectors is new Ada.Containers.Bounded_Vectors
      (Index_Type   => Positive,

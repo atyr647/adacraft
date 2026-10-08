@@ -323,7 +323,7 @@ begin
          end;
          Tmp (1) := Tmp (1);
       end Put_BE64;
-      R : Packets.Decode_Result (Ok => False);
+      R : Packets.Decode_Result;
    begin
       Varnum.Encode (9, Buf, Pos, W, S);
       Pos := Pos + W;
@@ -394,7 +394,7 @@ begin
    --  T4: empty body is an error, never an exception.
    declare
       Empty_Holder : Protocol.Octets (1 .. 1) := (others => 0);
-      R : Packets.Decode_Result (Ok => False);
+      R : Packets.Decode_Result;
       Raised : Boolean := False;
    begin
       begin
@@ -473,7 +473,7 @@ begin
          Check (Sanity.Ok, "T5 sanity full body ok");
          for Len in 0 .. N - 1 loop
             declare
-               R : Packets.Decode_Result (Ok => False);
+               R : Packets.Decode_Result;
                Raised : Boolean := False;
             begin
                begin
@@ -518,7 +518,7 @@ begin
    declare
       Over_Vl : Protocol.Octets (1 .. 11) :=
         (16#00#, others => 16#80#);
-      R : Packets.Decode_Result (Ok => False);
+      R : Packets.Decode_Result;
    begin
       Over_Vl (1) := 16#00#;
       for I in 2 .. Over_Vl'Last loop
@@ -589,7 +589,7 @@ begin
          Short : constant Protocol.Octets := Body_With_String (0, "abc");
          --  Rewrite length prefix 3 -> 10, keep 3 payload bytes.
          Patched : Protocol.Octets (1 .. Short'Length) := Short;
-         R : Packets.Decode_Result (Ok => False);
+         R : Packets.Decode_Result;
       begin
          Patched (2) := 16#0A#;
          R := Packets.Decode (Patched, L_String);
@@ -602,7 +602,7 @@ begin
    declare
       Base : constant Protocol.Octets := Body_With_String (5, "hi");
       Ext : Protocol.Octets (1 .. Base'Length + 1) := (others => 0);
-      R : Packets.Decode_Result (Ok => False);
+      R : Packets.Decode_Result;
    begin
       for I in 1 .. Base'Length loop
          Ext (I) := Base (Base'First + I - 1);
@@ -660,7 +660,7 @@ begin
       Total : Natural := 0;
 
       procedure T10_Try (Data : Protocol.Octets; Name : String) is
-         R : Packets.Decode_Result (Ok => False);
+         R : Packets.Decode_Result;
          Raised : Boolean := False;
       begin
          begin

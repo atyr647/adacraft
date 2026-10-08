@@ -34,13 +34,16 @@ bin/adacraft: src/adacraft_server.adb
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) src/adacraft_server.adb -o $@
 
-test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus
+test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_protocol_handshake bin/test_protocol_status bin/test_idle_timeout bin/test_corpus_loader bin/test_golden_corpus
 	$(MAKE) --no-print-directory check-packets-table
 	$(MAKE) --no-print-directory check
 	./bin/adacraft_tests
 	./bin/test_ingress_framing
 	./bin/test_protocol_varnum
 	./bin/test_protocol_state
+	./bin/test_protocol_handshake
+	./bin/test_protocol_status
+	./bin/test_idle_timeout
 	./bin/test_corpus_loader
 	./bin/test_golden_corpus
 

@@ -68,43 +68,6 @@ package body Adacraft.Ingress is
       return Connection.Closed;
    end Is_Closed;
 
-   function Same_UUID (Left : Protocol.Octets; Right : Auth.Digest) return Boolean is
-   begin
-      if Left'Length /= 16 then
-         return False;
-      end if;
-      for I in 1 .. 16 loop
-         if Left (Left'First + I - 1) /= Right (I) then
-            return False;
-         end if;
-      end loop;
-      return True;
-   end Same_UUID;
-
-   procedure Append (W : in out Protocol.Buffer.Writer; Framed : Protocol.Buffer.Writer) is
-   begin
-      if Framed.Failed then
-         W.Failed := True;
-         return;
-      end if;
-      Protocol.Buffer.Put_Bytes (W, Framed.Data (1 .. Framed.Len));
-   end Append;
-
-   procedure Disconnect
-     (W : in out Protocol.Buffer.Writer; Reason : String; Close_Now : out Boolean)
-   is
-      Body_W : Protocol.Buffer.Writer (512);
-      Framed : Protocol.Buffer.Writer (640);
-   begin
-      Protocol.Packets.Encode_Login_Disconnect (Body_W, Reason);
-      if Protocol.Packets.Frame (Framed, Body_W) then
-         Append (W, Framed);
-      else
-         W.Failed := True;
-      end if;
-      Close_Now := True;
-   end Disconnect;
-
    procedure Ingest
      (S         : in out Session;
       Incoming  : Protocol.Octets;
@@ -131,8 +94,14 @@ package body Adacraft.Ingress is
          end if;
 
          declare
+            --  Decode_Frame splits the frame body into Packet_Id plus the
+            --  payload after it. The exchanges take the whole body
+            --  (ID byte(s) followed by payload), so re-anchor at the
+            --  body start: Next - Declared_Length.
+            Body_First : constant Positive :=
+              Frame.Next - Frame.Declared_Length;
             Packet : constant Protocol.Octets :=
-              Incoming (Frame.Payload_First .. Frame.Payload_Last);
+              Incoming (Body_First .. Frame.Payload_Last);
          begin
             case S.State is
                when Protocol.State.Handshake =>
@@ -175,39 +144,9 @@ package body Adacraft.Ingress is
                      end case;
                   end;
 
-               when Protocol.State.Login =>
-                  if Packet'Length = 0
-                    or else Natural (Packet (Packet'First)) /=
-                      Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Login_Hello)
-                  then
-                     Close_Now := True;
-                  elsif Packet'Length = 1 then
-                     Disconnect (Outgoing, "Malformed login", Close_Now);
-                  else
-                     declare
-                        Payload : constant Protocol.Octets :=
-                          Packet (Packet'First + 1 .. Packet'Last);
-                        Hello : constant Protocol.Packets.Login_Hello :=
-                          Protocol.Packets.Decode_Login_Hello (Payload);
-                        Expected : Auth.Digest;
-                     begin
-                        if Hello.Status /= Protocol.Ok then
-                           Disconnect (Outgoing, "Malformed login", Close_Now);
-                        else
-                           Expected := Auth.Offline_UUID (Hello.Name (1 .. Hello.Name_Len));
-                           if not Same_UUID (Hello.Uuid, Expected) then
-                              Disconnect (Outgoing, "Offline UUID does not match the player name", Close_Now);
-                           else
-                              Disconnect
-                                (Outgoing,
-                                 "AdaCraft accepted the offline identity; play is not in this build",
-                                 Close_Now);
-                           end if;
-                        end if;
-                     end;
-                  end if;
-
                when others =>
+                  --  Login/Configuration/Play belong to #122 and later:
+                  --  silent close, no response, no state change.
                   Close_Now := True;
             end case;
          end;

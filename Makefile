@@ -1,5 +1,5 @@
 GNATMAKE ?= gnatmake
-SRC := -Igenerated -Isrc -Isrc/protocol -Isrc/kernel -Isrc/auth -Isrc/ingress -Isrc/network
+SRC := -Igenerated -Isrc -Isrc/protocol -Isrc/kernel -Isrc/auth -Isrc/ingress -Isrc/network -Isrc/ai -Isrc/blocks -Isrc/chunks -Isrc/commands -Isrc/diagnostics -Isrc/entities -Isrc/extensions -Isrc/fluids -Isrc/inventory -Isrc/lighting -Isrc/persistence -Isrc/physics -Isrc/players -Isrc/redstone -Isrc/scheduler -Isrc/world
 FLAGS := -gnat2022 -gnata -D obj
 
 .PHONY: all test server clean check check-packets-table

@@ -1,6 +1,10 @@
 with Ada.Command_Line;
+with Ada.Directories;
+with Ada.Streams.Stream_IO;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
+with Adacraft.Corpus;
+with Adacraft.Corpus.Loader;
 with Adacraft.Protocol.State;
 
 procedure Differential_Main is
@@ -31,6 +35,7 @@ procedure Differential_Main is
    pragma Unreferenced (Observation);
 
    Usage_Error : exception;
+   Setup_Error : exception;
 
    Default_Timeout_Ms : constant := 5_000;
 
@@ -161,14 +166,84 @@ procedure Differential_Main is
       end loop;
    end Parse_Arguments;
 
+   procedure Fail (Msg : String) is
+   begin
+      Ada.Text_IO.Put_Line (Ada.Text_IO.Standard_Error, Msg);
+      raise Setup_Error;
+   end Fail;
+
+   --  Loads and validates one #119 scenario; returns its output name.
+   function Load_Scenario (Path : String) return String is
+      use Ada.Streams.Stream_IO;
+      F    : File_Type;
+      Size : Natural := 0;
+   begin
+      if not Ada.Directories.Exists (Path)
+        or else Ada.Directories.Kind (Path) /= Ada.Directories.Ordinary_File
+      then
+         Fail ("error: scenario not found or not a file: " & Path);
+      end if;
+      declare
+         Sz : constant Ada.Directories.File_Size := Ada.Directories.Size (Path);
+      begin
+         if Sz = 0 then
+            Fail ("error: scenario is empty: " & Path);
+         elsif Sz > Adacraft.Corpus.Max_File_Size then
+            Fail ("error: scenario too large: " & Path);
+         end if;
+         Size := Natural (Sz);
+      end;
+      begin
+         Open (F, In_File, Path);
+      exception
+         when others =>
+            Fail ("error: cannot open scenario: " & Path);
+      end;
+      declare
+         Text : String (1 .. Size);
+         Errs : Adacraft.Corpus.Error_Vectors.Vector;
+         S    : Adacraft.Corpus.Scenario;
+         Ok   : Boolean;
+      begin
+         begin
+            String'Read (Stream (F), Text);
+         exception
+            when others =>
+               Close (F);
+               Fail ("error: cannot read scenario: " & Path);
+         end;
+         Close (F);
+         Ok := Adacraft.Corpus.Loader.Parse (Text, Path, S, Errs);
+         if not Ok then
+            for E of Errs loop
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "error: " & Adacraft.Corpus.Loader.Format_Error (E));
+            end loop;
+            raise Setup_Error;
+         end if;
+         if Length (S.Id) > 0 then
+            return To_String (S.Id);
+         end if;
+         return Ada.Directories.Base_Name (Path);
+      end;
+   end Load_Scenario;
+
 begin
    Parse_Arguments;
-   --  Temporary stub loop: no network I/O yet.
+   --  Validate every scenario up front; no network I/O yet.
    for J in First_Scen .. Ada.Command_Line.Argument_Count loop
-      null;
+      declare
+         Name : constant String := Load_Scenario (Ada.Command_Line.Argument (J));
+         pragma Unreferenced (Name);
+      begin
+         null;
+      end;
    end loop;
    Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Success);
 exception
+   when Setup_Error =>
+      Ada.Command_Line.Set_Exit_Status (2);
    when Usage_Error =>
       Usage;
       Ada.Command_Line.Set_Exit_Status (2);

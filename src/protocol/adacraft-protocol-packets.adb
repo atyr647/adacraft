@@ -99,7 +99,7 @@ package body Adacraft.Protocol.Packets is
    end Touch_Frame_Max;
 
    function Decode
-     (Body   : Byte_Array;
+     (Raw : Byte_Array;
       Layout : Field_Kind_Array) return Decode_Result
    is
       use type Interfaces.Integer_32;
@@ -120,18 +120,18 @@ package body Adacraft.Protocol.Packets is
          R := (Ok => False, Err => E);
       end Fail;
    begin
-      if Body'Length = 0 then
+      if Raw'Length = 0 then
          return (Ok => False, Err => Truncated);
       end if;
-      if Body'Length > Adacraft.Protocol.Frame.Max_Frame_Body_Length then
+      if Raw'Length > Adacraft.Protocol.Frame.Max_Frame_Body_Length then
          return (Ok => False, Err => Invalid_Field_Value);
       end if;
       if Layout'Length > Max_Decode_Fields then
          return (Ok => False, Err => Invalid_Field_Value);
       end if;
 
-      Pos := Body'First;
-      Last := Body'First + Body'Length - 1;
+      Pos := Raw'First;
+      Last := Raw'First + Raw'Length - 1;
 
       --  Packet ID via Varnum VarInt.
       declare
@@ -139,10 +139,10 @@ package body Adacraft.Protocol.Packets is
          C : Natural := 0;
          S : Varnum.Status_Type := Varnum.Truncated;
       begin
-         if Pos < Body'First or else Pos > Last then
+         if Pos < Raw'First or else Pos > Last then
             return (Ok => False, Err => Truncated);
          end if;
-         Varnum.Decode (Body, Pos, V, C, S);
+         Varnum.Decode (Raw, Pos, V, C, S);
          case S is
             when Varnum.Ok =>
                null;
@@ -171,9 +171,9 @@ package body Adacraft.Protocol.Packets is
                   if Pos > Last then
                      return (Ok => False, Err => Truncated);
                   end if;
-                  if Body (Pos) = 16#00# then
+                  if Raw (Pos) = 16#00# then
                      Ok_Res.Fields (I) := (Kind => K_Boolean, B => False);
-                  elsif Body (Pos) = 16#01# then
+                  elsif Raw (Pos) = 16#01# then
                      Ok_Res.Fields (I) := (Kind => K_Boolean, B => True);
                   else
                      return (Ok => False, Err => Invalid_Field_Value);
@@ -183,7 +183,7 @@ package body Adacraft.Protocol.Packets is
                   if Pos > Last then
                      return (Ok => False, Err => Truncated);
                   end if;
-                  Ok_Res.Fields (I) := (Kind => K_Byte, Y => Body (Pos));
+                  Ok_Res.Fields (I) := (Kind => K_Byte, Y => Raw (Pos));
                   Pos := Pos + 1;
                when K_Int =>
                   if Remaining < 4 then
@@ -192,12 +192,12 @@ package body Adacraft.Protocol.Packets is
                   declare
                      U : Interfaces.Unsigned_32 :=
                        Interfaces.Shift_Left
-                         (Interfaces.Unsigned_32 (Body (Pos)), 24)
+                         (Interfaces.Unsigned_32 (Raw (Pos)), 24)
                        or Interfaces.Shift_Left
-                         (Interfaces.Unsigned_32 (Body (Pos + 1)), 16)
+                         (Interfaces.Unsigned_32 (Raw (Pos + 1)), 16)
                        or Interfaces.Shift_Left
-                         (Interfaces.Unsigned_32 (Body (Pos + 2)), 8)
-                       or Interfaces.Unsigned_32 (Body (Pos + 3));
+                         (Interfaces.Unsigned_32 (Raw (Pos + 2)), 8)
+                       or Interfaces.Unsigned_32 (Raw (Pos + 3));
                      Sv : Interfaces.Integer_32;
                   begin
                      if U >= 2 ** 31 then
@@ -216,20 +216,20 @@ package body Adacraft.Protocol.Packets is
                   declare
                      U : Interfaces.Unsigned_64 :=
                        Interfaces.Shift_Left
-                         (Interfaces.Unsigned_64 (Body (Pos)), 56)
+                         (Interfaces.Unsigned_64 (Raw (Pos)), 56)
                        or Interfaces.Shift_Left
-                         (Interfaces.Unsigned_64 (Body (Pos + 1)), 48)
+                         (Interfaces.Unsigned_64 (Raw (Pos + 1)), 48)
                        or Interfaces.Shift_Left
-                         (Interfaces.Unsigned_64 (Body (Pos + 2)), 40)
+                         (Interfaces.Unsigned_64 (Raw (Pos + 2)), 40)
                        or Interfaces.Shift_Left
-                         (Interfaces.Unsigned_64 (Body (Pos + 3)), 32)
+                         (Interfaces.Unsigned_64 (Raw (Pos + 3)), 32)
                        or Interfaces.Shift_Left
-                         (Interfaces.Unsigned_64 (Body (Pos + 4)), 24)
+                         (Interfaces.Unsigned_64 (Raw (Pos + 4)), 24)
                        or Interfaces.Shift_Left
-                         (Interfaces.Unsigned_64 (Body (Pos + 5)), 16)
+                         (Interfaces.Unsigned_64 (Raw (Pos + 5)), 16)
                        or Interfaces.Shift_Left
-                         (Interfaces.Unsigned_64 (Body (Pos + 6)), 8)
-                       or Interfaces.Unsigned_64 (Body (Pos + 7));
+                         (Interfaces.Unsigned_64 (Raw (Pos + 6)), 8)
+                       or Interfaces.Unsigned_64 (Raw (Pos + 7));
                      Sv : Interfaces.Integer_64;
                   begin
                      if U >= 2 ** 63 then
@@ -250,7 +250,7 @@ package body Adacraft.Protocol.Packets is
                      if Pos > Last then
                         return (Ok => False, Err => Truncated);
                      end if;
-                     Varnum.Decode (Body, Pos, V, C, S);
+                     Varnum.Decode (Raw, Pos, V, C, S);
                      case S is
                         when Varnum.Ok =>
                            null;
@@ -273,7 +273,7 @@ package body Adacraft.Protocol.Packets is
                      if Pos > Last then
                         return (Ok => False, Err => Truncated);
                      end if;
-                     Varnum.Decode_Varlong (Body, Pos, V, C, S);
+                     Varnum.Decode_Varlong (Raw, Pos, V, C, S);
                      case S is
                         when Varnum.Ok =>
                            null;
@@ -296,7 +296,7 @@ package body Adacraft.Protocol.Packets is
                      if Pos > Last then
                         return (Ok => False, Err => Truncated);
                      end if;
-                     Varnum.Decode (Body, Pos, L32, C, S);
+                     Varnum.Decode (Raw, Pos, L32, C, S);
                      case S is
                         when Varnum.Ok =>
                            null;
@@ -325,7 +325,7 @@ package body Adacraft.Protocol.Packets is
                            S_Data => (others => ' '));
                         for J in 1 .. L loop
                            Ok_Res.Fields (I).S_Data (J) :=
-                             Character'Val (Natural (Body (Pos + J - 1)));
+                             Character'Val (Natural (Raw (Pos + J - 1)));
                         end loop;
                         Pos := Pos + L;
                      end;

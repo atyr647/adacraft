@@ -98,7 +98,7 @@ package Adacraft.Protocol.Packets is
    end record;
 
    function Decode
-     (Body   : Byte_Array;
+     (Raw    : Byte_Array;
       Layout : Field_Kind_Array) return Decode_Result;
    --  Single-pass decode of one already-delimited frame body against the
    --  caller-supplied ordered layout. Pure: no world/simulation/connection

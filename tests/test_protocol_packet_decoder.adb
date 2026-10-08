@@ -151,6 +151,416 @@ procedure Test_Protocol_Packet_Decoder is
       return L;
    end Single_Layout;
 
+   --  Pre-flight notes (ingress reasons, bounded change R1/R2 only):
+   --  * Constitution ingress authority: docs/constitution.txt sections 9
+   --    (Decode/Validate ingress flow), 16 (malformed-input rejection),
+   --    20 (bounded decoding; reject malformed or overlong; no unchecked
+   --    buffer access). No separate ingress reason table with distinct
+   --    enumerators was found in the constitution text.
+   --  * Decoder spec source of truth (A1): D.String_Max and D.Decode_Status
+   --    (Success, Rejected) names are used exactly. There is no
+   --    Rejection_Reason enumerator in
+   --    src/protocol/adacraft-protocol-packet_decoder.ads, so every
+   --    constitution malformed-input phrase maps to D.Rejected.
+   --    -- spelling: constitution "rejected/malformed" = spec Rejected (A2).
+   --    -- TODO(Q1): constitution has no per-reason enumerator table;
+   --    --   using closest existing reason Rejected; raised with owner.
+   --    --   Distinct empty/truncation/overlong/over-max/overrun reasons
+   --    --   belong to a later decoder-spec item; this item must not edit
+   --    --   the .ads.
+   --  * Varnum distinctness (read-only): V.Decode / V.Decode_Varlong report
+   --    Status_Type (Ok, Truncated, Overlong, Buffer_Too_Small); decoder body
+   --    maps any non-Ok locally to Rejected. Varnum is never touched (R12).
+   --  * String_Max unit (A5): decoder compares byte count
+   --    (Natural (Len_Val) vs String_Max); tests treat String_Max as bytes
+   --    here, matching the decoder's current comparison unit.
+
+   --  Shared rejection helper: every new malformed-input assertion checks
+   --  BOTH that decode failed with no packet value accepted (Status is
+   --  Rejected and Field_Count is 0) and the reported reason equals the
+   --  constitution ingress reason via the spec enumerator (here: Rejected).
+   --  A bare "failed" check alone does not count.
+   procedure Assert_Rejects
+     (Payload : Octets;
+      Layout  : D.Layout_Type;
+      Msg     : String)
+   is
+      Fields_P : Field_Array_Access := new D.Field_Array;
+      Pid : Interfaces.Integer_32 := 0;
+      Cnt : Natural := 0;
+      St  : D.Decode_Status := D.Success;
+   begin
+      D.Decode (Payload, Layout, Pid, Fields_P.all, Cnt, St);
+      Check (St = D.Rejected, Msg & " status is Rejected");
+      Check (Cnt = 0, Msg & " no packet accepted (Field_Count = 0)");
+   end Assert_Rejects;
+
+   --  R1: empty input. Zero-length buffer decode fails with the
+   --  constitution empty-input reason (= spec Rejected).
+   --  Per A4: zero-length reports the empty-input reason, not truncation,
+   --  so R2 loops below start at length 1. Constitution text states the
+   --  ingress flow Decode/Validate with malformed-input rejection but does
+   --  not define empty == truncation; asserting the empty-input reason
+   --  (Rejected) here with this comment records the A4 choice.
+   procedure Check_Empty_R1 is
+      Backing  : Scratch_Access := new Octets (1 .. 1);
+      Fields_P : Field_Array_Access := new D.Field_Array;
+      Pid : Interfaces.Integer_32 := 0;
+      Cnt : Natural := 999;
+      St  : D.Decode_Status := D.Success;
+      L   : D.Layout_Type := Single_Layout (D.VarInt);
+   begin
+      Backing.all (1) := 16#00#;
+      --  Null slice has Length 0; decoder returns Rejected on Length = 0.
+      D.Decode (Backing.all (2 .. 1), L, Pid, Fields_P.all, Cnt, St);
+      Check (St = D.Rejected, "R1 empty status is Rejected");
+      Check (Cnt = 0, "R1 empty no packet accepted (Field_Count = 0)");
+   end Check_Empty_R1;
+
+   --  R2 helper: every strict prefix 1 .. N-1 of a valid packet must fail
+   --  with the truncation reason (= spec Rejected). Loop, not samples.
+   procedure Check_Prefixes_Truncated
+     (Full   : Octets;
+      Layout : D.Layout_Type;
+      Name   : String)
+   is
+      Fields_P : Field_Array_Access := new D.Field_Array;
+      Pid : Interfaces.Integer_32 := 0;
+      Cnt : Natural := 0;
+      St  : D.Decode_Status := D.Success;
+      N   : constant Natural := Full'Length;
+   begin
+      Check (N >= 2, Name & " full packet length >= 2 for prefix loop");
+      --  Sanity: full packet itself must decode successfully.
+      D.Decode (Full, Layout, Pid, Fields_P.all, Cnt, St);
+      Check (St = D.Success, Name & " full packet status Success");
+      if N >= 2 then
+         for L in 1 .. N - 1 loop
+            Assert_Rejects
+              (Payload => Full (Full'First .. Full'First + L - 1),
+               Layout  => Layout,
+               Msg     => Name & " truncated prefix len" & Natural'Image (L));
+         end loop;
+      end if;
+   end Check_Prefixes_Truncated;
+
+   --  R2: one valid encoded packet per supported field kind (all 10
+   --  D.Field_Kind enumerators found in the decoder body: VarInt, VarLong,
+   --  String, Boolean, Byte, Unsigned_Byte, Short, Unsigned_Short, Int,
+   --  Long). Each vector of length N is decoded at every L in 1 .. N-1.
+   procedure Check_Truncated_R2 is
+      Buf_Ptr : Scratch_Access := new Octets (1 .. 64);
+      Pos : Positive;
+      N : Natural;
+   begin
+      --  VarInt field.
+      Pos := 1;
+      Append_VarInt (7, Buf_Ptr.all, Pos);
+      Append_VarInt (-12_345, Buf_Ptr.all, Pos);
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.VarInt), "R2 varint");
+      --  VarLong field.
+      Pos := 1;
+      Append_VarInt (7, Buf_Ptr.all, Pos);
+      Append_VarLong (-9_876_543_210, Buf_Ptr.all, Pos);
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.VarLong), "R2 varlong");
+      --  String field (small, in-range).
+      Pos := 1;
+      Append_VarInt (5, Buf_Ptr.all, Pos);
+      Append_VarInt (3, Buf_Ptr.all, Pos);
+      Append_Byte (Buf_Ptr.all, Pos, 16#68#);
+      Append_Byte (Buf_Ptr.all, Pos, 16#69#);
+      Append_Byte (Buf_Ptr.all, Pos, 16#21#);
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.String), "R2 string");
+      --  Boolean field.
+      Pos := 1;
+      Append_VarInt (3, Buf_Ptr.all, Pos);
+      Append_Byte (Buf_Ptr.all, Pos, 16#01#);
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.Boolean), "R2 boolean");
+      --  Byte field.
+      Pos := 1;
+      Append_VarInt (11, Buf_Ptr.all, Pos);
+      Append_Byte (Buf_Ptr.all, Pos, To_U8 (-12));
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.Byte), "R2 byte");
+      --  Unsigned_Byte field.
+      Pos := 1;
+      Append_VarInt (11, Buf_Ptr.all, Pos);
+      Append_Byte (Buf_Ptr.all, Pos, 200);
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.Unsigned_Byte),
+         "R2 unsigned_byte");
+      --  Short field.
+      Pos := 1;
+      Append_VarInt (11, Buf_Ptr.all, Pos);
+      Append_U16BE (Buf_Ptr.all, Pos, To_U16 (-12_345));
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.Short), "R2 short");
+      --  Unsigned_Short field.
+      Pos := 1;
+      Append_VarInt (11, Buf_Ptr.all, Pos);
+      Append_U16BE (Buf_Ptr.all, Pos, 60_000);
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.Unsigned_Short),
+         "R2 unsigned_short");
+      --  Int field.
+      Pos := 1;
+      Append_VarInt (11, Buf_Ptr.all, Pos);
+      Append_U32BE (Buf_Ptr.all, Pos, To_U32 (-123_456_789));
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.Int), "R2 int");
+      --  Long field.
+      Pos := 1;
+      Append_VarInt (11, Buf_Ptr.all, Pos);
+      Append_U64BE (Buf_Ptr.all, Pos, To_U64 (-123_456_789_012_345_678));
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.Long), "R2 long");
+   end Check_Truncated_R2;
+
+   --  R3: overlong VarInt (6 bytes, continuation bit still set on byte 5).
+   --  Per A3: input ending inside a VarInt under the 5-byte limit is
+   --  truncation; once the limit is exceeded it is overlong whatever
+   --  follows, unless the constitution says otherwise. Constitution
+   --  ingress authority demands rejection of malformed/overlong input
+   --  (see pre-flight notes); spec enumerator Rejected used (A2, Q1 TODO
+   --  above). No decoder/spec edits; each case checks fail plus reason
+   --  via Assert_Rejects.
+   procedure Check_Overlong_VarInt_R3 is
+      Overlong : constant Octets (1 .. 6) :=
+        (16#80#, 16#80#, 16#80#, 16#80#, 16#80#, 16#00#);
+      Empty_Layout : D.Layout_Type;
+      Buf_Ptr : Scratch_Access := new Octets (1 .. 16);
+   begin
+      --  Case A: overlong sequence as packet-ID at offset 0.
+      Assert_Rejects
+        (Payload => Overlong,
+         Layout  => Empty_Layout,
+         Msg     => "R3 overlong varint as packet id");
+      --  Case B: overlong sequence as VarInt field after a valid ID.
+      Buf_Ptr.all (1) := 16#07#;
+      for I in Overlong'Range loop
+         Buf_Ptr.all (1 + I) := Overlong (I);
+      end loop;
+      Assert_Rejects
+        (Payload => Buf_Ptr.all (1 .. 7),
+         Layout  => Single_Layout (D.VarInt),
+         Msg     => "R3 overlong varint as field");
+   end Check_Overlong_VarInt_R3;
+
+   --  R4: overlong VarLong (11 bytes, continuation bit still set on
+   --  byte 10). Per A3 limit rule as above; asserts the overlong reason
+   --  (= spec Rejected) with fail-plus-reason checks only.
+   procedure Check_Overlong_VarLong_R4 is
+      Overlong : constant Octets (1 .. 11) :=
+        (16#80#, 16#80#, 16#80#, 16#80#, 16#80#, 16#80#,
+         16#80#, 16#80#, 16#80#, 16#80#, 16#00#);
+      Buf_Ptr : Scratch_Access := new Octets (1 .. 16);
+   begin
+      Buf_Ptr.all (1) := 16#07#;
+      for I in Overlong'Range loop
+         Buf_Ptr.all (1 + I) := Overlong (I);
+      end loop;
+      Assert_Rejects
+        (Payload => Buf_Ptr.all (1 .. 12),
+         Layout  => Single_Layout (D.VarLong),
+         Msg     => "R4 overlong varlong as field");
+   end Check_Overlong_VarLong_R4;
+
+   --  R5: negative string length prefix decoding to -1
+   --  (bytes FF FF FF FF 0F). Constitution ingress authority (sections 16
+   --  malformed-input rejection, 20 bounded decoding) demands rejection;
+   --  spec enumerator Rejected used.
+   --  -- spelling: constitution "negative length / malformed" = spec
+   --  --   Rejected (A2).
+   --  -- TODO(Q1): constitution has no per-reason enumerator table; using
+   --  --   closest existing reason Rejected; raised with owner. Do not edit
+   --  --   the .ads.
+   procedure Check_Negative_Len_R5 is
+      Buf_Ptr : Scratch_Access := new Octets (1 .. 16);
+      Pos : Positive := 1;
+   begin
+      --  Packet ID 5, then VarInt(-1) = FF FF FF FF 0F.
+      Append_VarInt (5, Buf_Ptr.all, Pos);
+      Buf_Ptr.all (Pos) := 16#FF#;
+      Buf_Ptr.all (Pos + 1) := 16#FF#;
+      Buf_Ptr.all (Pos + 2) := 16#FF#;
+      Buf_Ptr.all (Pos + 3) := 16#FF#;
+      Buf_Ptr.all (Pos + 4) := 16#0F#;
+      Pos := Pos + 5;
+      Assert_Rejects
+        (Payload => Buf_Ptr.all (1 .. Pos - 1),
+         Layout  => Single_Layout (D.String),
+         Msg     => "R5 negative string len -1");
+   end Check_Negative_Len_R5;
+
+   --  R6: over-maximum string length (String_Max + 1) plus boundary
+   --  (exactly String_Max) guard. Constitution ingress authority demands
+   --  rejection of the over-maximum length; spec enumerator Rejected used
+   --  (A2 spelling + Q1 TODO as in R5 above).
+   --  String_Max unit (A5): the constitution states no byte-vs-char unit
+   --  for String_Max, so tests use the decoder's current comparison unit,
+   --  which is bytes (Natural (Len_Val) vs String_Max in the decoder
+   --  body). Boundary below therefore sends exactly String_Max payload
+   --  bytes and expects Success (not rejected for length), guarding the
+   --  off-by-one.
+   procedure Check_Over_Max_R6 is
+      Over_Ptr : Scratch_Access := new Octets (1 .. 16);
+      Pos : Positive := 1;
+      Total : constant Positive := 1 + 5 + D.String_Max + 8;
+      Buf_Ptr : Scratch_Access := new Octets (1 .. Total);
+      Fields_P : Field_Array_Access := new D.Field_Array;
+      BPos : Positive := 1;
+      Pid : Interfaces.Integer_32 := 0;
+      Cnt : Natural := 0;
+      St  : D.Decode_Status := D.Rejected;
+      Same : Boolean := True;
+   begin
+      --  Over-max: ID + VarInt (String_Max + 1); no payload needed since
+      --  the decoder rejects on the length comparison before bounds.
+      Append_VarInt (9, Over_Ptr.all, Pos);
+      Append_VarInt
+        (Interfaces.Integer_32 (D.String_Max) + 1, Over_Ptr.all, Pos);
+      Assert_Rejects
+        (Payload => Over_Ptr.all (1 .. Pos - 1),
+         Layout  => Single_Layout (D.String),
+         Msg     => "R6 string len String_Max+1 over-max");
+      --  Boundary: exactly String_Max payload bytes must NOT be rejected
+      --  for length; full valid packet decodes successfully.
+      Append_VarInt (9, Buf_Ptr.all, BPos);
+      Append_VarInt (Interfaces.Integer_32 (D.String_Max), Buf_Ptr.all, BPos);
+      for I in 1 .. D.String_Max loop
+         Buf_Ptr.all (BPos) := 16#41#;
+         BPos := BPos + 1;
+      end loop;
+      D.Decode (Buf_Ptr.all (1 .. BPos - 1), Single_Layout (D.String),
+                Pid, Fields_P.all, Cnt, St);
+      Check (St = D.Success, "R6 string len String_Max boundary success");
+      Check (Cnt = 1, "R6 string len String_Max boundary count");
+      if St = D.Success and then Cnt = 1 then
+         Check (Fields_P.all (1).String_Len = D.String_Max,
+                "R6 string len String_Max boundary len");
+         for I in 1 .. D.String_Max loop
+            if Fields_P.all (1).String_Data (I) /= 16#41# then
+               Same := False;
+               exit;
+            end if;
+         end loop;
+         Check (Same, "R6 string len String_Max boundary bytes");
+      end if;
+   end Check_Over_Max_R6;
+
+   --  R7: string overrun -- in-range length larger than remaining bytes.
+   --  Uses min (String_Max, 16) = 16 with a short tail. Constitution
+   --  demands a reason distinct from R5 (negative) / R6 (over-max);
+   --  spec enumerator Rejected used (A2 spelling + Q1 TODO as in R5).
+   procedure Check_Overrun_R7 is
+      Buf_Ptr : Scratch_Access := new Octets (1 .. 32);
+      Pos : Positive := 1;
+      Want : constant Interfaces.Integer_32 := 16;
+   begin
+      Append_VarInt (5, Buf_Ptr.all, Pos);
+      Append_VarInt (Want, Buf_Ptr.all, Pos);
+      --  Short tail: only 5 payload bytes, fewer than the 16 declared.
+      for I in 1 .. 5 loop
+         Buf_Ptr.all (Pos) := 16#42#;
+         Pos := Pos + 1;
+      end loop;
+      Assert_Rejects
+        (Payload => Buf_Ptr.all (1 .. Pos - 1),
+         Layout  => Single_Layout (D.String),
+         Msg     => "R7 string overrun in-range len exceeds tail");
+   end Check_Overrun_R7;
+
+   --  R8: invalid boolean -- bytes 16#02# and 16#FF# (plus a few other
+   --  non-00/01 values) fail with the invalid-boolean reason.
+   --  Constitution ingress authority (malformed-input rejection, bounded
+   --  decoding; see pre-flight notes) demands rejection of anything other
+   --  than 16#00# / 16#01#; spec enumerator Rejected used.
+   --  -- spelling: constitution "invalid boolean / malformed" = spec
+   --  --   Rejected (A2).
+   --  -- TODO(Q1): constitution has no per-reason enumerator table; using
+   --  --   closest existing reason Rejected; raised with owner. Do not edit
+   --  --   the .ads.
+   --  Every case checks BOTH decode failure and the reason via
+   --  Assert_Rejects; a bare "failed" check does not count.
+   procedure Check_Invalid_Bool_R8 is
+      Extra_Vals : constant Octets (1 .. 4) := (16#03#, 16#7F#, 16#80#, 16#FE#);
+      Buf_Ptr : Scratch_Access := new Octets (1 .. 16);
+      Pos : Positive;
+   begin
+      --  Required cases: 16#02# and 16#FF#.
+      Pos := 1;
+      Append_VarInt (3, Buf_Ptr.all, Pos);
+      Append_Byte (Buf_Ptr.all, Pos, 16#02#);
+      Assert_Rejects
+        (Payload => Buf_Ptr.all (1 .. Pos - 1),
+         Layout  => Single_Layout (D.Boolean),
+         Msg     => "R8 invalid boolean 16#02#");
+      Pos := 1;
+      Append_VarInt (3, Buf_Ptr.all, Pos);
+      Append_Byte (Buf_Ptr.all, Pos, 16#FF#);
+      Assert_Rejects
+        (Payload => Buf_Ptr.all (1 .. Pos - 1),
+         Layout  => Single_Layout (D.Boolean),
+         Msg     => "R8 invalid boolean 16#FF#");
+      --  Optional: prove nothing else outside 16#00#/16#01# is accepted.
+      for I in Extra_Vals'Range loop
+         Pos := 1;
+         Append_VarInt (3, Buf_Ptr.all, Pos);
+         Append_Byte (Buf_Ptr.all, Pos, Extra_Vals (I));
+         Assert_Rejects
+           (Payload => Buf_Ptr.all (1 .. Pos - 1),
+            Layout  => Single_Layout (D.Boolean),
+            Msg     => "R8 invalid boolean other" &
+              Natural'Image (Natural (Extra_Vals (I))));
+      end loop;
+   end Check_Invalid_Bool_R8;
+
+   --  R9: trailing bytes -- a fully valid packet P (1 .. N) plus one extra
+   --  16#00# byte, and one case with 2-3 extra bytes, fail with the
+   --  trailing-bytes reason. Constitution ingress authority demands
+   --  rejection of trailing bytes; spec enumerator Rejected used
+   --  (A2 spelling + Q1 TODO as in R8 above).
+   --  Every case checks BOTH decode failure and the reason via
+   --  Assert_Rejects.
+   procedure Check_Trailing_R9 is
+      Buf_Ptr : Scratch_Access := new Octets (1 .. 32);
+      Pos : Positive := 1;
+      N : Natural;
+   begin
+      --  Build valid packet P: ID 7 + VarInt field value 300.
+      Append_VarInt (7, Buf_Ptr.all, Pos);
+      Append_VarInt (300, Buf_Ptr.all, Pos);
+      N := Pos - 1;
+      --  Case A: P plus one extra 16#00# byte.
+      Buf_Ptr.all (N + 1) := 16#00#;
+      Assert_Rejects
+        (Payload => Buf_Ptr.all (1 .. N + 1),
+         Layout  => Single_Layout (D.VarInt),
+         Msg     => "R9 trailing one extra byte");
+      --  Case B: P plus three extra bytes.
+      Buf_Ptr.all (N + 1) := 16#00#;
+      Buf_Ptr.all (N + 2) := 16#01#;
+      Buf_Ptr.all (N + 3) := 16#02#;
+      Assert_Rejects
+        (Payload => Buf_Ptr.all (1 .. N + 3),
+         Layout  => Single_Layout (D.VarInt),
+         Msg     => "R9 trailing three extra bytes");
+   end Check_Trailing_R9;
+
    procedure Check_VarInt (Value : Interfaces.Integer_32; Name : String) is
       Buf_Ptr : Scratch_Access := new Octets (1 .. 16);
       Fields_P : Field_Array_Access := new D.Field_Array;
@@ -472,6 +882,17 @@ procedure Test_Protocol_Packet_Decoder is
    end Check_Mixed;
 
 begin
+   Check_Empty_R1;
+   Check_Truncated_R2;
+   Check_Overlong_VarInt_R3;
+   Check_Overlong_VarLong_R4;
+   Check_Negative_Len_R5;
+   Check_Over_Max_R6;
+   Check_Overrun_R7;
+   Check_Invalid_Bool_R8;
+   Check_Trailing_R9;
+   Check_Invalid_Bool_R8;
+   Check_Trailing_R9;
    Check_VarInt (0, "varint 0");
    Check_VarInt (-1, "varint -1");
    Check_VarInt (Interfaces.Integer_32'First, "varint first");

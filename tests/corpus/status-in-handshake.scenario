@@ -1,7 +1,7 @@
 corpus_format: 1
 id: status-in-handshake
 title: Status packet in HANDSHAKE
-description: A status ping frame is rejected while the connection is in HANDSHAKE.
+description: A status ping frame is rejected while the connection is in HANDSHAKE; Close_No_Bytes with no response.
 category: status
 protocol: 777
 provenance: hand-authored
@@ -12,3 +12,4 @@ step:
   direction: serverbound
   input: 09 01 00 00 00 00 00 00 00 01
   outcome: rejected
+  rejection_category: packet_not_valid_in_state

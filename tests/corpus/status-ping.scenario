@@ -1,7 +1,7 @@
 corpus_format: 1
 id: status-ping
 title: Status ping in STATUS
-description: A ping request is accepted and keeps the connection in STATUS.
+description: A ping request is accepted, emits one Pong Response echoing the payload, then the server closes the connection.
 category: status
 protocol: 777
 provenance: hand-authored
@@ -14,3 +14,4 @@ step:
   outcome: accepted
   packet_id: 0x01
   state_after: STATUS
+  canonical: true

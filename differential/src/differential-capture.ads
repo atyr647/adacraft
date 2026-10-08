@@ -3,6 +3,7 @@
 --  No socket/framing code here; no payload storage.
 
 with Ada.Containers.Vectors;
+with Interfaces;
 with Adacraft.Protocol;
 with Adacraft.Protocol.State;
 with Differential.Args;
@@ -10,6 +11,8 @@ with Differential.Transcript;
 
 package Differential.Capture is
    pragma Elaborate_Body;
+
+   use type Interfaces.Unsigned_8;
 
    package Octet_Vectors is new Ada.Containers.Vectors
      (Index_Type   => Positive,

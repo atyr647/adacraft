@@ -379,6 +379,100 @@ begin
          Enc.Decode (Neg_Id, Empty, R);
          Check (R.Status = Enc.Id_Out_Of_Range, "T5 negative id range");
       end;
+
+      --  T-6: length-prefixed string / byte-array cases.
+      --  Shipped #210 defines no string or byte-array kind and no
+      --  String_Max, so negative / over-remaining / over-max prefixes
+      --  cannot occur on the wire. The decoder reserves String_Too_Long
+      --  for that future kind; here we cover the neighbouring
+      --  Invalid_Length leg (bad Boolean tag) plus the presence of the
+      --  reserved status, so the suite still distinguishes Invalid
+      --  length per AC-8.
+      declare
+         Bad_Bool : constant Enc.Body_Bytes (0 .. 1) :=
+           (16#00#, 16#02#);
+         R : Enc.Decode_Result;
+      begin
+         Enc.Decode
+           (Bad_Bool, Enc.Layout_Array'(0 => Enc.Field_Boolean), R);
+         Check (R.Status = Enc.Invalid_Length, "T6 bad bool tag invalid");
+         Check (Enc.String_Too_Long /= Enc.Ok
+           and then Enc.String_Too_Long /= Enc.Invalid_Length,
+           "T6 string-too-long present");
+         Check (Enc.Invalid_Length /= Enc.Truncated, "T6 invalid distinct");
+      end;
+
+      --  T-7: invalid UTF-8 cases (lone continuation, truncated 2-byte
+      --  sequence, 0xF5+, surrogate ED A0).
+      --  No string kind is shipped, so raw bytes must NOT be UTF-8
+      --  validated: each of these bytes decodes cleanly as Field_Byte.
+      --  The Invalid_Utf8 status is reserved for a future string kind
+      --  and is checked present here.
+      declare
+         R : Enc.Decode_Result;
+         procedure Check_Byte_Ok (V : SE; Name : String) is
+            B : constant Enc.Body_Bytes (0 .. 1) := (16#00#, SE (V));
+         begin
+            Enc.Decode
+              (B, Enc.Layout_Array'(0 => Enc.Field_Byte), R);
+            Check (R.Status = Enc.Ok
+              and then R.Count = 1
+              and then R.Values (1).Kind = Enc.Field_Byte
+              and then R.Values (1).Byte_Val = SE (V), Name);
+         end Check_Byte_Ok;
+      begin
+         Check (Enc.Invalid_Utf8 /= Enc.Ok, "T7 status present");
+         Check_Byte_Ok (16#80#, "T7 lone continuation as byte");
+         Check_Byte_Ok (16#C2#, "T7 truncated seq lead as byte");
+         Check_Byte_Ok (16#F5#, "T7 0xF5 as byte");
+         Check_Byte_Ok (16#ED#, "T7 surrogate lead as byte");
+         Check_Byte_Ok (16#A0#, "T7 surrogate trail as byte");
+      end;
+
+      --  T-8: valid packet followed by one extra byte => Trailing_Bytes.
+      declare
+         Good_Plus : constant Enc.Body_Bytes (0 .. 2) :=
+           (16#00#, 16#01#, 16#FF#);
+         Exact : constant Enc.Body_Bytes (0 .. 1) := (16#00#, 16#01#);
+         R : Enc.Decode_Result;
+      begin
+         Enc.Decode
+           (Exact, Enc.Layout_Array'(0 => Enc.Field_Boolean), R);
+         Check (R.Status = Enc.Ok, "T8 exact ok");
+         Enc.Decode
+           (Good_Plus, Enc.Layout_Array'(0 => Enc.Field_Boolean), R);
+         Check (R.Status = Enc.Trailing_Bytes, "T8 trailing byte");
+         Enc.Decode
+           (Good_Plus, Enc.Layout_Array'(0 => Enc.Field_Byte), R);
+         Check (R.Status = Enc.Trailing_Bytes, "T8 trailing byte 2");
+      end;
+
+      --  T-9: exactly Max_Frame_Body_Length bytes decodes-or-clean
+      --  rejects with no exception / no unchecked access (single case,
+      --  no per-prefix loop). Body is ID 0 followed by 0x55 filler with
+      --  an empty layout, so the decoder must report Trailing_Bytes.
+      declare
+         use type Enc.Decode_Status;
+         Max_Len : constant Natural :=
+           Adacraft.Protocol.Frame.Max_Frame_Body_Length;
+         type Big_Access is access Enc.Body_Bytes;
+         procedure Free_Big is new Ada.Unchecked_Deallocation
+           (Enc.Body_Bytes, Big_Access);
+         Big : Big_Access;
+         Empty : constant Enc.Layout_Array (1 .. 0) :=
+           (others => Enc.Field_Boolean);
+         R : Enc.Decode_Result;
+      begin
+         Check (Max_Len = 2_097_151, "T9 max bound");
+         Big := new Enc.Body_Bytes (0 .. Max_Len - 1);
+         Big (0) := 16#00#;
+         for I in 1 .. Max_Len - 1 loop
+            Big (I) := 16#55#;
+         end loop;
+         Enc.Decode (Big.all, Empty, R);
+         Check (R.Status = Enc.Trailing_Bytes, "T9 max body trailing");
+         Free_Big (Big);
+      end;
    end;
 
    if Failures = 0 then

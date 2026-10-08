@@ -1,5 +1,6 @@
 with Ada.Streams;
 with Ada.Text_IO;
+with Ada.Unchecked_Deallocation;
 with Interfaces;
 with Adacraft.Protocol;
 with Adacraft.Protocol.Frame;
@@ -10,6 +11,8 @@ procedure Test_Protocol_Packet_Encoder is
    package Enc renames Adacraft.Protocol.Packet_Encoder;
    use type Ada.Streams.Stream_Element;
    use type Ada.Streams.Stream_Element_Offset;
+   use type Enc.Decode_Status;
+   use type Enc.Field_Kind;
    use type Interfaces.Integer_32;
    use type Interfaces.Integer_64;
 

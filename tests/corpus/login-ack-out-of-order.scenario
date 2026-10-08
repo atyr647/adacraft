@@ -1,0 +1,14 @@
+corpus_format: 1
+id: login-ack-out-of-order
+title: Login Acknowledged before Success is rejected
+description: An Acknowledged arriving in LOGIN with no Success first is rejected and state stays LOGIN.
+category: login
+protocol: 777
+provenance: hand-authored
+initial_state: LOGIN
+final_state: LOGIN
+
+step:
+  direction: serverbound
+  input: 01 03
+  outcome: rejected

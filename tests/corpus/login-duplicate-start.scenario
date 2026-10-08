@@ -1,0 +1,21 @@
+corpus_format: 1
+id: login-duplicate-start
+title: Duplicate Login Start is rejected
+description: A second Login Start after the first is rejected with no state change.
+category: login
+protocol: 777
+provenance: hand-authored
+initial_state: LOGIN
+final_state: LOGIN
+
+step:
+  direction: serverbound
+  input: 17 00 05 4E 6F 74 63 68 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  outcome: accepted
+  packet_id: 0x00
+  state_after: LOGIN
+
+step:
+  direction: serverbound
+  input: 17 00 05 4E 6F 74 63 68 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  outcome: rejected

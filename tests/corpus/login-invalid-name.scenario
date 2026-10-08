@@ -1,0 +1,14 @@
+corpus_format: 1
+id: login-invalid-name
+title: Login with invalid player name disconnects
+description: A Login Start carrying an invalid name is rejected with no Success sent.
+category: login
+protocol: 777
+provenance: hand-authored
+initial_state: LOGIN
+final_state: LOGIN
+
+step:
+  direction: serverbound
+  input: 1A 00 08 62 61 64 20 6E 61 6D 65 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  outcome: rejected

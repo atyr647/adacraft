@@ -207,11 +207,11 @@ package body Adacraft.Protocol.Packet_Encoder is
    end From_U64;
 
    procedure Decode
-     (Body   : in Body_Bytes;
+     (Body_Data : in Body_Bytes;
       Layout : in Layout_Array;
       Result : out Decode_Result)
    is
-      Len      : constant Natural := Natural (Body'Length);
+      Len      : constant Natural := Natural (Body_Data'Length);
       Pos      : Natural := 0;
       Id_Buf   : Adacraft.Protocol.Octets (1 .. 5) := (others => 0);
       Id_Take  : Natural;

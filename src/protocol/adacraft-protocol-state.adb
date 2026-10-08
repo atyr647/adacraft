@@ -45,6 +45,39 @@ is
          when Configuration              => Configuration,
          when Play                       => Play);
 
+   procedure Mark_Activity
+     (Context : in out Connection_Context;
+      Now     : Clock_Instant)
+   is
+   begin
+      Context.Last_Activity := Now;
+   end Mark_Activity;
+
+   procedure Store_Handshake
+     (Context          : in out Connection_Context;
+      Data             : Stored_Handshake_Data;
+      Next_State       : Connection_State;
+      Now              : Clock_Instant)
+   is
+   begin
+      Context.Stored_Handshake := Data;
+      Context.Has_Handshake := True;
+      Context.Current_State := Next_State;
+      Context.Last_Activity := Now;
+   end Store_Handshake;
+
+   function Is_Idle_Expired
+     (Context : Connection_Context;
+      Now     : Clock_Instant;
+      Timeout : Clock_Instant := Default_Idle_Timeout_Ms) return Boolean
+   is
+   begin
+      if Now < Context.Last_Activity then
+         return False;
+      end if;
+      return Now - Context.Last_Activity > Timeout;
+   end Is_Idle_Expired;
+
    function Reject
      (Current : Connection_State; R : Rejection_Reason)
       return Transition_Result

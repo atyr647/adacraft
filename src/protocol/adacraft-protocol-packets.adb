@@ -82,6 +82,19 @@ package body Adacraft.Protocol.Packets is
       return not W.Failed;
    end Frame;
 
+   function Is_Fully_Consumed (Payload : Octets; Next : Natural) return Boolean is
+   begin
+      if Payload'Length = 0 then
+         return Next = Payload'First;
+      end if;
+      return Next = Payload'Last + 1;
+   end Is_Fully_Consumed;
+
+   function Is_Empty_Payload (Payload : Octets) return Boolean is
+   begin
+      return Payload'Length = 0;
+   end Is_Empty_Payload;
+
    function Decode_Ping (Payload : Octets) return Ping is
    begin
       if not Buffer.U64_Ok (Payload, Payload'First) or else Payload'Length /= 8 then

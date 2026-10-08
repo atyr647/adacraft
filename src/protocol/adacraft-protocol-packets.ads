@@ -25,6 +25,19 @@ package Adacraft.Protocol.Packets is
       Value  : Interfaces.Unsigned_64 := 0;
    end record;
 
+   --  Exact-consumption foundation (Phase 2): after decoding any
+   --  serverbound packet, the payload cursor must equal the end of the
+   --  payload. Next is the cursor returned by the decoder (first
+   --  unconsumed index; Payload'Last + 1 when fully consumed).
+   --  This single check yields trailing-byte rejection on handshake,
+   --  empty-payload enforcement on Status Request, and exactly-8-bytes
+   --  on Ping Request.
+   function Is_Fully_Consumed (Payload : Octets; Next : Natural) return Boolean
+   with Global => null;
+
+   function Is_Empty_Payload (Payload : Octets) return Boolean
+   with Global => null;
+
    function Decode_Ping (Payload : Octets) return Ping;
 
    type Login_Hello is record

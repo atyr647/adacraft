@@ -4,6 +4,158 @@ with Ada.Text_IO;
 
 procedure Differential_Main is
 
+   package D_Defs is
+      --  Transcript types for semantic comparison.
+      --  Payload bytes are consumed for framing but never stored/compared.
+
+      type Outcome is
+        (Closed_By_Peer, Still_Open_At_End, Timeout, Connect_Failed,
+         Malformed_Input);
+
+      type Direction is (S2C);
+
+      Max_Entries  : constant := 1024;
+      Max_Name_Len : constant := 512;
+
+      type Entry is record
+         State : Natural := 0;
+         Dir   : Direction := S2C;
+         Id    : Natural := 0;
+      end record;
+
+      type Entries_Storage is array (1 .. Max_Entries) of Entry;
+
+      type Name_Storage is String (1 .. Max_Name_Len);
+
+      type Transcript is record
+         Count    : Natural range 0 .. Max_Entries := 0;
+         Entries  : Entries_Storage :=
+           (others => (State => 0, Dir => S2C, Id => 0));
+         Result   : Outcome := Still_Open_At_End;
+         Name_Len : Natural range 0 .. Max_Name_Len := 0;
+         Name     : Name_Storage := (others => ' ');
+      end record;
+
+      function Scenario_Name (T : Transcript) return String;
+      procedure Set_Scenario_Name (T : in out Transcript; S : String);
+      procedure Append (T : in out Transcript; E : Entry; Full : out Boolean);
+      function Get (T : Transcript; Index : Positive) return Entry;
+   end D_Defs;
+
+   package body D_Defs is
+      function Scenario_Name (T : Transcript) return String is
+      begin
+         if T.Name_Len = 0 then
+            return "";
+         end if;
+         return T.Name (1 .. T.Name_Len);
+      end Scenario_Name;
+
+      procedure Set_Scenario_Name (T : in out Transcript; S : String) is
+         N : constant Natural := Natural'Min (S'Length, Max_Name_Len);
+      begin
+         T.Name := (others => ' ');
+         T.Name_Len := N;
+         if N > 0 then
+            declare
+               J : Positive := 1;
+            begin
+               for I in S'Range loop
+                  exit when J > N;
+                  T.Name (J) := S (I);
+                  J := J + 1;
+               end loop;
+            end;
+         end if;
+      end Set_Scenario_Name;
+
+      procedure Append (T : in out Transcript; E : Entry; Full : out Boolean) is
+      begin
+         if T.Count >= Max_Entries then
+            Full := True;
+            return;
+         end if;
+         Full := False;
+         T.Count := T.Count + 1;
+         T.Entries (T.Count) := E;
+      end Append;
+
+      function Get (T : Transcript; Index : Positive) return Entry is
+      begin
+         if Index < 1 or else Index > T.Count then
+            raise Constraint_Error;
+         end if;
+         return T.Entries (Index);
+      end Get;
+   end D_Defs;
+
+   package D_Compare is
+      --  Pure semantic comparison: Entry sequence (State, Dir, Id) plus
+      --  terminal Outcome only. Payload is never stored so it cannot affect
+      --  the result. No side effects, no I/O, no exceptions on valid input.
+      function Equal (A, B : D_Defs.Transcript) return Boolean;
+      function First_Divergence_Index
+        (A, B : D_Defs.Transcript) return Natural;
+      --  0 means equal (same as Equal = True).
+      --  Otherwise 1-based index of first differing Entry; when Entries are
+      --  equal up to Min (Count) but Counts differ, returns Min + 1; when
+      --  Entries (including Count) are equal but Outcomes differ,
+      --  returns Count + 1.
+   end D_Compare;
+
+   package body D_Compare is
+      function Entries_Equal (A, B : D_Defs.Transcript) return Boolean is
+      begin
+         if A.Count /= B.Count then
+            return False;
+         end if;
+         for I in 1 .. A.Count loop
+            declare
+               EA : constant D_Defs.Entry := A.Entries (I);
+               EB : constant D_Defs.Entry := B.Entries (I);
+            begin
+               if EA.State /= EB.State or else EA.Dir /= EB.Dir
+                 or else EA.Id /= EB.Id
+               then
+                  return False;
+               end if;
+            end;
+         end loop;
+         return True;
+      end Entries_Equal;
+
+      function Equal (A, B : D_Defs.Transcript) return Boolean is
+      begin
+         return A.Result = B.Result and then Entries_Equal (A, B);
+      end Equal;
+
+      function First_Divergence_Index
+        (A, B : D_Defs.Transcript) return Natural
+      is
+         Min_Count : constant Natural := Natural'Min (A.Count, B.Count);
+      begin
+         for I in 1 .. Min_Count loop
+            declare
+               EA : constant D_Defs.Entry := A.Entries (I);
+               EB : constant D_Defs.Entry := B.Entries (I);
+            begin
+               if EA.State /= EB.State or else EA.Dir /= EB.Dir
+                 or else EA.Id /= EB.Id
+               then
+                  return I;
+               end if;
+            end;
+         end loop;
+         if A.Count /= B.Count then
+            return Min_Count + 1;
+         end if;
+         if A.Result /= B.Result then
+            return A.Count + 1;
+         end if;
+         return 0;
+      end First_Divergence_Index;
+   end D_Compare;
+
    package D_Args is
       Read_Timeout_Secs     : Natural := 5;
       Scenario_Timeout_Secs : Natural := 30;

@@ -456,22 +456,19 @@ begin
       --  no per-prefix loop). Body is ID 0 followed by 0x55 filler with
       --  an empty layout, so the decoder must report Trailing_Bytes.
       declare
-         use type Enc.Decode_Status;
          Max_Len : constant Natural :=
            Adacraft.Protocol.Frame.Max_Frame_Body_Length;
-         type Big_Access is access Enc.Body_Bytes;
-         Big : Big_Access;
          Empty : constant Enc.Layout_Array (1 .. 0) :=
            (others => Enc.Field_Boolean);
          R : Enc.Decode_Result;
+         Big : Enc.Body_Bytes (0 .. Max_Len - 1);
       begin
          Check (Max_Len = 2_097_151, "T9 max bound");
-         Big := new Enc.Body_Bytes (0 .. Max_Len - 1);
          Big (0) := 16#00#;
          for I in 1 .. Max_Len - 1 loop
             Big (I) := 16#55#;
          end loop;
-         Enc.Decode (Big.all, Empty, R);
+         Enc.Decode (Big, Empty, R);
          Check (R.Status = Enc.Trailing_Bytes, "T9 max body trailing");
       end;
    end;

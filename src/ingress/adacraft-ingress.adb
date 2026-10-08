@@ -103,42 +103,72 @@ package body Adacraft.Ingress is
             Packet : constant Protocol.Octets :=
               Incoming (Body_First .. Frame.Payload_Last);
          begin
+            --  Routing only: each exchange writes to its own scratch
+            --  writer so a later packet in the same Ingest call cannot
+            --  wipe bytes already queued in Outgoing, and a silent-close
+            --  rejection leaves earlier bytes untouched. Append to
+            --  Outgoing only on success via the Transition API path.
             case S.State is
                when Protocol.State.Handshake =>
                   declare
                      Disposition : Protocol.Handshake_Exchange.Disposition_Kind;
                      Client_Version : Natural;
+                     Scratch : Protocol.Buffer.Writer (16);
                   begin
                      Protocol.Handshake_Exchange.Handle
                        (Input => Packet,
                         Current_State => S.State,
                         Client_Version => Client_Version,
                         Disposition => Disposition,
-                        Output => Outgoing);
+                        Output => Scratch);
                      if Disposition =
                        Protocol.Handshake_Exchange.Silent_Close
+                       or else Scratch.Failed
                      then
                         Close_Now := True;
                      else
-                        S.Version := Client_Version;
+                        if Scratch.Len > 0 then
+                           Protocol.Buffer.Put_Bytes
+                             (Outgoing,
+                              Scratch.Data (1 .. Scratch.Len));
+                        end if;
+                        if Outgoing.Failed then
+                           Close_Now := True;
+                        else
+                           S.Version := Client_Version;
+                        end if;
                      end if;
                   end;
 
                when Protocol.State.Status =>
                   declare
                      Disposition : Protocol.Status_Exchange.Disposition_Kind;
+                     Scratch : Protocol.Buffer.Writer (1024);
                   begin
                      Protocol.Status_Exchange.Handle
                        (Input => Packet,
                         Current_State => S.State,
                         Status_Sent => S.Status_Sent,
                         Disposition => Disposition,
-                        Output => Outgoing);
+                        Output => Scratch);
                      case Disposition is
                         when Protocol.Status_Exchange.Progress =>
-                           null;
+                           Protocol.Buffer.Put_Bytes
+                             (Outgoing,
+                              Scratch.Data (1 .. Scratch.Len));
+                           if Outgoing.Failed or else Scratch.Failed then
+                              Outgoing.Failed := True;
+                              Close_Now := True;
+                           end if;
                         when Protocol.Status_Exchange.Close_After_Send =>
-                           Close_Now := True;
+                           if Scratch.Failed then
+                              Close_Now := True;
+                           else
+                              Protocol.Buffer.Put_Bytes
+                                (Outgoing,
+                                 Scratch.Data (1 .. Scratch.Len));
+                              Close_Now := True;
+                           end if;
                         when Protocol.Status_Exchange.Silent_Close =>
                            Close_Now := True;
                      end case;

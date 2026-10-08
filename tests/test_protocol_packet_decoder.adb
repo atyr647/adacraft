@@ -379,6 +379,111 @@ procedure Test_Protocol_Packet_Decoder is
          Msg     => "R4 overlong varlong as field");
    end Check_Overlong_VarLong_R4;
 
+   --  R5: negative string length prefix decoding to -1
+   --  (bytes FF FF FF FF 0F). Constitution ingress authority (sections 16
+   --  malformed-input rejection, 20 bounded decoding) demands rejection;
+   --  spec enumerator Rejected used.
+   --  -- spelling: constitution "negative length / malformed" = spec
+   --  --   Rejected (A2).
+   --  -- TODO(Q1): constitution has no per-reason enumerator table; using
+   --  --   closest existing reason Rejected; raised with owner. Do not edit
+   --  --   the .ads.
+   procedure Check_Negative_Len_R5 is
+      Buf_Ptr : Scratch_Access := new Octets (1 .. 16);
+      Pos : Positive := 1;
+   begin
+      --  Packet ID 5, then VarInt(-1) = FF FF FF FF 0F.
+      Append_VarInt (5, Buf_Ptr.all, Pos);
+      Buf_Ptr.all (Pos) := 16#FF#;
+      Buf_Ptr.all (Pos + 1) := 16#FF#;
+      Buf_Ptr.all (Pos + 2) := 16#FF#;
+      Buf_Ptr.all (Pos + 3) := 16#FF#;
+      Buf_Ptr.all (Pos + 4) := 16#0F#;
+      Pos := Pos + 5;
+      Assert_Rejects
+        (Payload => Buf_Ptr.all (1 .. Pos - 1),
+         Layout  => Single_Layout (D.String),
+         Msg     => "R5 negative string len -1");
+   end Check_Negative_Len_R5;
+
+   --  R6: over-maximum string length (String_Max + 1) plus boundary
+   --  (exactly String_Max) guard. Constitution ingress authority demands
+   --  rejection of the over-maximum length; spec enumerator Rejected used
+   --  (A2 spelling + Q1 TODO as in R5 above).
+   --  String_Max unit (A5): the constitution states no byte-vs-char unit
+   --  for String_Max, so tests use the decoder's current comparison unit,
+   --  which is bytes (Natural (Len_Val) vs String_Max in the decoder
+   --  body). Boundary below therefore sends exactly String_Max payload
+   --  bytes and expects Success (not rejected for length), guarding the
+   --  off-by-one.
+   procedure Check_Over_Max_R6 is
+      Over_Ptr : Scratch_Access := new Octets (1 .. 16);
+      Pos : Positive := 1;
+      Total : constant Positive := 1 + 5 + D.String_Max + 8;
+      Buf_Ptr : Scratch_Access := new Octets (1 .. Total);
+      Fields_P : Field_Array_Access := new D.Field_Array;
+      BPos : Positive := 1;
+      Pid : Interfaces.Integer_32 := 0;
+      Cnt : Natural := 0;
+      St  : D.Decode_Status := D.Rejected;
+      Same : Boolean := True;
+   begin
+      --  Over-max: ID + VarInt (String_Max + 1); no payload needed since
+      --  the decoder rejects on the length comparison before bounds.
+      Append_VarInt (9, Over_Ptr.all, Pos);
+      Append_VarInt
+        (Interfaces.Integer_32 (D.String_Max) + 1, Over_Ptr.all, Pos);
+      Assert_Rejects
+        (Payload => Over_Ptr.all (1 .. Pos - 1),
+         Layout  => Single_Layout (D.String),
+         Msg     => "R6 string len String_Max+1 over-max");
+      --  Boundary: exactly String_Max payload bytes must NOT be rejected
+      --  for length; full valid packet decodes successfully.
+      Append_VarInt (9, Buf_Ptr.all, BPos);
+      Append_VarInt (Interfaces.Integer_32 (D.String_Max), Buf_Ptr.all, BPos);
+      for I in 1 .. D.String_Max loop
+         Buf_Ptr.all (BPos) := 16#41#;
+         BPos := BPos + 1;
+      end loop;
+      D.Decode (Buf_Ptr.all (1 .. BPos - 1), Single_Layout (D.String),
+                Pid, Fields_P.all, Cnt, St);
+      Check (St = D.Success, "R6 string len String_Max boundary success");
+      Check (Cnt = 1, "R6 string len String_Max boundary count");
+      if St = D.Success and then Cnt = 1 then
+         Check (Fields_P.all (1).String_Len = D.String_Max,
+                "R6 string len String_Max boundary len");
+         for I in 1 .. D.String_Max loop
+            if Fields_P.all (1).String_Data (I) /= 16#41# then
+               Same := False;
+               exit;
+            end if;
+         end loop;
+         Check (Same, "R6 string len String_Max boundary bytes");
+      end if;
+   end Check_Over_Max_R6;
+
+   --  R7: string overrun -- in-range length larger than remaining bytes.
+   --  Uses min (String_Max, 16) = 16 with a short tail. Constitution
+   --  demands a reason distinct from R5 (negative) / R6 (over-max);
+   --  spec enumerator Rejected used (A2 spelling + Q1 TODO as in R5).
+   procedure Check_Overrun_R7 is
+      Buf_Ptr : Scratch_Access := new Octets (1 .. 32);
+      Pos : Positive := 1;
+      Want : constant Interfaces.Integer_32 := 16;
+   begin
+      Append_VarInt (5, Buf_Ptr.all, Pos);
+      Append_VarInt (Want, Buf_Ptr.all, Pos);
+      --  Short tail: only 5 payload bytes, fewer than the 16 declared.
+      for I in 1 .. 5 loop
+         Buf_Ptr.all (Pos) := 16#42#;
+         Pos := Pos + 1;
+      end loop;
+      Assert_Rejects
+        (Payload => Buf_Ptr.all (1 .. Pos - 1),
+         Layout  => Single_Layout (D.String),
+         Msg     => "R7 string overrun in-range len exceeds tail");
+   end Check_Overrun_R7;
+
    procedure Check_VarInt (Value : Interfaces.Integer_32; Name : String) is
       Buf_Ptr : Scratch_Access := new Octets (1 .. 16);
       Fields_P : Field_Array_Access := new D.Field_Array;
@@ -704,6 +809,9 @@ begin
    Check_Truncated_R2;
    Check_Overlong_VarInt_R3;
    Check_Overlong_VarLong_R4;
+   Check_Negative_Len_R5;
+   Check_Over_Max_R6;
+   Check_Overrun_R7;
    Check_VarInt (0, "varint 0");
    Check_VarInt (-1, "varint -1");
    Check_VarInt (Interfaces.Integer_32'First, "varint first");

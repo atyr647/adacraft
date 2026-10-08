@@ -14,8 +14,8 @@ package body Differential.Capture.Wire is
       Host   : String;
       Port   : Positive)
    is
-      Address : Sock_Addr_Type;
-      Entry   : constant Host_Entry_Type := Get_Host_By_Name (Host);
+      Address     : Sock_Addr_Type;
+      Host_Entry  : constant Host_Entry_Type := Get_Host_By_Name (Host);
       Option  : constant Socket_Option_Type :=
         (Name    => Receive_Timeout,
          Enabled => True,
@@ -26,7 +26,7 @@ package body Differential.Capture.Wire is
       end if;
 
       Create_Socket (Target.Socket, Family_Inet, Socket_Stream);
-      Address.Addr := Addresses (Entry, 1);
+      Address.Addr := Addresses (Host_Entry, 1);
       Address.Port := Port_Type (Port);
       Connect_Socket (Target.Socket, Address);
       Set_Socket_Option (Target.Socket, Level_Socket, Option);
@@ -78,7 +78,8 @@ package body Differential.Capture.Wire is
       declare
          Body_Last : constant Natural := Written + Payload'Length;
          Framed    : Stream_Element_Array
-           (1 .. Stream_Element_Offset (Body_Last + 3));
+           (1 .. Stream_Element_Offset
+              (Body_Last + Adacraft.Protocol.Frame.Max_Frame_Prefix_Bytes));
          Last      : Stream_Element_Offset;
          Frame_Status : Adacraft.Protocol.Frame.Encode_Status;
       begin

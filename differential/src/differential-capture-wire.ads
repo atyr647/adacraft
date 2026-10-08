@@ -1,4 +1,5 @@
 with Ada.Streams;
+with GNAT.Sockets;
 with Adacraft.Protocol;
 
 package Differential.Capture.Wire is

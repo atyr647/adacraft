@@ -1,3 +1,4 @@
+with Ada.Streams;
 with Adacraft.Protocol;
 with Adacraft.Protocol.Packet_Encoder;
 with Adacraft.Ingress;
@@ -79,11 +80,11 @@ package body Differential.Capture.Wire is
       Item :=
         (State     => S.State,
          Dir       => Transcript.C_To_S,
-         Packet_ID => Packet_Id (Packet_Id));
+         Packet_ID => Adacraft.Protocol.State.Packet_Id (Packet_Id));
       Transcript.Append (T, Item);
       Ev :=
         (Direction => Serverbound,
-         Id        => Packet_Id (Packet_Id),
+         Id        => Adacraft.Protocol.State.Packet_Id (Packet_Id),
          Intent    => 0);
       Res := Transition (S.State, Ev);
       if Res.Kind /= Rejected then
@@ -180,11 +181,11 @@ package body Differential.Capture.Wire is
          Item :=
            (State     => S.State,
             Dir       => Transcript.S_To_C,
-            Packet_ID => Packet_Id (Dec.Packet_Id));
+            Packet_ID => Adacraft.Protocol.State.Packet_Id (Dec.Packet_Id));
          Transcript.Append (T, Item);
          Ev :=
            (Direction => Clientbound,
-            Id        => Packet_Id (Dec.Packet_Id),
+            Id        => Adacraft.Protocol.State.Packet_Id (Dec.Packet_Id),
             Intent    => 0);
          Res := Transition (S.State, Ev);
          if Res.Kind /= Rejected then

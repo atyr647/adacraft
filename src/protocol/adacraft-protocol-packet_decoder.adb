@@ -1,5 +1,4 @@
 with Ada.Streams;
-with Ada.Unchecked_Conversion;
 with Interfaces;
 with Adacraft.Protocol.Varnum;
 
@@ -11,9 +10,6 @@ package body Adacraft.Protocol.Packet_Decoder is
    use type Interfaces.Integer_64;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
-
-   function To_I64 is new Ada.Unchecked_Conversion
-     (Interfaces.Unsigned_64, Interfaces.Integer_64);
 
    function To_Octets (Raw : Body_Array) return Octets is
       R : Octets (1 .. Raw'Length);
@@ -155,24 +151,27 @@ package body Adacraft.Protocol.Packet_Decoder is
                         return Fail;
                      end if;
                      declare
-                        U : Interfaces.Unsigned_64 := 0;
+                        S : Interfaces.Integer_64 := 0;
                      begin
                         for K2 in 0 .. 7 loop
                            declare
-                              P : constant Interfaces.Unsigned_64 :=
-                                Interfaces.Unsigned_64
+                              BV : constant Interfaces.Integer_64 :=
+                                Interfaces.Integer_64
                                   (Raw (Pos + SEO (K2)));
                            begin
-                              U := U or Interfaces.Shift_Left
-                                (P, (7 - K2) * 8);
+                              if K2 = 0 then
+                                 if BV >= 128 then
+                                    S := BV - 256;
+                                 else
+                                    S := BV;
+                                 end if;
+                              else
+                                 S := S * 256 + BV;
+                              end if;
                            end;
                         end loop;
-                        declare
-                           S : constant Interfaces.Integer_64 := To_I64 (U);
-                        begin
-                           Good.Fields (Out_Pos) :=
-                             (Kind => FK_Long, I64 => S);
-                        end;
+                        Good.Fields (Out_Pos) :=
+                          (Kind => FK_Long, I64 => S);
                      end;
                      Pos := Pos + 8;
                   when FK_Varint =>
@@ -236,6 +235,70 @@ package body Adacraft.Protocol.Packet_Decoder is
                               Fail.Reason := Truncated;
                               return Fail;
                         end case;
+                     end;
+                  when FK_String =>
+                     declare
+                        Start    : constant Integer :=
+                          Integer (Pos - Raw'First) + 1;
+                        Len32    : Interfaces.Integer_32 := 0;
+                        Consumed : Natural := 0;
+                        Status   : Varnum.Status_Type;
+                     begin
+                        if Pos > Raw'Last then
+                           Fail.Reason := Truncated;
+                           return Fail;
+                        end if;
+                        Varnum.Decode
+                          (Oct, Start, Len32, Consumed, Status);
+                        case Status is
+                           when Varnum.Ok =>
+                              null;
+                           when Varnum.Truncated =>
+                              Fail.Reason := Truncated;
+                              return Fail;
+                           when Varnum.Overlong =>
+                              Fail.Reason := Overlong_Varint;
+                              return Fail;
+                           when Varnum.Buffer_Too_Small =>
+                              Fail.Reason := Truncated;
+                              return Fail;
+                        end case;
+                        if Len32 < 0 then
+                           Fail.Reason := String_Length_Invalid;
+                           return Fail;
+                        end if;
+                        if Len32 > Interfaces.Integer_32 (String_Max) then
+                           Fail.Reason := String_Over_Max;
+                           return Fail;
+                        end if;
+                        declare
+                           Len : constant Natural := Natural (Len32);
+                           Remaining : constant Natural :=
+                             Natural (Raw'Last - Pos + 1) - Consumed;
+                        begin
+                           if Len > Remaining then
+                              Fail.Reason := Truncated;
+                              return Fail;
+                           end if;
+                           declare
+                              Tmp : Field_Value (Kind => FK_String);
+                           begin
+                              Tmp.Str_Len := Len;
+                              Tmp.Str_Data := (others => 0);
+                              declare
+                                 Dst_First : constant SEO :=
+                                   Pos + SEO (Consumed);
+                              begin
+                                 for J in 1 .. Len loop
+                                    Tmp.Str_Data (J) :=
+                                      Raw (Dst_First + SEO (J - 1));
+                                 end loop;
+                              end;
+                              Good.Fields (Out_Pos) := Tmp;
+                           end;
+                           Pos := Pos + SEO (Consumed + Len);
+                           Idx := Start + Consumed + Len;
+                        end;
                      end;
                end case;
             end;

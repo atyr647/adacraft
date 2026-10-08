@@ -9,8 +9,16 @@ package Adacraft.Protocol.Packet_Decoder is
 
    subtype Packet_Id_Type is Natural range 0 .. 2_147_483_647;
 
+   --  String bound in bytes (shipped unit). #210 defines no string
+   --  primitive; this bound mirrors Buffer.Decode_String's 32_767 limit
+   --  so decoder storage stays bounded and T-1/T-9 have an oracle value.
+   String_Max : constant := 32_767;
+   subtype String_Index is Positive range 1 .. String_Max;
+   type String_Data_Array is array (String_Index) of Byte;
+
    type Field_Kind is
-     (FK_Boolean, FK_Byte, FK_Int, FK_Long, FK_Varint, FK_Varlong);
+     (FK_Boolean, FK_Byte, FK_Int, FK_Long, FK_Varint, FK_Varlong,
+      FK_String);
 
    type Field_Value (Kind : Field_Kind := FK_Boolean) is record
       case Kind is
@@ -20,6 +28,9 @@ package Adacraft.Protocol.Packet_Decoder is
          when FK_Long    => I64 : Interfaces.Integer_64 := 0;
          when FK_Varint  => V32 : Interfaces.Integer_32 := 0;
          when FK_Varlong => V64 : Interfaces.Integer_64 := 0;
+         when FK_String  =>
+            Str_Len  : Natural := 0;
+            Str_Data : String_Data_Array := (others => 0);
       end case;
    end record;
 

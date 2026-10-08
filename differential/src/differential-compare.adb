@@ -1,3 +1,5 @@
+with Adacraft.Protocol.State;
+
 package body Differential.Compare is
    function Compare
      (Left  : Differential.Transcript.Transcript;

@@ -151,6 +151,185 @@ procedure Test_Protocol_Packet_Decoder is
       return L;
    end Single_Layout;
 
+   --  Pre-flight notes (ingress reasons, bounded change R1/R2 only):
+   --  * Constitution ingress authority: docs/constitution.txt sections 9
+   --    (Decode/Validate ingress flow), 16 (malformed-input rejection),
+   --    20 (bounded decoding; reject malformed or overlong; no unchecked
+   --    buffer access). No separate ingress reason table with distinct
+   --    enumerators was found in the constitution text.
+   --  * Decoder spec source of truth (A1): D.String_Max and D.Decode_Status
+   --    (Success, Rejected) names are used exactly. There is no
+   --    Rejection_Reason enumerator in
+   --    src/protocol/adacraft-protocol-packet_decoder.ads, so every
+   --    constitution malformed-input phrase maps to D.Rejected.
+   --    -- spelling: constitution "rejected/malformed" = spec Rejected (A2).
+   --    -- TODO(Q1): constitution has no per-reason enumerator table;
+   --    --   using closest existing reason Rejected; raised with owner.
+   --    --   Distinct empty/truncation/overlong/over-max/overrun reasons
+   --    --   belong to a later decoder-spec item; this item must not edit
+   --    --   the .ads.
+   --  * Varnum distinctness (read-only): V.Decode / V.Decode_Varlong report
+   --    Status_Type (Ok, Truncated, Overlong, Buffer_Too_Small); decoder body
+   --    maps any non-Ok locally to Rejected. Varnum is never touched (R12).
+   --  * String_Max unit (A5): decoder compares byte count
+   --    (Natural (Len_Val) vs String_Max); tests treat String_Max as bytes
+   --    here, matching the decoder's current comparison unit.
+
+   --  Shared rejection helper: every new malformed-input assertion checks
+   --  BOTH that decode failed with no packet value accepted (Status is
+   --  Rejected and Field_Count is 0) and the reported reason equals the
+   --  constitution ingress reason via the spec enumerator (here: Rejected).
+   --  A bare "failed" check alone does not count.
+   procedure Assert_Rejects
+     (Payload : Octets;
+      Layout  : D.Layout_Type;
+      Msg     : String)
+   is
+      Fields_P : Field_Array_Access := new D.Field_Array;
+      Pid : Interfaces.Integer_32 := 0;
+      Cnt : Natural := 0;
+      St  : D.Decode_Status := D.Success;
+   begin
+      D.Decode (Payload, Layout, Pid, Fields_P.all, Cnt, St);
+      Check (St = D.Rejected, Msg & " status is Rejected");
+      Check (Cnt = 0, Msg & " no packet accepted (Field_Count = 0)");
+   end Assert_Rejects;
+
+   --  R1: empty input. Zero-length buffer decode fails with the
+   --  constitution empty-input reason (= spec Rejected).
+   --  Per A4: zero-length reports the empty-input reason, not truncation,
+   --  so R2 loops below start at length 1. Constitution text states the
+   --  ingress flow Decode/Validate with malformed-input rejection but does
+   --  not define empty == truncation; asserting the empty-input reason
+   --  (Rejected) here with this comment records the A4 choice.
+   procedure Check_Empty_R1 is
+      Backing  : Scratch_Access := new Octets (1 .. 1);
+      Fields_P : Field_Array_Access := new D.Field_Array;
+      Pid : Interfaces.Integer_32 := 0;
+      Cnt : Natural := 999;
+      St  : D.Decode_Status := D.Success;
+      L   : D.Layout_Type := Single_Layout (D.VarInt);
+   begin
+      Backing.all (1) := 16#00#;
+      --  Null slice has Length 0; decoder returns Rejected on Length = 0.
+      D.Decode (Backing.all (2 .. 1), L, Pid, Fields_P.all, Cnt, St);
+      Check (St = D.Rejected, "R1 empty status is Rejected");
+      Check (Cnt = 0, "R1 empty no packet accepted (Field_Count = 0)");
+   end Check_Empty_R1;
+
+   --  R2 helper: every strict prefix 1 .. N-1 of a valid packet must fail
+   --  with the truncation reason (= spec Rejected). Loop, not samples.
+   procedure Check_Prefixes_Truncated
+     (Full   : Octets;
+      Layout : D.Layout_Type;
+      Name   : String)
+   is
+      Fields_P : Field_Array_Access := new D.Field_Array;
+      Pid : Interfaces.Integer_32 := 0;
+      Cnt : Natural := 0;
+      St  : D.Decode_Status := D.Success;
+      N   : constant Natural := Full'Length;
+   begin
+      Check (N >= 2, Name & " full packet length >= 2 for prefix loop");
+      --  Sanity: full packet itself must decode successfully.
+      D.Decode (Full, Layout, Pid, Fields_P.all, Cnt, St);
+      Check (St = D.Success, Name & " full packet status Success");
+      if N >= 2 then
+         for L in 1 .. N - 1 loop
+            Assert_Rejects
+              (Payload => Full (Full'First .. Full'First + L - 1),
+               Layout  => Layout,
+               Msg     => Name & " truncated prefix len" & Natural'Image (L));
+         end loop;
+      end if;
+   end Check_Prefixes_Truncated;
+
+   --  R2: one valid encoded packet per supported field kind (all 10
+   --  D.Field_Kind enumerators found in the decoder body: VarInt, VarLong,
+   --  String, Boolean, Byte, Unsigned_Byte, Short, Unsigned_Short, Int,
+   --  Long). Each vector of length N is decoded at every L in 1 .. N-1.
+   procedure Check_Truncated_R2 is
+      Buf_Ptr : Scratch_Access := new Octets (1 .. 64);
+      Pos : Positive;
+      N : Natural;
+   begin
+      --  VarInt field.
+      Pos := 1;
+      Append_VarInt (7, Buf_Ptr.all, Pos);
+      Append_VarInt (-12_345, Buf_Ptr.all, Pos);
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.VarInt), "R2 varint");
+      --  VarLong field.
+      Pos := 1;
+      Append_VarInt (7, Buf_Ptr.all, Pos);
+      Append_VarLong (-9_876_543_210, Buf_Ptr.all, Pos);
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.VarLong), "R2 varlong");
+      --  String field (small, in-range).
+      Pos := 1;
+      Append_VarInt (5, Buf_Ptr.all, Pos);
+      Append_VarInt (3, Buf_Ptr.all, Pos);
+      Append_Byte (Buf_Ptr.all, Pos, 16#68#);
+      Append_Byte (Buf_Ptr.all, Pos, 16#69#);
+      Append_Byte (Buf_Ptr.all, Pos, 16#21#);
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.String), "R2 string");
+      --  Boolean field.
+      Pos := 1;
+      Append_VarInt (3, Buf_Ptr.all, Pos);
+      Append_Byte (Buf_Ptr.all, Pos, 16#01#);
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.Boolean), "R2 boolean");
+      --  Byte field.
+      Pos := 1;
+      Append_VarInt (11, Buf_Ptr.all, Pos);
+      Append_Byte (Buf_Ptr.all, Pos, To_U8 (-12));
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.Byte), "R2 byte");
+      --  Unsigned_Byte field.
+      Pos := 1;
+      Append_VarInt (11, Buf_Ptr.all, Pos);
+      Append_Byte (Buf_Ptr.all, Pos, 200);
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.Unsigned_Byte),
+         "R2 unsigned_byte");
+      --  Short field.
+      Pos := 1;
+      Append_VarInt (11, Buf_Ptr.all, Pos);
+      Append_U16BE (Buf_Ptr.all, Pos, To_U16 (-12_345));
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.Short), "R2 short");
+      --  Unsigned_Short field.
+      Pos := 1;
+      Append_VarInt (11, Buf_Ptr.all, Pos);
+      Append_U16BE (Buf_Ptr.all, Pos, 60_000);
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.Unsigned_Short),
+         "R2 unsigned_short");
+      --  Int field.
+      Pos := 1;
+      Append_VarInt (11, Buf_Ptr.all, Pos);
+      Append_U32BE (Buf_Ptr.all, Pos, To_U32 (-123_456_789));
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.Int), "R2 int");
+      --  Long field.
+      Pos := 1;
+      Append_VarInt (11, Buf_Ptr.all, Pos);
+      Append_U64BE (Buf_Ptr.all, Pos, To_U64 (-123_456_789_012_345_678));
+      N := Pos - 1;
+      Check_Prefixes_Truncated
+        (Buf_Ptr.all (1 .. N), Single_Layout (D.Long), "R2 long");
+   end Check_Truncated_R2;
+
    procedure Check_VarInt (Value : Interfaces.Integer_32; Name : String) is
       Buf_Ptr : Scratch_Access := new Octets (1 .. 16);
       Fields_P : Field_Array_Access := new D.Field_Array;

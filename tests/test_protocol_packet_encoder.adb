@@ -450,6 +450,160 @@ begin
       Check (S = PE.Invalid_Sequence, "T10 frame-no-id");
    end;
 
+   --  T5: exact-fill then one more write -> Overflow, prior bytes unchanged.
+   declare
+      E   : PE.Encoder;
+      Buf : PE.Byte_Array (1 .. 4) := (others => 16#AA#);
+   begin
+      PE.Start (E);
+      PE.Write_Packet_Id (E, Buf, 0);
+      PE.Write_Bytes (E, Buf, PE.Byte_Array'(16#11#, 16#22#, 16#33#));
+      Check (PE.Status_Of (E) = PE.Ok, "T5 exact-fill status");
+      Check (PE.Body_Length (E) = 4, "T5 exact-fill length");
+      Check
+        (Equal (Buf, PE.Byte_Array'(16#00#, 16#11#, 16#22#, 16#33#)),
+         "T5 exact-fill bytes");
+      PE.Write_Boolean (E, Buf, True);
+      Check (PE.Status_Of (E) = PE.Overflow, "T5 overflow status");
+      Check (PE.Body_Length (E) = 4, "T5 overflow length");
+      Check
+        (Equal (Buf, PE.Byte_Array'(16#00#, 16#11#, 16#22#, 16#33#)),
+         "T5 overflow unchanged");
+   end;
+
+   --  T5: straddling write stores nothing atomically.
+   declare
+      E   : PE.Encoder;
+      Buf : PE.Byte_Array (1 .. 3) := (others => 16#AA#);
+   begin
+      PE.Start (E);
+      PE.Write_Packet_Id (E, Buf, 0);
+      PE.Write_Int (E, Buf, 16#01020304#);
+      Check (PE.Status_Of (E) = PE.Overflow, "T5 straddle status");
+      Check (PE.Body_Length (E) = 1, "T5 straddle length");
+      Check (Buf (1) = 16#00#, "T5 straddle first kept");
+      Check (Buf (2) = 16#AA#, "T5 straddle no partial 1");
+      Check (Buf (3) = 16#AA#, "T5 straddle no partial 2");
+   end;
+
+   --  T6: sticky error preserves first status, length, bytes.
+   declare
+      E   : PE.Encoder;
+      Buf : PE.Byte_Array (1 .. 2) := (others => 16#AA#);
+   begin
+      PE.Start (E);
+      PE.Write_Packet_Id (E, Buf, 0);
+      PE.Write_UShort (E, Buf, 16#1234#);
+      Check (PE.Status_Of (E) = PE.Overflow, "T6 first status");
+      Check (PE.Body_Length (E) = 1, "T6 first length");
+      PE.Write_Boolean (E, Buf, True);
+      PE.Write_Byte (E, Buf, 7);
+      PE.Write_Bytes (E, Buf, PE.Byte_Array'(1 => 16#FF#));
+      Check (PE.Status_Of (E) = PE.Overflow, "T6 sticky status");
+      Check (PE.Body_Length (E) = 1, "T6 sticky length");
+      Check (Buf (1) = 16#00#, "T6 sticky byte kept");
+      Check (Buf (2) = 16#AA#, "T6 sticky no write");
+   end;
+
+   --  T7: string over max -> String_Too_Long, nothing stored.
+   declare
+      E   : PE.Encoder;
+      Buf : PE.Byte_Array (1 .. 16) := (others => 16#AA#);
+   begin
+      PE.Start (E);
+      PE.Write_Packet_Id (E, Buf, 0);
+      PE.Write_String (E, Buf, PE.Byte_Array'(16#41#, 16#42#, 16#43#, 16#44#, 16#45#), 3);
+      Check (PE.Status_Of (E) = PE.String_Too_Long, "T7 over status");
+      Check (PE.Body_Length (E) = 1, "T7 over length");
+      Check (Buf (1) = 16#00#, "T7 over first kept");
+      Check (Buf (2) = 16#AA#, "T7 over atomic");
+   end;
+
+   --  T7: string at exactly max is accepted (prefix + payload).
+   declare
+      E    : PE.Encoder;
+      Buf  : PE.Byte_Array (1 .. 16) := (others => 16#AA#);
+      Last : Natural := 0;
+      S    : PE.Status;
+   begin
+      PE.Start (E);
+      PE.Write_Packet_Id (E, Buf, 0);
+      PE.Write_String (E, Buf, PE.Byte_Array'(16#41#, 16#42#, 16#43#), 3);
+      Check (PE.Status_Of (E) = PE.Ok, "T7 exact status");
+      Check (PE.Body_Length (E) = 5, "T7 exact length");
+      PE.Finish (E, Buf, Last, S);
+      Check (S = PE.Ok, "T7 exact finish");
+      if S = PE.Ok then
+         Check
+           (Equal (Buf (Buf'First .. Last),
+                   PE.Byte_Array'(16#00#, 16#03#, 16#41#, 16#42#, 16#43#)),
+            "T7 exact bytes");
+      end if;
+   end;
+
+   --  T7: empty string after ID writes single 0x00 prefix.
+   declare
+      E    : PE.Encoder;
+      Buf  : PE.Byte_Array (1 .. 8) := (others => 16#AA#);
+      Last : Natural := 0;
+      S    : PE.Status;
+   begin
+      PE.Start (E);
+      PE.Write_Packet_Id (E, Buf, 0);
+      PE.Write_String (E, Buf, Buf (2 .. 1), 10);
+      Check (PE.Status_Of (E) = PE.Ok, "T7 empty status");
+      Check (PE.Body_Length (E) = 2, "T7 empty length");
+      PE.Finish (E, Buf, Last, S);
+      Check (S = PE.Ok, "T7 empty finish");
+      if S = PE.Ok then
+         Check
+           (Equal (Buf (Buf'First .. Last), PE.Byte_Array'(16#00#, 16#00#)),
+            "T7 empty bytes");
+      end if;
+   end;
+
+   --  A6: zero-length ordering checks.
+   declare
+      E   : PE.Encoder;
+      Buf : PE.Byte_Array (1 .. 8) := (others => 16#AA#);
+   begin
+      PE.Start (E);
+      PE.Write_String (E, Buf, Buf (2 .. 1), 10);
+      Check (PE.Status_Of (E) = PE.Invalid_Sequence, "A6 empty-str-before-id");
+      Check (PE.Body_Length (E) = 0, "A6 empty-str-before-id length");
+      Check (Buf = PE.Byte_Array'(1 .. 8 => 16#AA#), "A6 empty-str-before-id bytes");
+   end;
+
+   --  T8: body exactly Max_Frame_Body_Length accepted via chunked writes.
+   declare
+      use Adacraft.Protocol.Frame;
+      Total : constant Natural := Max_Frame_Body_Length;
+      E     : PE.Encoder;
+      Buf   : PE.Byte_Array (1 .. Max_Frame_Body_Length + 1) :=
+        (others => 16#AA#);
+      Chunk : PE.Byte_Array (1 .. 65_536) := (others => 16#55#);
+      Remaining : Natural;
+   begin
+      PE.Start (E);
+      PE.Write_Packet_Id (E, Buf, 0);
+      Check (PE.Status_Of (E) = PE.Ok, "T8 setup status");
+      Remaining := Total - PE.Body_Length (E);
+      while Remaining > 0 loop
+         declare
+            N : constant Natural := Natural'Min (Remaining, Chunk'Length);
+         begin
+            PE.Write_Bytes (E, Buf, Chunk (Chunk'First .. Chunk'First + N - 1));
+            exit when PE.Status_Of (E) /= PE.Ok;
+            Remaining := Total - PE.Body_Length (E);
+         end;
+      end loop;
+      Check (PE.Status_Of (E) = PE.Ok, "T8 exact status");
+      Check (PE.Body_Length (E) = Total, "T8 exact length");
+      PE.Write_Boolean (E, Buf, False);
+      Check (PE.Status_Of (E) = PE.Body_Too_Long, "T8 plus1 status");
+      Check (PE.Body_Length (E) = Total, "T8 plus1 length");
+   end;
+
    if Failures = 0 then
       Ada.Text_IO.Put_Line ("packet encoder tests passed");
    else

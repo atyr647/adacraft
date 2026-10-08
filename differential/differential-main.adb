@@ -20,15 +20,15 @@ procedure Differential_Main is
       Max_Entries  : constant := 1024;
       Max_Name_Len : constant := 512;
 
-      type Entry is record
+      type Rec is record
          State : Natural := 0;
          Dir   : Direction := S2C;
          Id    : Natural := 0;
       end record;
 
-      type Entries_Storage is array (1 .. Max_Entries) of Entry;
+      type Entries_Storage is array (1 .. Max_Entries) of Rec;
 
-      type Name_Storage is String (1 .. Max_Name_Len);
+      subtype Name_Storage is String (1 .. Max_Name_Len);
 
       type Transcript is record
          Count    : Natural range 0 .. Max_Entries := 0;
@@ -41,8 +41,8 @@ procedure Differential_Main is
 
       function Scenario_Name (T : Transcript) return String;
       procedure Set_Scenario_Name (T : in out Transcript; S : String);
-      procedure Append (T : in out Transcript; E : Entry; Full : out Boolean);
-      function Get (T : Transcript; Index : Positive) return Entry;
+      procedure Append (T : in out Transcript; E : Rec; Full : out Boolean);
+      function Get (T : Transcript; Index : Positive) return Rec;
    end D_Defs;
 
    package body D_Defs is
@@ -72,7 +72,7 @@ procedure Differential_Main is
          end if;
       end Set_Scenario_Name;
 
-      procedure Append (T : in out Transcript; E : Entry; Full : out Boolean) is
+      procedure Append (T : in out Transcript; E : Rec; Full : out Boolean) is
       begin
          if T.Count >= Max_Entries then
             Full := True;
@@ -83,7 +83,7 @@ procedure Differential_Main is
          T.Entries (T.Count) := E;
       end Append;
 
-      function Get (T : Transcript; Index : Positive) return Entry is
+      function Get (T : Transcript; Index : Positive) return Rec is
       begin
          if Index < 1 or else Index > T.Count then
             raise Constraint_Error;
@@ -114,8 +114,8 @@ procedure Differential_Main is
          end if;
          for I in 1 .. A.Count loop
             declare
-               EA : constant D_Defs.Entry := A.Entries (I);
-               EB : constant D_Defs.Entry := B.Entries (I);
+               EA : constant D_Defs.Rec := A.Entries (I);
+               EB : constant D_Defs.Rec := B.Entries (I);
             begin
                if EA.State /= EB.State or else EA.Dir /= EB.Dir
                  or else EA.Id /= EB.Id
@@ -139,8 +139,8 @@ procedure Differential_Main is
       begin
          for I in 1 .. Min_Count loop
             declare
-               EA : constant D_Defs.Entry := A.Entries (I);
-               EB : constant D_Defs.Entry := B.Entries (I);
+               EA : constant D_Defs.Rec := A.Entries (I);
+               EB : constant D_Defs.Rec := B.Entries (I);
             begin
                if EA.State /= EB.State or else EA.Dir /= EB.Dir
                  or else EA.Id /= EB.Id
@@ -1194,7 +1194,7 @@ procedure Differential_Main is
       --  Pure Put_Line wrappers except for I/O itself; Entry/Outcome
       --  images are pure functions (deterministic, byte-identical re-run).
       function Outcome_Image (O : D_Defs.Outcome) return String;
-      function Entry_Image (E : D_Defs.Entry) return String;
+      function Entry_Image (E : D_Defs.Rec) return String;
       procedure Report_Scenario
         (Name       : String;
          Oracle_T   : D_Defs.Transcript;
@@ -1240,7 +1240,7 @@ procedure Differential_Main is
          end case;
       end Dir_Image;
 
-      function Entry_Image (E : D_Defs.Entry) return String is
+      function Entry_Image (E : D_Defs.Rec) return String is
       begin
          return "state=" & Num (E.State, 5) & " dir=" & Dir_Image (E.Dir) &
            " id=" & Num (E.Id, 5);

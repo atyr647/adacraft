@@ -1,0 +1,3 @@
+project Differential is
+   for Main use ("differential-main.adb");
+end Differential;

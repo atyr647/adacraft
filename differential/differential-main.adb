@@ -11,12 +11,29 @@ procedure Differential.Main is
    --  Lab-only driver main (child unit Differential.Main).
    --  Wiring only: Args.Parse -> (Selftest | Capture+Compare+Report) ->
    --  Set_Exit_Status.  No framing, no codec, no logic beyond wiring.
-   --  Q1 deferral: no concrete #119 corpus binding yet, so the run
-   --  branch exits 2 without touching the network.
+   --  The corpus provider is deferred; the run branch wires the capture,
+   --  compare, report, and exit-status stages.
 
    use type Ada.Command_Line.Exit_Status;
 
    Opts : Differential.Args.Options;
+
+   type Empty_Provider is
+     new Differential.Capture.Provider with null record;
+
+   overriding function Count
+     (P : Empty_Provider) return Natural is
+   begin
+      return 0;
+   end Count;
+
+   overriding procedure Get
+     (P     : in out Empty_Provider;
+      Index : Positive;
+      Item  : out Differential.Capture.Scenario_Descriptor) is
+   begin
+      raise Constraint_Error with "empty scenario provider";
+   end Get;
 
    function Base_Result return Differential.Transcript.Scenario_Result is
       R  : Differential.Transcript.Scenario_Result;
@@ -100,10 +117,79 @@ procedure Differential.Main is
       end if;
    end Run_Selftest;
 
-   --  Reference the wired children so the run path visibly goes
-   --  Args -> Capture -> Compare -> Report -> exit status.
-   Timeout_Ref : constant Duration := Differential.Capture.Read_Timeout;
-   pragma Unreferenced (Timeout_Ref);
+   procedure Run_Differential is
+      Source : Empty_Provider;
+      Oracle_Results :
+        Differential.Capture.Result_Array
+          (1 .. Differential.Capture.Max_Scenario_Count);
+      Candidate_Results :
+        Differential.Capture.Result_Array
+          (1 .. Differential.Capture.Max_Scenario_Count);
+      Total    : Natural := 0;
+      Matched  : Natural := 0;
+      Diverged : Natural := 0;
+   begin
+      Differential.Capture.Run_All
+        (Oracle         => Opts.Oracle,
+         Candidate      => Opts.Candidate,
+         Source         => Source,
+         Oracle_Out     => Oracle_Results,
+         Candidate_Out  => Candidate_Results,
+         Total          => Total);
+
+      for I in 1 .. Total loop
+         declare
+            Expected : constant Differential.Transcript.Scenario_Result :=
+              Oracle_Results (I);
+            Got : constant Differential.Transcript.Scenario_Result :=
+              Candidate_Results (I);
+            Verdict : constant Differential.Compare.Verdict :=
+              Differential.Compare.Compare (Expected, Got);
+            Name : constant String :=
+              Differential.Transcript.Name_Str (Expected);
+         begin
+            if Verdict.Kind = Differential.Compare.Match then
+               Matched := Matched + 1;
+               Differential.Report.Put_Match (Name);
+            else
+               Diverged := Diverged + 1;
+               case Verdict.Kind is
+                  when Differential.Compare.Diverge_Length =>
+                     Differential.Report.Put_Diverge
+                       (Name,
+                        Differential.Report.Length_Detail
+                          (Verdict.Expected_Length,
+                           Verdict.Got_Length,
+                           Verdict.Index));
+                  when Differential.Compare.Diverge_Entry =>
+                     Differential.Report.Put_Diverge
+                       (Name,
+                        Differential.Report.Entry_Detail
+                          (Verdict.Index,
+                           Verdict.Expected_Entry,
+                           Verdict.Got_Entry));
+                  when Differential.Compare.Diverge_Outcome =>
+                     Differential.Report.Put_Diverge
+                       (Name,
+                        Differential.Report.Outcome_Detail
+                          (Verdict.Expected_Outcome,
+                           Verdict.Got_Outcome));
+                  when Differential.Compare.Match =>
+                     null;
+               end case;
+            end if;
+         end;
+      end loop;
+
+      Differential.Report.Put_Summary (Total, Matched, Diverged);
+      Differential.Report.Apply_Exit
+        (Diverged => Diverged, Env_Error => False);
+   exception
+      when Differential.Capture.Env_Error =>
+         Differential.Report.Put_Summary (Total, Matched, Diverged);
+         Differential.Report.Apply_Exit
+           (Diverged => Diverged, Env_Error => True);
+   end Run_Differential;
 
 begin
    Differential.Args.Parse (Opts);
@@ -115,9 +201,5 @@ begin
       Run_Selftest;
       return;
    end if;
-   Differential.Report.Put_Summary (Total => 0, Matched => 0, Diverged => 0);
-   Ada.Text_IO.Put_Line
-     (Ada.Text_IO.Standard_Error,
-      "differential: corpus binding deferred (Q1); no scenarios to run");
-   Differential.Report.Apply_Exit (Diverged => 0, Env_Error => True);
+   Run_Differential;
 end Differential.Main;

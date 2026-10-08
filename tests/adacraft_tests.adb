@@ -12,6 +12,7 @@ with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Ids;
 with Adacraft.Protocol.Packets;
 with Adacraft.Protocol.Varnum;
+with Test_Protocol_Packet_Encoder;
 
 procedure Adacraft_Tests is
    package Protocol renames Adacraft.Protocol;
@@ -62,6 +63,8 @@ procedure Adacraft_Tests is
       return Result;
    end Bytes;
 begin
+   Test_Protocol_Packet_Encoder;
+
    declare
       W   : Protocol.Buffer.Writer (16);
       Dec : Protocol.Varnum.Varint_Result;

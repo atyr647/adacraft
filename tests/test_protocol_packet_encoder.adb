@@ -8,6 +8,8 @@ procedure Test_Protocol_Packet_Encoder is
    package Enc renames Adacraft.Protocol.Packet_Encoder;
    use type Ada.Streams.Stream_Element;
    use type Ada.Streams.Stream_Element_Offset;
+   use type Interfaces.Integer_32;
+   use type Interfaces.Integer_64;
 
    subtype SEA is Ada.Streams.Stream_Element_Array;
    subtype SEO is Ada.Streams.Stream_Element_Offset;

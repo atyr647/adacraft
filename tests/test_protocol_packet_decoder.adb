@@ -484,6 +484,83 @@ procedure Test_Protocol_Packet_Decoder is
          Msg     => "R7 string overrun in-range len exceeds tail");
    end Check_Overrun_R7;
 
+   --  R8: invalid boolean -- bytes 16#02# and 16#FF# (plus a few other
+   --  non-00/01 values) fail with the invalid-boolean reason.
+   --  Constitution ingress authority (malformed-input rejection, bounded
+   --  decoding; see pre-flight notes) demands rejection of anything other
+   --  than 16#00# / 16#01#; spec enumerator Rejected used.
+   --  -- spelling: constitution "invalid boolean / malformed" = spec
+   --  --   Rejected (A2).
+   --  -- TODO(Q1): constitution has no per-reason enumerator table; using
+   --  --   closest existing reason Rejected; raised with owner. Do not edit
+   --  --   the .ads.
+   --  Every case checks BOTH decode failure and the reason via
+   --  Assert_Rejects; a bare "failed" check does not count.
+   procedure Check_Invalid_Bool_R8 is
+      Extra_Vals : constant Octets (1 .. 4) := (16#03#, 16#7F#, 16#80#, 16#FE#);
+      Buf_Ptr : Scratch_Access := new Octets (1 .. 16);
+      Pos : Positive;
+   begin
+      --  Required cases: 16#02# and 16#FF#.
+      Pos := 1;
+      Append_VarInt (3, Buf_Ptr.all, Pos);
+      Append_Byte (Buf_Ptr.all, Pos, 16#02#);
+      Assert_Rejects
+        (Payload => Buf_Ptr.all (1 .. Pos - 1),
+         Layout  => Single_Layout (D.Boolean),
+         Msg     => "R8 invalid boolean 16#02#");
+      Pos := 1;
+      Append_VarInt (3, Buf_Ptr.all, Pos);
+      Append_Byte (Buf_Ptr.all, Pos, 16#FF#);
+      Assert_Rejects
+        (Payload => Buf_Ptr.all (1 .. Pos - 1),
+         Layout  => Single_Layout (D.Boolean),
+         Msg     => "R8 invalid boolean 16#FF#");
+      --  Optional: prove nothing else outside 16#00#/16#01# is accepted.
+      for I in Extra_Vals'Range loop
+         Pos := 1;
+         Append_VarInt (3, Buf_Ptr.all, Pos);
+         Append_Byte (Buf_Ptr.all, Pos, Extra_Vals (I));
+         Assert_Rejects
+           (Payload => Buf_Ptr.all (1 .. Pos - 1),
+            Layout  => Single_Layout (D.Boolean),
+            Msg     => "R8 invalid boolean other" &
+              Natural'Image (Natural (Extra_Vals (I))));
+      end loop;
+   end Check_Invalid_Bool_R8;
+
+   --  R9: trailing bytes -- a fully valid packet P (1 .. N) plus one extra
+   --  16#00# byte, and one case with 2-3 extra bytes, fail with the
+   --  trailing-bytes reason. Constitution ingress authority demands
+   --  rejection of trailing bytes; spec enumerator Rejected used
+   --  (A2 spelling + Q1 TODO as in R8 above).
+   --  Every case checks BOTH decode failure and the reason via
+   --  Assert_Rejects.
+   procedure Check_Trailing_R9 is
+      Buf_Ptr : Scratch_Access := new Octets (1 .. 32);
+      Pos : Positive := 1;
+      N : Natural;
+   begin
+      --  Build valid packet P: ID 7 + VarInt field value 300.
+      Append_VarInt (7, Buf_Ptr.all, Pos);
+      Append_VarInt (300, Buf_Ptr.all, Pos);
+      N := Pos - 1;
+      --  Case A: P plus one extra 16#00# byte.
+      Buf_Ptr.all (N + 1) := 16#00#;
+      Assert_Rejects
+        (Payload => Buf_Ptr.all (1 .. N + 1),
+         Layout  => Single_Layout (D.VarInt),
+         Msg     => "R9 trailing one extra byte");
+      --  Case B: P plus three extra bytes.
+      Buf_Ptr.all (N + 1) := 16#00#;
+      Buf_Ptr.all (N + 2) := 16#01#;
+      Buf_Ptr.all (N + 3) := 16#02#;
+      Assert_Rejects
+        (Payload => Buf_Ptr.all (1 .. N + 3),
+         Layout  => Single_Layout (D.VarInt),
+         Msg     => "R9 trailing three extra bytes");
+   end Check_Trailing_R9;
+
    procedure Check_VarInt (Value : Interfaces.Integer_32; Name : String) is
       Buf_Ptr : Scratch_Access := new Octets (1 .. 16);
       Fields_P : Field_Array_Access := new D.Field_Array;
@@ -812,6 +889,10 @@ begin
    Check_Negative_Len_R5;
    Check_Over_Max_R6;
    Check_Overrun_R7;
+   Check_Invalid_Bool_R8;
+   Check_Trailing_R9;
+   Check_Invalid_Bool_R8;
+   Check_Trailing_R9;
    Check_VarInt (0, "varint 0");
    Check_VarInt (-1, "varint -1");
    Check_VarInt (Interfaces.Integer_32'First, "varint first");

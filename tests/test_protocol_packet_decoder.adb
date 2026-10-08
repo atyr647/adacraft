@@ -322,7 +322,7 @@ begin
         (Cat
            (Cat
               (Cat (Cat (Enc_Varint (11),
-                         SEA'(1 .. 1 => 1)),      -- boolean true
+                         SEA'(1 => 1)),      -- boolean true
                     Enc_Varint (-300)),           -- varint
                Enc_Varlong (-9_876_543_210)),     -- varlong
             Enc_Varint (2)),                      -- string len 2

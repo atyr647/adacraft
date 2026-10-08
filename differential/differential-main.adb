@@ -4,8 +4,12 @@ with Ada.Streams;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
 with GNAT.Sockets;
+with Adacraft.Protocol.Frame;
+with Adacraft.Protocol.Varnum;
+with Adacraft.Protocol.Packets;
+with Adacraft.Protocol.State;
 
-procedure Differential_Main is
+procedure Differential.Main is
 
    package D_Defs is
       --  Transcript types for semantic comparison.

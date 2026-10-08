@@ -5,6 +5,14 @@ with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 with Adacraft.Corpus;
 with Adacraft.Corpus.Loader;
+with Ada.Real_Time;
+with Ada.Streams;
+with GNAT.Sockets;
+with Adacraft.Protocol;
+with Adacraft.Protocol.Frame;
+with Adacraft.Protocol.Ids;
+with Adacraft.Protocol.Packets;
+with Adacraft.Protocol.Varnum;
 with Adacraft.Protocol.State;
 
 procedure Differential_Main is
@@ -32,7 +40,6 @@ procedure Differential_Main is
       Packets     : Packet_Array;
    end record;
 
-   pragma Unreferenced (Observation);
 
    Usage_Error : exception;
    Setup_Error : exception;
@@ -228,6 +235,245 @@ procedure Differential_Main is
          return Ada.Directories.Base_Name (Path);
       end;
    end Load_Scenario;
+
+   --  Replays one scenario against one endpoint and records the observation.
+   procedure Run_Endpoint
+     (Host       : String;
+      Port       : Natural;
+      S          : Adacraft.Corpus.Scenario;
+      Timeout    : Positive;
+      Kind       : Endpoint_Kind;
+      Obs        : out Observation)
+   is
+      package P renames Adacraft.Protocol;
+      package PS renames Adacraft.Protocol.State;
+      package GS renames GNAT.Sockets;
+      use type P.Status_Kind;
+      use type PS.Result_Kind;
+      use type P.Frame.Feed_Status;
+      use type GS.Selector_Status;
+      use type Ada.Streams.Stream_Element_Offset;
+      use type Ada.Real_Time.Time;
+      use type Interfaces.Unsigned_32;
+
+      Cap       : constant := 2 * 1024 * 1024;
+      Endpoint  : constant String := Host & ":" & Natural'Image (Port);
+      Sock      : GS.Socket_Type;
+      Sel       : GS.Selector_Type;
+      Connected : Boolean := False;
+      Bad       : Boolean := False;
+      State     : PS.Connection_State := S.Initial_State;
+      Total     : Natural := 0;
+
+      procedure On_Frame (Frame : in P.Frame.Byte_Array) is
+         N   : constant Natural := Natural'Min (Natural (Frame'Length), 5);
+         Buf : P.Octets (1 .. 5) := (others => 0);
+      begin
+         if Bad then
+            return;
+         end if;
+         for I in 1 .. N loop
+            Buf (I) := P.Octet
+              (Frame (Frame'First + Ada.Streams.Stream_Element_Offset (I - 1)));
+         end loop;
+         declare
+            V : constant P.Varnum.Varint_Result :=
+              P.Varnum.Decode_Varint (Buf (1 .. N), 1);
+         begin
+            if V.Status /= P.Ok or else V.Value > 1_000_000 then
+               Bad := True;
+               return;
+            end if;
+            declare
+               Ev : constant PS.Packet_Event :=
+                 (Direction => PS.Clientbound,
+                  Id        => PS.Packet_Id (V.Value),
+                  Intent    => 0);
+               T  : constant PS.Transition_Result := PS.Transition (State, Ev);
+            begin
+               if T.Kind = PS.Rejected then
+                  Bad := True;
+                  return;
+               end if;
+               State := T.Next_State;
+               Obs.Final_State := State;
+               if Obs.Count < Max_Packets then
+                  Obs.Count := Obs.Count + 1;
+                  Obs.Packets (Obs.Count) := (Id => Ev.Id, State => State);
+               end if;
+            end;
+         end;
+      end On_Frame;
+
+      procedure Send_Phase is
+         Send_State : PS.Connection_State := S.Initial_State;
+      begin
+         for St of S.Steps loop
+            if St.Dir = Adacraft.Corpus.Serverbound then
+               declare
+                  Input : P.Octets (1 .. Natural (St.Input.Length));
+                  Data  : Ada.Streams.Stream_Element_Array
+                    (1 .. Ada.Streams.Stream_Element_Offset (Input'Length));
+                  First : Ada.Streams.Stream_Element_Offset := 1;
+                  Last  : Ada.Streams.Stream_Element_Offset;
+               begin
+                  for I in Input'Range loop
+                     Input (I) := St.Input (I);
+                     Data (Ada.Streams.Stream_Element_Offset (I)) :=
+                       Ada.Streams.Stream_Element (Input (I));
+                  end loop;
+                  if Input'Length > 0 then
+                     declare
+                        F : constant P.Frame.Frame_Decode :=
+                          P.Frame.Decode_Frame (Input, 1);
+                     begin
+                        if F.Status = P.Ok then
+                           declare
+                              Payload : constant P.Octets :=
+                                Input (F.Payload_First .. F.Payload_Last);
+                              Intent  : PS.Handshake_Intent := 0;
+                           begin
+                              if Send_State = PS.Handshake
+                                and then F.Packet_Id =
+                                  P.Ids.Protocol_Id (P.Ids.Sb_Handshake_Intention)
+                              then
+                                 declare
+                                    H : constant P.Packets.Handshake :=
+                                      P.Packets.Decode_Handshake (Payload);
+                                 begin
+                                    if H.Status = P.Ok then
+                                       Intent := PS.Handshake_Intent (H.Intent);
+                                    end if;
+                                 end;
+                              end if;
+                              declare
+                                 T : constant PS.Transition_Result :=
+                                   PS.Transition
+                                     (Send_State,
+                                      (Direction => PS.Serverbound,
+                                       Id        => PS.Packet_Id (F.Packet_Id),
+                                       Intent    => Intent));
+                              begin
+                                 if T.Kind = PS.Rejected then
+                                    Fail ("error: scenario packet rejected by "
+                                          & "state machine for " & Endpoint);
+                                 end if;
+                                 Send_State := T.Next_State;
+                              end;
+                           end;
+                        end if;
+                     end;
+                  end if;
+                  while First <= Data'Last loop
+                     begin
+                        GS.Send_Socket (Sock, Data (First .. Data'Last), Last);
+                     exception
+                        when GS.Socket_Error =>
+                           Fail ("error: write failed to " & Endpoint);
+                     end;
+                     if Last < First then
+                        Fail ("error: write failed to " & Endpoint);
+                     end if;
+                     First := Last + 1;
+                  end loop;
+               end;
+            end if;
+         end loop;
+      end Send_Phase;
+
+      procedure Receive_Phase is
+         Deadline : constant Ada.Real_Time.Time :=
+           Ada.Real_Time.Clock + Ada.Real_Time.Milliseconds (Timeout);
+         Dec  : P.Frame.Decoder_Type;
+         Buf  : Ada.Streams.Stream_Element_Array (1 .. 4096);
+         Last : Ada.Streams.Stream_Element_Offset;
+         R, W : GS.Socket_Set_Type;
+         St   : GS.Selector_Status;
+         Fs   : P.Frame.Feed_Status;
+      begin
+         loop
+            declare
+               Rem : constant Duration :=
+                 Ada.Real_Time.To_Duration (Deadline - Ada.Real_Time.Clock);
+            begin
+               if Rem <= 0.0 then
+                  Obs.Outcome := Open_At_Timeout;
+                  return;
+               end if;
+               GS.Empty (R);
+               GS.Empty (W);
+               GS.Set (R, Sock);
+               GS.Check_Selector (Sel, R, W, St, Rem);
+            end;
+            if St = GS.Expired then
+               Obs.Outcome := Open_At_Timeout;
+               return;
+            elsif St /= GS.Completed then
+               Obs.Outcome := Closed_By_Server;
+               return;
+            end if;
+            begin
+               GS.Receive_Socket (Sock, Buf, Last);
+            exception
+               when GS.Socket_Error =>
+                  Obs.Outcome := Closed_By_Server;
+                  return;
+            end;
+            if Last < Buf'First then
+               Obs.Outcome := Closed_By_Server;
+               return;
+            end if;
+            if Total + Natural (Last) > Cap then
+               Obs.Outcome := Malformed_Response;
+               return;
+            end if;
+            Total := Total + Natural (Last);
+            P.Frame.Feed (Dec, Buf (1 .. Last), On_Frame'Access, Fs);
+            if Bad or else Fs = P.Frame.Framing_Error then
+               Obs.Outcome := Malformed_Response;
+               return;
+            end if;
+         end loop;
+      end Receive_Phase;
+   begin
+      Obs.Kind := Kind;
+      Obs.Final_State := S.Initial_State;
+      Obs.Outcome := Closed_By_Server;
+      Obs.Count := 0;
+      begin
+         declare
+            H    : constant GS.Host_Entry_Type := GS.Get_Host_By_Name (Host);
+            Addr : constant GS.Inet_Addr_Type := GS.Addresses (H, 1);
+         begin
+            if Addr.Family /= GS.Family_Inet then
+               Fail ("error: unsupported address for " & Endpoint);
+            end if;
+            GS.Create_Socket (Sock);
+            Connected := True;
+            GS.Connect_Socket
+              (Sock, (Family => GS.Family_Inet, Addr => Addr,
+                      Port   => GS.Port_Type (Port)));
+         end;
+      exception
+         when GS.Socket_Error | GS.Host_Error =>
+            if Connected then
+               GS.Close_Socket (Sock);
+            end if;
+            Fail ("error: cannot connect to endpoint " & Endpoint);
+      end;
+      GS.Create_Selector (Sel);
+      begin
+         Send_Phase;
+         Receive_Phase;
+      exception
+         when others =>
+            GS.Close_Selector (Sel);
+            GS.Close_Socket (Sock);
+            raise;
+      end;
+      GS.Close_Selector (Sel);
+      GS.Close_Socket (Sock);
+   end Run_Endpoint;
 
 begin
    Parse_Arguments;

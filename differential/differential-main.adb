@@ -77,13 +77,10 @@ procedure Differential_Main is
          if C not in '0' .. '9' then
             return -1;
          end if;
-         if V > Limit / 10 then
+         if V > (Limit - (Character'Pos (C) - Character'Pos ('0'))) / 10 then
             return -1;
          end if;
          V := V * 10 + (Character'Pos (C) - Character'Pos ('0'));
-         if V > Limit then
-            return -1;
-         end if;
       end loop;
       return V;
    end Parse_Number;
@@ -143,7 +140,7 @@ procedure Differential_Main is
                if Argument_Count < I + 1 or else Have_Timeout then
                   raise Usage_Error;
                end if;
-               N := Parse_Number (Argument (I + 1), 1_000_000_000);
+               N := Parse_Number (Argument (I + 1), Integer'Last);
                if N < 1 then
                   raise Usage_Error;
                end if;
@@ -354,14 +351,21 @@ procedure Differential_Main is
                end if;
                State := T.Next_State;
                Obs.Final_State := State;
-               if Obs.Count < Max_Packets then
-                  Obs.Count := Obs.Count + 1;
-                  Obs.Packets (Obs.Count) := (Id => Ev.Id, State => State);
+               if Obs.Count >= Max_Packets then
+                  --  List capacity exceeded: surfaced as a malformed run
+                  --  rather than silently truncating.
+                  Bad := True;
+                  return;
                end if;
+               Obs.Count := Obs.Count + 1;
+               Obs.Packets (Obs.Count) := (Id => Ev.Id, State => State);
             end;
          end;
       end On_Frame;
 
+      --  Scenario input is already a complete frame (length prefix
+      --  included); it is validated with the framing/state units and
+      --  replayed as-is, so no encoding is duplicated here.
       procedure Send_Phase is
          Send_State : PS.Connection_State := S.Initial_State;
       begin
@@ -480,7 +484,7 @@ procedure Differential_Main is
                Obs.Outcome := Closed_By_Server;
                return;
             end if;
-            if Total + Natural (Last) > Cap then
+            if Total + Natural (Last) >= Cap then
                Obs.Outcome := Malformed_Response;
                return;
             end if;

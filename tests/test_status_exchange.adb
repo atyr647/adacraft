@@ -67,7 +67,7 @@ begin
    begin
       Call (Ping_Request, Sent, Result, Output);
       Check
-        ((Result = X.Close_After_Send) and then (not Output.Failed)
+        ((Result = X.Close_After_Send and not Output.Failed)
          and then Output.Len = 10
          and then Output.Data (1) = 9
          and then Output.Data (2) = 1,

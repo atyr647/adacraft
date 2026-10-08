@@ -425,8 +425,13 @@ procedure Differential_Main is
                                           & "state machine for " & Endpoint);
                                  end if;
                                  Send_State := T.Next_State;
+                                 State := T.Next_State;
+                                 Obs.Final_State := State;
                               end;
                            end;
+                        else
+                           Fail ("error: malformed scenario frame for "
+                                 & Endpoint);
                         end if;
                      end;
                   end if;

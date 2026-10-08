@@ -11,6 +11,8 @@ with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Ids;
 with Adacraft.Protocol.Packets;
+with Adacraft.Protocol.Status_Info;
+with Adacraft.Protocol.Status_Json;
 with Adacraft.Protocol.Varnum;
 
 procedure Adacraft_Tests is

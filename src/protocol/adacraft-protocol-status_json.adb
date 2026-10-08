@@ -60,7 +60,7 @@ package body Adacraft.Protocol.Status_Json is
                   Buf (Pos + 1) := '\';
                   Buf (Pos + 2) := 't';
                   Pos := Pos + 2;
-               when 16#00# .. 16#1F# =>
+               when 16#00# .. 16#07# | 16#0B# | 16#0E# .. 16#1F# =>
                   Buf (Pos + 1) := '\';
                   Buf (Pos + 2) := 'u';
                   Buf (Pos + 3) := '0';

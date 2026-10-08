@@ -22,7 +22,13 @@ begin
       return;
    end if;
    if Cfg.Mode = Usage_Error then
-      Args.Put_Usage (Ada.Text_IO.Standard_Error);
+      declare
+         Err : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Open (Err, Ada.Text_IO.Out_File, "/dev/stderr");
+         Args.Put_Usage (Err);
+         Ada.Text_IO.Close (Err);
+      end;
       Set_Exit_Status (2);
       return;
    end if;

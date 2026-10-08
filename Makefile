@@ -59,8 +59,13 @@ check-packets-table:
 	grep -q "$$j" generated/26.3/PROVENANCE.md || { echo "PROVENANCE.md does not match pin"; exit 1; }
 	@echo "packets table ok"
 
-check:
+check: bin/test_protocol_packet_decoder
 	python3 tools/check_boundaries.py
+	./bin/test_protocol_packet_decoder
+
+bin/test_protocol_packet_decoder: tests/test_protocol_packet_decoder.adb
+	mkdir -p bin obj
+	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_protocol_packet_decoder.adb -o $@
 
 server: bin/adacraft
 	./bin/adacraft

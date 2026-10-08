@@ -151,7 +151,7 @@ procedure Test_Protocol_Packet_Decoder is
    begin
       Reset;
       Append_VarInt (0);
-      Append_Byte (Interfaces.Unsigned_8 (Value));
+      Append_Byte (Interfaces.Unsigned_8 (Integer (Value) mod 256));
       L := Mk_Layout (D.Kind_Byte);
       D.Decode (Cur, L, Id, F, St);
       Check (St = D.Success and then Id = 0
@@ -165,7 +165,8 @@ procedure Test_Protocol_Packet_Decoder is
       Id : Interfaces.Integer_32 := -999;
       F  : D.Decoded_Fields;
       St : D.Decode_Status := D.Rejected;
-      U  : constant Interfaces.Unsigned_16 := Interfaces.Unsigned_16 (Value);
+      U  : constant Interfaces.Unsigned_16 :=
+        Interfaces.Unsigned_16 (Integer (Value) mod 65_536);
    begin
       Reset;
       Append_VarInt (0);
@@ -183,7 +184,8 @@ procedure Test_Protocol_Packet_Decoder is
       Id : Interfaces.Integer_32 := -999;
       F  : D.Decoded_Fields;
       St : D.Decode_Status := D.Rejected;
-      U  : constant Interfaces.Unsigned_32 := Interfaces.Unsigned_32 (Value);
+      U  : constant Interfaces.Unsigned_32 :=
+        Interfaces.Unsigned_32 (Long_Long_Integer (Value) mod 4_294_967_296);
    begin
       Reset;
       Append_VarInt (0);
@@ -201,7 +203,25 @@ procedure Test_Protocol_Packet_Decoder is
       Id : Interfaces.Integer_32 := -999;
       F  : D.Decoded_Fields;
       St : D.Decode_Status := D.Rejected;
-      U  : constant Interfaces.Unsigned_64 := Interfaces.Unsigned_64 (Value);
+      --  Wrap signed Long bits into modular without a raising conversion.
+      function To_U64 (V : Interfaces.Integer_64) return Interfaces.Unsigned_64 is
+         B : P.Octets (1 .. 8) := (others => 0);
+         X : Interfaces.Integer_64 := V;
+      begin
+         for I in reverse 1 .. 8 loop
+            B (I) := Interfaces.Unsigned_8 (Integer (X mod 256));
+            X := X / 256;
+         end loop;
+         declare
+            U : Interfaces.Unsigned_64 := 0;
+         begin
+            for J in B'Range loop
+               U := U * 256 + Interfaces.Unsigned_64 (B (J));
+            end loop;
+            return U;
+         end;
+      end To_U64;
+      U  : constant Interfaces.Unsigned_64 := To_U64 (Value);
    begin
       Reset;
       Append_VarInt (0);

@@ -312,10 +312,12 @@ begin
       Append_VarLong (I64'First);
       Append_VarInt (3);
       Append (16#41#);
+      Append (16#00#);
+      Append (16#01#);
       Append (16#01#);
       Append (16#00#);
       Append (16#01#);
-      Append_BE (65_535, 2);
+      Append_BE (65_534, 2);
       Append_BE (U64'Last - 1, 4);
       Append_BE (U64'Last - 1, 8);
       Decode_Payload (Buffer (1 .. Last), Layout, Status, Id, Fields, Count);

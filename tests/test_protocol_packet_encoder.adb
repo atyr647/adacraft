@@ -3,6 +3,7 @@ with Ada.Text_IO;
 with Interfaces;
 with Adacraft.Protocol;
 with Adacraft.Protocol.Packet_Encoder;
+with Adacraft.Protocol.Varnum;
 
 procedure Test_Protocol_Packet_Encoder is
    package PE renames Adacraft.Protocol.Packet_Encoder;
@@ -274,6 +275,136 @@ begin
       PE.Write_Bytes (E, Buf, Buf (2 .. 1));
       Check (PE.Status_Of (E) = PE.Invalid_Sequence, "T2 empty-before-id status");
       Check (PE.Body_Length (E) = 0, "T2 empty-before-id length");
+   end;
+
+   --  T3: VarInt byte-equality vs direct Varnum.Encode (0/-1/max/min).
+   declare
+      procedure Check_VarInt (V : Interfaces.Integer_32; Name : String) is
+         use type Varnum.Status_Type;
+         E       : PE.Encoder;
+         Buf     : PE.Byte_Array (1 .. 16) := (others => 16#AA#);
+         Staging : Octets (1 .. Max_Varint_Bytes) := (others => 0);
+         Written : Natural := 0;
+         Vs      : Varnum.Status_Type;
+         Last    : Natural := 0;
+         S       : PE.Status;
+      begin
+         Varnum.Encode (V, Staging, Staging'First, Written, Vs);
+         Check (Vs = Varnum.Ok, Name & " varnum ok");
+         PE.Start (E);
+         PE.Write_Packet_Id (E, Buf, 0);
+         PE.Write_VarInt (E, Buf, V);
+         Check (PE.Status_Of (E) = PE.Ok, Name & " status");
+         Check (PE.Body_Length (E) = 1 + Written, Name & " length");
+         PE.Finish (E, Buf, Last, S);
+         Check (S = PE.Ok, Name & " finish");
+         if S = PE.Ok then
+            Check (Buf (Buf'First) = 16#00#, Name & " id byte");
+            for I in 0 .. Written - 1 loop
+               if Buf (Buf'First + 1 + I) /= Staging (Staging'First + I) then
+                  Check (False, Name & " byte");
+               end if;
+            end loop;
+         end if;
+      end Check_VarInt;
+
+      procedure Check_VarLong (V : Interfaces.Integer_64; Name : String) is
+         use type Varnum.Status_Type;
+         E       : PE.Encoder;
+         Buf     : PE.Byte_Array (1 .. 16) := (others => 16#AA#);
+         Staging : Octets (1 .. Max_Varlong_Bytes) := (others => 0);
+         Written : Natural := 0;
+         Vs      : Varnum.Status_Type;
+         Last    : Natural := 0;
+         S       : PE.Status;
+      begin
+         Varnum.Encode_Varlong (V, Staging, Staging'First, Written, Vs);
+         Check (Vs = Varnum.Ok, Name & " varnum ok");
+         PE.Start (E);
+         PE.Write_Packet_Id (E, Buf, 0);
+         PE.Write_VarLong (E, Buf, V);
+         Check (PE.Status_Of (E) = PE.Ok, Name & " status");
+         Check (PE.Body_Length (E) = 1 + Written, Name & " length");
+         PE.Finish (E, Buf, Last, S);
+         Check (S = PE.Ok, Name & " finish");
+         if S = PE.Ok then
+            Check (Buf (Buf'First) = 16#00#, Name & " id byte");
+            for I in 0 .. Written - 1 loop
+               if Buf (Buf'First + 1 + I) /= Staging (Staging'First + I) then
+                  Check (False, Name & " byte");
+               end if;
+            end loop;
+         end if;
+      end Check_VarLong;
+   begin
+      Check_VarInt (0, "T3 varint 0");
+      Check_VarInt (-1, "T3 varint -1");
+      Check_VarInt (2_147_483_647, "T3 varint max");
+      Check_VarInt (-2_147_483_648, "T3 varint min");
+      Check_VarLong (0, "T3 varlong 0");
+      Check_VarLong (-1, "T3 varlong -1");
+      Check_VarLong (9_223_372_036_854_775_807, "T3 varlong max");
+      Check_VarLong (-9_223_372_036_854_775_808, "T3 varlong min");
+   end;
+
+   --  T3b: Write_Bytes copies payload verbatim after ID.
+   declare
+      E        : PE.Encoder;
+      Buf      : PE.Byte_Array (1 .. 16) := (others => 16#AA#);
+      Payload  : PE.Byte_Array'(16#DE#, 16#AD#, 16#BE#, 16#EF#);
+      Last     : Natural := 0;
+      S        : PE.Status;
+   begin
+      PE.Start (E);
+      PE.Write_Packet_Id (E, Buf, 0);
+      PE.Write_Bytes (E, Buf, Payload);
+      Check (PE.Status_Of (E) = PE.Ok, "T3 bytes status");
+      Check (PE.Body_Length (E) = 5, "T3 bytes length");
+      PE.Finish (E, Buf, Last, S);
+      Check (S = PE.Ok, "T3 bytes finish");
+      if S = PE.Ok then
+         Check
+           (Equal (Buf (Buf'First .. Last),
+                   PE.Byte_Array'(16#00#, 16#DE#, 16#AD#, 16#BE#, 16#EF#)),
+            "T3 bytes content");
+      end if;
+   end;
+
+   --  T4: handshake-shaped body
+   --  ID 0, VarInt 777 (16#89#, 16#06#), string placeholder bytes for
+   --  length-prefixed "localhost" (09 + 9 bytes), UShort 25565 (63 DD),
+   --  VarInt 1 (next state), vs hand-computed vector.
+   declare
+      E        : PE.Encoder;
+      Buf      : PE.Byte_Array (1 .. 32) := (others => 16#AA#);
+      Str_Body : PE.Byte_Array'(
+        16#09#,
+        16#6C#, 16#6F#, 16#63#, 16#61#, 16#6C#,
+        16#68#, 16#6F#, 16#73#, 16#74#);
+      Expected : PE.Byte_Array'(
+        16#00#,
+        16#89#, 16#06#,
+        16#09#,
+        16#6C#, 16#6F#, 16#63#, 16#61#, 16#6C#,
+        16#68#, 16#6F#, 16#73#, 16#74#,
+        16#63#, 16#DD#,
+        16#01#);
+      Last : Natural := 0;
+      S    : PE.Status;
+   begin
+      PE.Start (E);
+      PE.Write_Packet_Id (E, Buf, 0);
+      PE.Write_VarInt (E, Buf, 777);
+      PE.Write_Bytes (E, Buf, Str_Body);
+      PE.Write_UShort (E, Buf, 25565);
+      PE.Write_VarInt (E, Buf, 1);
+      Check (PE.Status_Of (E) = PE.Ok, "T4 handshake status");
+      Check (PE.Body_Length (E) = Expected'Length, "T4 handshake length");
+      PE.Finish (E, Buf, Last, S);
+      Check (S = PE.Ok, "T4 handshake finish");
+      if S = PE.Ok then
+         Check (Equal (Buf (Buf'First .. Last), Expected), "T4 handshake bytes");
+      end if;
    end;
 
    --  T10: field before ID -> Invalid_Sequence, zero bytes.

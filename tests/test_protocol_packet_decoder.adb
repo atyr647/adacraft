@@ -1,8 +1,10 @@
 with Ada.Command_Line;
+with Ada.Numerics.Discrete_Random;
 with Ada.Streams;
 with Ada.Text_IO;
 with Interfaces;
 with Adacraft.Protocol;
+with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Packets;
 with Adacraft.Protocol.Packet_Encoder;
 with Adacraft.Protocol.Varnum;
@@ -637,6 +639,118 @@ begin
    Check (True, "T9 varint vacuous: no non-length invalid value");
    Check (True, "T9 varlong vacuous: no non-length invalid value");
    Check (True, "T9 string vacuous: only length guards, covered in T7");
+
+   --  T10: fixed-seed deterministic no-exception sweep of arbitrary byte
+   --  vectors against a fixed mixed layout. Reproducible: hard-coded seed
+   --  and counts. Result must always be Ok or an explicit Err, never an
+   --  exception.
+   declare
+      T10_Seed         : constant Integer := 16#0DEC10#;
+      T10_Small_Max    : constant Natural := 32;
+      T10_Small_Trials : constant Natural := 8;
+      T10_Sweep_Count  : constant Natural := 300;
+      T10_Large_Trials : constant Natural := 4;
+      T10_Max_Len      : constant Natural :=
+        Adacraft.Protocol.Frame.Max_Frame_Body_Length;
+      subtype T10_Byte_Val is Natural range 0 .. 255;
+      package T10_Rng is new Ada.Numerics.Discrete_Random (T10_Byte_Val);
+      Gen : T10_Rng.Generator;
+      Layout : constant Packets.Field_Kind_Array (1 .. 3) :=
+        (Packets.K_Varint, Packets.K_Byte, Packets.K_String);
+      Total : Natural := 0;
+
+      procedure T10_Try (Data : Protocol.Octets; Name : String) is
+         R : Packets.Decode_Result (Ok => False);
+         Raised : Boolean := False;
+      begin
+         begin
+            R := Packets.Decode (Data, Layout);
+         exception
+            when others =>
+               Raised := True;
+         end;
+         Check (not Raised, "T10 no exception " & Name);
+         if not Raised then
+            if R.Ok then
+               Check (R.Num_Fields = Layout'Length, "T10 ok count " & Name);
+               if R.Num_Fields = Layout'Length then
+                  Check (R.Fields (1).Kind = Packets.K_Varint
+                         and then R.Fields (2).Kind = Packets.K_Byte
+                         and then R.Fields (3).Kind = Packets.K_String,
+                         "T10 ok kinds " & Name);
+                  Check (R.Fields (3).S_Len <= Packets.String_Max,
+                         "T10 ok bounded " & Name);
+               end if;
+            else
+               Check (R.Err in Packets.Decode_Error_Kind,
+                      "T10 explicit err " & Name);
+            end if;
+            Total := Total + 1;
+         end if;
+      end T10_Try;
+
+      procedure T10_Random_Vector (Len : Natural; Tag : String) is
+         Buf : Protocol.Octets (1 .. Len) := (others => 0);
+      begin
+         for I in Buf'Range loop
+            Buf (I) := Protocol.Octet (T10_Rng.Random (Gen));
+         end loop;
+         if Len = 0 then
+            declare
+               Holder : Protocol.Octets (1 .. 1) := (others => 0);
+            begin
+               T10_Try (Holder (1 .. 0), Tag);
+            end;
+         else
+            T10_Try (Buf, Tag);
+         end if;
+      end T10_Random_Vector;
+
+      type Octets_Access is access Protocol.Octets;
+      Large : Octets_Access;
+   begin
+      T10_Rng.Reset (Gen, T10_Seed);
+      --  Exhaustive small lengths 0, 1, .. T10_Small_Max, several trials
+      --  each, plus deterministic content per trial from the fixed seed.
+      for Len in 0 .. T10_Small_Max loop
+         for T in 1 .. T10_Small_Trials loop
+            T10_Random_Vector
+              (Len, "small" & Integer'Image (Len) & ":" & Integer'Image (T));
+         end loop;
+      end loop;
+      --  Fixed-count deterministic sweep of pseudo-random small vectors:
+      --  lengths derived from the same seeded stream (one generator /
+      --  one seed) so the run is reproducible.
+      for I in 1 .. T10_Sweep_Count loop
+         declare
+            Len : constant Natural :=
+              Natural (T10_Rng.Random (Gen)) mod (T10_Small_Max + 1);
+         begin
+            T10_Random_Vector (Len, "rand" & Integer'Image (I));
+         end;
+      end loop;
+      --  Sampled vectors up to Max_Frame_Body_Length. Few, fixed count, so
+      --  the run stays cheap and reproducible; full fuzz is Phase 6.
+      declare
+         Sizes : constant array (1 .. 4) of Natural :=
+           (64, 1_024, T10_Max_Len - 1, T10_Max_Len);
+      begin
+         for S in Sizes'Range loop
+            for T in 1 .. T10_Large_Trials loop
+               Large := new Protocol.Octets (1 .. Sizes (S));
+               for I in Large'Range loop
+                  Large (I) := Protocol.Octet (T10_Rng.Random (Gen));
+               end loop;
+               T10_Try (Large.all,
+                        "large" & Integer'Image (Sizes (S))
+                        & ":" & Integer'Image (T));
+            end loop;
+         end loop;
+      end;
+      Check (Total = (T10_Small_Max + 1) * T10_Small_Trials
+             + T10_Sweep_Count
+             + 4 * T10_Large_Trials, "T10 reproducible count");
+   end;
 
    if Failures = 0 then
       Ada.Text_IO.Put_Line ("packet decoder tests passed");

@@ -109,5 +109,3 @@ package Adacraft.Protocol.Packets is
      with Inline;
 
 end Adacraft.Protocol.Packets;
-
-end Adacraft.Protocol.Packets;

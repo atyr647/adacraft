@@ -360,6 +360,7 @@ begin
          Val : Interfaces.Integer_64 := 0;
          Consumed : Natural := 0;
          St : Adacraft.Protocol.Varnum.Status_Type;
+         use type Adacraft.Protocol.Varnum.Status_Type;
       begin
          Enc.Decode (Over_Id, Empty, R);
          Check (R.Status = Enc.Overlong_Varint, "T4 overlong varint id");
@@ -459,8 +460,6 @@ begin
          Max_Len : constant Natural :=
            Adacraft.Protocol.Frame.Max_Frame_Body_Length;
          type Big_Access is access Enc.Body_Bytes;
-         procedure Free_Big is new Ada.Unchecked_Deallocation
-           (Enc.Body_Bytes, Big_Access);
          Big : Big_Access;
          Empty : constant Enc.Layout_Array (1 .. 0) :=
            (others => Enc.Field_Boolean);
@@ -474,7 +473,6 @@ begin
          end loop;
          Enc.Decode (Big.all, Empty, R);
          Check (R.Status = Enc.Trailing_Bytes, "T9 max body trailing");
-         Free_Big (Big);
       end;
    end;
 

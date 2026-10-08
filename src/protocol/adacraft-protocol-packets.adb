@@ -91,13 +91,6 @@ package body Adacraft.Protocol.Packets is
       return (Status => Ok, Value => Buffer.Decode_U64 (Payload, Payload'First));
    end Decode_Ping;
 
-   procedure Touch_Frame_Max is
-      Dummy : Natural := Adacraft.Protocol.Frame.Max_Frame_Body_Length;
-      pragma Unreferenced (Dummy);
-   begin
-      null;
-   end Touch_Frame_Max;
-
    function Decode
      (Raw : Byte_Array;
       Layout : Field_Kind_Array) return Decode_Result
@@ -111,15 +104,9 @@ package body Adacraft.Protocol.Packets is
       Ok_Res   : Decode_Result (Ok => True);
       Pos      : Natural := 0;
       Last     : Natural := 0;
-      Idone    : Boolean := False;
 
       function Remaining return Natural is
         (if Pos > Last then 0 else Last - Pos + 1);
-
-      procedure Fail (E : Decode_Error_Kind; R : out Decode_Result) is
-      begin
-         R := (Ok => False, Err => E);
-      end Fail;
    begin
       if Raw'Length = 0 then
          return (Ok => False, Err => Truncated);
@@ -160,7 +147,6 @@ package body Adacraft.Protocol.Packets is
          Ok_Res.Id := Natural (V);
          Pos := Pos + C;
       end;
-      Idone := True;
 
       Ok_Res.Num_Fields := Layout'Length;
       for I in 1 .. Layout'Length loop

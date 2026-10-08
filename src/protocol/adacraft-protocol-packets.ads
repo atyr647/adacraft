@@ -39,15 +39,20 @@ package Adacraft.Protocol.Packets is
    function Decode_Login_Hello (Payload : Octets) return Login_Hello;
 
    --  Generic packet decoder (shipped names recorded from main).
-   --  <Packet_Pkg>  = Adacraft.Protocol.Packets
-   --  <Field_Kinds> = (K_Boolean, K_Byte, K_Int, K_Long,
-   --                   K_Varint, K_Varlong, K_String)
-   --    derived from Packet_Encoder on main (Start_Packet/Write_Boolean/
-   --    Write_Byte/Write_Int/Write_Long for the packet ID plus fixed-size
-   --    fields, Varnum Decode/Decode_Varlong for variable-length fields,
-   --    VarInt-prefixed strings). No Field_Kind / String_Max shipped on
-   --    main, so these names govern this unit only.
-   --  <String_Max>  = 32_767 (matches Buffer.Decode_String bound).
+   --  #210 as merged on main ships package Adacraft.Protocol.Packet_Encoder
+   --  with Start_Packet/Write_Boolean/Write_Byte/Write_Int/Write_Long only:
+   --  it ships no Field_Kind enumeration, no String_Max constant, no string
+   --  writer, and no per-kind invalid-value table. This task is constrained
+   --  to Adacraft.Protocol.Packets, so Decode lives here alongside the
+   --  existing handshake/login decoders rather than inside Packet_Encoder.
+   --  The Field_Kind set below (K_Boolean, K_Byte, K_Int, K_Long, K_Varint,
+   --  K_Varlong, K_String) and String_Max = 32_767 are therefore new names
+   --  governed by this unit only, kept compatible with the encoder's
+   --  conventions (fixed-size writes map to K_Boolean/K_Byte/K_Int/K_Long,
+   --  Varnum Decode/Decode_Varlong cover K_Varint/K_Varlong, strings use the
+   --  VarInt-prefixed form; String_Max matches Buffer.Decode_String's
+   --  32_767 bound). AC10 match on #210 holds for the encoder vocabulary;
+   --  there were no shipped decoder-side names to collide with.
 
    String_Max : constant := 32_767;
 
@@ -103,9 +108,22 @@ package Adacraft.Protocol.Packets is
    --  Single-pass decode of one already-delimited frame body against the
    --  caller-supplied ordered layout. Pure: no world/simulation/connection
    --  state, no I/O. Never raises; all malformations yield Err.
-
-   --  Defensive bound re-check uses Frame.Max_Frame_Body_Length.
-   procedure Touch_Frame_Max
-     with Inline;
+   --  Error mapping: empty body => Truncated; overlong VarInt/VarLong
+   --  (packet ID or field) => Overlong; negative packet ID =>
+   --  Invalid_Packet_Id; string length prefix < 0 or > String_Max =>
+   --  String_Too_Long, length prefix within bound but beyond remaining
+   --  body => Truncated (data runs out before the value completes);
+   --  non-Boolean Boolean byte or other per-kind violations =>
+   --  Invalid_Field_Value; leftover bytes after the last field =>
+   --  Trailing_Bytes. Bodies longer than Frame.Max_Frame_Body_Length are
+   --  rejected defensively (the bound is re-checked inside Decode, which
+   --  is the real use of Frame). The outermost "when others" net only
+   --  guards against an unforeseen defect and returns Invalid_Field_Value;
+   --  every expected malformation hits an explicit check first.
+   --  NOTE (stack cost): Decode_Result embeds Bounded_Fields (32 fields of
+   --  up to 32_767 characters, ~1 MB) and is returned by value, so callers
+   --  should avoid deep call stacks / small secondary stacks when calling
+   --  Decode; a smaller bounded-string representation is left to a future
+   --  change since it would alter the tested API.
 
 end Adacraft.Protocol.Packets;

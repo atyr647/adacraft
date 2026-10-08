@@ -230,10 +230,14 @@ package body Adacraft.Protocol.Packet_Encoder is
          return;
       end if;
 
-      if Len = 0
-        or else Len > Adacraft.Protocol.Frame.Max_Frame_Body_Length
-      then
+      if Len = 0 then
          Result := (Status => Truncated, Error_Offset => 0);
+         return;
+      end if;
+
+      if Len > Adacraft.Protocol.Frame.Max_Frame_Body_Length then
+         --  Over-bound input cannot be Truncated; report distinctly.
+         Result := (Status => Invalid_Length, Error_Offset => 0);
          return;
       end if;
 

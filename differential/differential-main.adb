@@ -817,15 +817,21 @@ procedure Differential_Main is
    end D_Net;
 
    package D_Run is
-      --  Scenario runner: per scenario per target, independently.
-      --  Self-contained reuse of #114/#115/#116/#117/#118/#119 semantics
-      --  (read-only, no product withs): minimal ordered-C2S view (state,
-      --  id, payload-hex) is read from the scenario file; egress bytes are
-      --  sent as stored frames; ingress uses D_Net.Recv_Frame (length
-      --  limited) plus a local minimal-VarInt packet-ID decode plus local
-      --  state labelling. Bounded: 1024 entries, oversize/overlong/
-      --  truncated => Malformed_Input via frame-boundary handler, never
-      --  escapes, no unchecked access/conversion.
+      --  Scenario runner: per scenario per target, independently, with
+      --  fresh #118 state per run (Cur_State reset from initial_state).
+      --  Reuses #114/#115/#116/#117/#118/#119 read-only semantics without
+      --  product withs (lab-only differential.gpr carries Main wiring
+      --  only): Corpus_Loader.Load minimal ordered-C2S view (state, id,
+      --  payload-hex) mirrored by input:/initial_state/state_after parse;
+      --  Packets.Encode+Varnum.Encode+Frame.Encode+Send mirrored by sending
+      --  stored canonical frame bytes; ingress mirrors Frame.Decode
+      --  length-limited (Max_Frame_Body_Length 2097151, Max_Length_Bytes 3,
+      --  Max_Varint_Bytes 5) + Varnum.Decode (overlong => malformed_input)
+      --  + Packets.Decode packet-ID + State.Valid S2C labelling (label
+      --  only, never enforced). Bounded: 1024 entries, overflow stops with
+      --  still_open_at_end; oversize/overlong/truncated => Malformed_Input
+      --  via frame-boundary exception-when-others, never escapes, no
+      --  unchecked access/conversion, no Unchecked_Conversion.
       procedure Run_Target
         (Host_Image       : String;
          Port             : Natural;

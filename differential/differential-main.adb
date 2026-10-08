@@ -869,9 +869,9 @@ procedure Differential.Main is
    end D_Run;
 
    package body D_Run is
-      Max_Raw : constant := 2_097_151 + 8;
-      subtype Raw_Index is Positive range 1 .. Max_Raw;
 
+      --  Canonical corpus states map 1:1 onto #118 Connection_State
+      --  parents (Handshake/Status/Login/Configuration/Play).
       function State_Of (Name : String) return Natural is
          --  HANDSHAKE=0 STATUS=1 LOGIN=2 CONFIGURATION=3 PLAY=4.
          --  Unknown => 0 (label only, never enforced).
@@ -999,12 +999,8 @@ procedure Differential.Main is
          case State_Nat is
             when 1 => St := Status;
             when 2 => St := Login;
-            when 3 =>
-               St := Handshake;
-               --  Configuration maps onto Handshake parent when the
-               --  #118 build has no separate value; still labelled.
-               null;
-            when 4 => St := Status;
+            when 3 => St := Configuration;
+            when 4 => St := Play;
             when others => St := Handshake;
          end case;
          --  Guard out-of-range IDs; Is_Packet_Valid takes Packet_Id.
@@ -1024,12 +1020,13 @@ procedure Differential.Main is
          Len : Natural)
       is
          use Adacraft.Protocol.Frame;
+         --  Bounded scratch: head only is verified, never a 2 MiB frame.
          Out_Buf : Ada.Streams.Stream_Element_Array
-           (1 .. D_Net.Max_Frame_Len + 8) := (others => 0);
+           (1 .. D_Net.Frame_Store_Len + 8) := (others => 0);
          Last : Ada.Streams.Stream_Element_Offset;
          St   : Encode_Status;
       begin
-         if Len = 0 or else Len > D_Net.Max_Frame_Len then
+         if Len = 0 or else Len > D_Net.Frame_Store_Len then
             return;
          end if;
          Encode (Buf (1 .. Len), Out_Buf, Last, St);
@@ -1145,6 +1142,9 @@ procedure Differential.Main is
                   end if;
                   if Ok_Parse then
                      Cur_State := To_State_Nat (S.Initial_State);
+                     --  Fresh #118 state per target per scenario: Cur_State
+                     --  reset from Initial_State; S2C labelling only via
+                     --  Label_S2C (State.Valid read-only), never enforced.
                      for I in 1 .. Natural (S.Steps.Length) loop
                         exit when Ada.Real_Time.Clock >= Scenario_End;
                         declare

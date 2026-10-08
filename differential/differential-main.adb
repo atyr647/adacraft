@@ -954,7 +954,7 @@ procedure Differential_Main is
             if not Ok then
                T.Result := D_Defs.Connect_Failed;
                return;
-            end;
+            end if;
             --  Read scenario file: collect raw frame bytes per
             --  "input:" line, track state via initial_state/state_after.
             declare
@@ -1388,6 +1388,66 @@ procedure Differential_Main is
          end if;
       end Set_Exit;
    end D_Main;
+
+   package D_Selftest is
+      --  In-binary selftest for pure D_Compare (no Java, no network).
+      --  Exercises identical->MATCH, ID diff->DIVERGE+index,
+      --  payload-ignored->MATCH (payload never stored), outcome
+      --  diff->DIVERGE. Prints deterministic lines, sets Passed.
+      procedure Run (Passed : out Boolean);
+   end D_Selftest;
+
+   package body D_Selftest is
+      procedure Run (Passed : out Boolean) is
+         use type D_Defs.Outcome;
+         TA, TB : D_Defs.Transcript;
+         Full   : Boolean;
+         Ok     : Boolean := True;
+
+         procedure Check (Cond : Boolean; Label : String) is
+         begin
+            if Cond then
+               Ada.Text_IO.Put_Line ("selftest: PASS " & Label);
+            else
+               Ada.Text_IO.Put_Line ("selftest: FAIL " & Label);
+               Ok := False;
+            end if;
+         end Check;
+      begin
+         --  Identical -> MATCH / index 0.
+         TA := (others => <>);
+         TB := (others => <>);
+         D_Defs.Append (TA, (State => 0, Dir => D_Defs.S2C, Id => 0), Full);
+         D_Defs.Append (TB, (State => 0, Dir => D_Defs.S2C, Id => 0), Full);
+         D_Defs.Append (TA, (State => 1, Dir => D_Defs.S2C, Id => 2), Full);
+         D_Defs.Append (TB, (State => 1, Dir => D_Defs.S2C, Id => 2), Full);
+         TA.Result := D_Defs.Closed_By_Peer;
+         TB.Result := D_Defs.Closed_By_Peer;
+         Check (D_Compare.Equal (TA, TB)
+                and then D_Compare.First_Divergence_Index (TA, TB) = 0,
+                "identical-match");
+         --  One packet-ID diff -> DIVERGE at index 2.
+         TB := (others => <>);
+         D_Defs.Append (TB, (State => 0, Dir => D_Defs.S2C, Id => 0), Full);
+         D_Defs.Append (TB, (State => 1, Dir => D_Defs.S2C, Id => 3), Full);
+         TB.Result := D_Defs.Closed_By_Peer;
+         Check ((not D_Compare.Equal (TA, TB))
+                and then D_Compare.First_Divergence_Index (TA, TB) = 2,
+                "id-diverge");
+         --  Payload-only diff -> MATCH (payload never stored, so equal
+         --  transcripts compare equal).
+         TB := TA;
+         Check (D_Compare.Equal (TA, TB), "payload-ignored-match");
+         --  Outcome diff -> DIVERGE at Count+1.
+         TB := TA;
+         TB.Result := D_Defs.Still_Open_At_End;
+         Check ((not D_Compare.Equal (TA, TB))
+                and then D_Compare.First_Divergence_Index (TA, TB)
+                         = TA.Count + 1,
+                "outcome-diverge");
+         Passed := Ok;
+      end Run;
+   end D_Selftest;
 
 begin
    D_Args.Parse;

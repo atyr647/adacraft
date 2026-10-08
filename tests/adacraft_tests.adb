@@ -742,7 +742,6 @@ begin
 
    Test_Protocol_Packet_Decoder;
    Test_Protocol_Packet_Encoder;
-   Test_Protocol_Packet_Decoder;
    if Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Handshake_Intention) /= 0
      or else Protocol.Ids.Protocol_Id (Protocol.Ids.Cb_Status_Status_Response) /= 0
      or else Protocol.Ids.Protocol_Id (Protocol.Ids.Cb_Login_Login_Disconnect) /= 0

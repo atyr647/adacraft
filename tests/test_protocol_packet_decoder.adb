@@ -318,25 +318,25 @@ begin
    end;
    --  T-2b: mixed incl varint/varlong/string round-trip (raw).
    declare
-      Pkt : SEA := Enc_Varint (11);
+      Pkt : SEA := Cat
+        (Cat
+           (Cat
+              (Cat (Cat (Enc_Varint (11),
+                         SEA'(1 .. 1 => 1)),      -- boolean true
+                    Enc_Varint (-300)),           -- varint
+               Enc_Varlong (-9_876_543_210)),     -- varlong
+            Enc_Varint (2)),                      -- string len 2
+         SEA'(1 => SE (Character'Pos ('h')),
+             2 => SE (Character'Pos ('h'))));
+      R : Dec.Decode_Result := Dec.Decode
+        (Pkt, Dec.Layout_Array'
+           (Dec.FK_Boolean, Dec.FK_Varint, Dec.FK_Varlong, Dec.FK_String));
    begin
-      Pkt := Cat (Pkt, SEA'(1 .. 1 => 1));       -- boolean true
-      Pkt := Cat (Pkt, Enc_Varint (-300));       -- varint
-      Pkt := Cat (Pkt, Enc_Varlong (-9_876_543_210)); -- varlong
-      Pkt := Cat (Pkt, Enc_Varint (2));          -- string len 2
-      Pkt := Cat (Pkt, SEA'(1 => SE (Character'Pos ('h')),
-                            2 => SE (Character'Pos ('h'))));
-      declare
-         R : Dec.Decode_Result := Dec.Decode
-           (Pkt, Dec.Layout_Array'
-              (Dec.FK_Boolean, Dec.FK_Varint, Dec.FK_Varlong, Dec.FK_String));
-      begin
-         Check (R.Ok and then R.Id = 11 and then R.Count = 4, "T-2b ok");
-         Check (R.Ok and then R.Fields (1).B = True, "T-2b bool");
-         Check (R.Ok and then R.Fields (2).V32 = -300, "T-2b varint");
-         Check (R.Ok and then R.Fields (3).V64 = -9_876_543_210, "T-2b varlong");
-         Check (R.Ok and then R.Fields (4).Str_Len = 2, "T-2b strlen");
-      end;
+      Check (R.Ok and then R.Id = 11 and then R.Count = 4, "T-2b ok");
+      Check (R.Ok and then R.Fields (1).B = True, "T-2b bool");
+      Check (R.Ok and then R.Fields (2).V32 = -300, "T-2b varint");
+      Check (R.Ok and then R.Fields (3).V64 = -9_876_543_210, "T-2b varlong");
+      Check (R.Ok and then R.Fields (4).Str_Len = 2, "T-2b strlen");
    end;
 
    --  T-3: ID range ends.

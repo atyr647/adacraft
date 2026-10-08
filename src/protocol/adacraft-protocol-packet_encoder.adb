@@ -253,8 +253,11 @@ package body Adacraft.Protocol.Packet_Encoder is
       Buf : in out Byte_Array;
       V   : Interfaces.Integer_32)
    is
-      pragma Unreferenced (Buf);
-      pragma Unreferenced (V);
+      use type Varnum.Status_Type;
+      Staging : Adacraft.Protocol.Octets (1 .. Max_Varint_Bytes) := (others => 0);
+      Written : Natural := 0;
+      Vs      : Varnum.Status_Type;
+      Ready   : Boolean := False;
    begin
       if E.St /= Ok then
          return;
@@ -263,7 +266,19 @@ package body Adacraft.Protocol.Packet_Encoder is
          E.St := Invalid_Sequence;
          return;
       end if;
-      null;
+      Varnum.Encode (V, Staging, Staging'First, Written, Vs);
+      if Vs /= Varnum.Ok then
+         E.St := Overflow;
+         return;
+      end if;
+      Reserve (E, Buf, Written, Ready);
+      if not Ready then
+         return;
+      end if;
+      for I in 0 .. Written - 1 loop
+         Buf (Buf'First + E.Len + I) := Staging (Staging'First + I);
+      end loop;
+      E.Len := E.Len + Written;
    end Write_VarInt;
 
    procedure Write_VarLong

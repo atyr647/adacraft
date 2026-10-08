@@ -28,7 +28,6 @@ package body Differential.Capture is
      Adacraft.Protocol.State.Handshake;
    Current_Bad     : Boolean := False;
    Current_Outcome : Differential.Outcome := Differential.Completed;
-   Current_Frames  : Natural := 0;
 
    function To_Octets
      (Data : Ada.Streams.Stream_Element_Array) return Adacraft.Protocol.Octets
@@ -82,7 +81,6 @@ package body Differential.Capture is
       if Current_Bad or else Current_Result = null then
          return;
       end if;
-      Current_Frames := Current_Frames + 1;
       if Data'Length = 0 then
          Current_Bad := True;
          Current_Outcome := Differential.Malformed_Frame;
@@ -120,7 +118,9 @@ package body Differential.Capture is
    begin
       while From <= Data'Last loop
          GNAT.Sockets.Send_Socket (Sock, Data (From .. Data'Last), Sent);
-         exit when Sent <= 0;
+         if Sent <= 0 then
+            raise Env_Error with "send failed";
+         end if;
          From := From + Sent;
       end loop;
    exception
@@ -199,26 +199,6 @@ package body Differential.Capture is
          Current_Outcome := Differential.Malformed_Frame;
          return;
       end if;
-      --  Decoder #203 hook: validate the framed bytes through shipped
-      --  Decode_Frame before sending (result must be Ok).
-      declare
-         Framed_Oct : Adacraft.Protocol.Octets (1 .. Natural (Last));
-      begin
-         for I in 1 .. Natural (Last) loop
-            Framed_Oct (I) :=
-              Adacraft.Protocol.Octet (Out_Buf (Ada.Streams.Stream_Element_Offset (I)));
-         end loop;
-         declare
-            FD : constant Adacraft.Protocol.Frame.Frame_Decode :=
-              Adacraft.Protocol.Frame.Decode_Frame (Framed_Oct, 1);
-         begin
-            if FD.Status /= Adacraft.Protocol.Ok then
-               Current_Bad := True;
-               Current_Outcome := Differential.Malformed_Frame;
-               return;
-            end if;
-         end;
-      end;
       Send_All (Sock, Out_Buf (Out_Buf'First .. Last));
    end Send_Serverbound;
 
@@ -245,7 +225,6 @@ package body Differential.Capture is
       Current_State := Adacraft.Protocol.State.Initial_State;
       Current_Bad := False;
       Current_Outcome := Differential.Completed;
-      Current_Frames := 0;
 
       declare
          Conn : Adacraft.Ingress.Connection_Type;

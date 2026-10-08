@@ -1,3 +1,5 @@
+with Adacraft.Protocol.State;
+
 package Differential.Transcript is
 
    --  Ordered transcript of (state, direction, packet id) observations.
@@ -10,7 +12,7 @@ package Differential.Transcript is
    subtype Entry_Count is Natural range 0 .. Max_Entries;
    subtype Entry_Index is Positive range 1 .. Max_Entries;
 
-   type Entry is record
+   type Transcript_Entry is record
       State     : Adacraft.Protocol.State.Connection_State :=
         Adacraft.Protocol.State.Handshake;
       Direction : Adacraft.Protocol.State.Packet_Direction :=
@@ -18,7 +20,7 @@ package Differential.Transcript is
       Id        : Adacraft.Protocol.State.Packet_Id := 0;
    end record;
 
-   type Entry_Array is array (Entry_Index) of Entry;
+   type Entry_Array is array (Entry_Index) of Transcript_Entry;
 
    type Transcript is record
       Count   : Entry_Count := 0;
@@ -34,14 +36,14 @@ package Differential.Transcript is
 
    function Length (T : Transcript) return Entry_Count;
 
-   function Get (T : Transcript; Index : Positive) return Entry
+   function Get (T : Transcript; Index : Positive) return Transcript_Entry
      with Pre => Index >= 1 and then Index <= T.Count;
 
    procedure Clear (T : in out Transcript);
 
    procedure Append
      (T       : in out Transcript;
-      Item    : Entry;
+      Item    : Transcript_Entry;
       Success : out Boolean);
 
    function Name_Str (S : Scenario_Result) return String;

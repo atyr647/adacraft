@@ -7,7 +7,7 @@ package body Differential.Transcript is
       return T.Count;
    end Length;
 
-   function Get (T : Transcript; Index : Positive) return Entry is
+   function Get (T : Transcript; Index : Positive) return Transcript_Entry is
    begin
       return T.Entries (Index);
    end Get;
@@ -19,7 +19,7 @@ package body Differential.Transcript is
 
    procedure Append
      (T       : in out Transcript;
-      Item    : Entry;
+      Item    : Transcript_Entry;
       Success : out Boolean)
    is
    begin

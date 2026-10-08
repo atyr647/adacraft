@@ -17,5 +17,5 @@ step:
 
 step:
   direction: serverbound
-  input: 17 00 05 4E 6F 74 63 68 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  input: 17 00 05 4E 6F 74 63 68 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
   outcome: rejected

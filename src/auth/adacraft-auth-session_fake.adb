@@ -1,6 +1,8 @@
 with Ada.Strings.Bounded;
+with Interfaces;
 
 package body Adacraft.Auth.Session_Fake is
+   use type Interfaces.Unsigned_8;
 
    function Is_Hex (C : Character) return Boolean is
    begin

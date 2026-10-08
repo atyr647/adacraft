@@ -1,3 +1,4 @@
+with Ada.Unchecked_Conversion;
 with Ada.Streams;
 with Interfaces;
 with Adacraft.Protocol;
@@ -11,6 +12,8 @@ package body Adacraft.Protocol.Packet_Encoder is
    use type Adacraft.Protocol.Varnum.Status_Type;
    use type Adacraft.Protocol.Frame.Encode_Status;
 
+   function To_Unsigned_32 is new Ada.Unchecked_Conversion
+     (Interfaces.Integer_32, Interfaces.Unsigned_32);
    procedure Append_Raw
      (E      : in out Encoder_Type;
       Source :        Ada.Streams.Stream_Element_Array)
@@ -103,7 +106,7 @@ package body Adacraft.Protocol.Packet_Encoder is
    end Write_Byte;
 
    procedure Write_Int (E : in out Encoder_Type; V : Interfaces.Integer_32) is
-      Bits  : constant Interfaces.Unsigned_32 := Interfaces.Unsigned_32 (V);
+      Bits  : constant Interfaces.Unsigned_32 := To_Unsigned_32 (V);
       Value : Ada.Streams.Stream_Element_Array (1 .. 4);
    begin
       if E.Failed then

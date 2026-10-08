@@ -12,8 +12,6 @@ package body Adacraft.Protocol.Packet_Encoder is
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
 
-   function To_I32 is new Ada.Unchecked_Conversion
-     (Interfaces.Unsigned_32, Interfaces.Integer_32);
    function To_U32 is new Ada.Unchecked_Conversion
      (Interfaces.Integer_32, Interfaces.Unsigned_32);
    function To_U64 is new Ada.Unchecked_Conversion
@@ -141,17 +139,6 @@ package body Adacraft.Protocol.Packet_Encoder is
       Append_Raw (E, B);
    end Write_Long;
 
-   procedure Empty_Last
-     (Output : Ada.Streams.Stream_Element_Array;
-      Last   : out Ada.Streams.Stream_Element_Offset) is
-   begin
-      if Output'First > Ada.Streams.Stream_Element_Offset'First then
-         Last := Output'First - 1;
-      else
-         Last := Output'First;
-      end if;
-   end Empty_Last;
-
    procedure Get_Framed
      (E      : in out Encoder_Type;
       Output : out Ada.Streams.Stream_Element_Array;
@@ -166,7 +153,11 @@ package body Adacraft.Protocol.Packet_Encoder is
         or else E.Count > Adacraft.Protocol.Frame.Max_Frame_Body_Length
       then
          E.Failed := True;
-         Empty_Last (Output, Last);
+         if Output'First > Ada.Streams.Stream_Element_Offset'First then
+            Last := Output'First - 1;
+         else
+            Last := Output'First;
+         end if;
          return;
       end if;
       Adacraft.Protocol.Frame.Write_Length_Prefix
@@ -175,7 +166,11 @@ package body Adacraft.Protocol.Packet_Encoder is
       Need := Prefix_Len + Ada.Streams.Stream_Element_Offset (E.Count);
       if Output'Length < Need then
          E.Failed := True;
-         Empty_Last (Output, Last);
+         if Output'First > Ada.Streams.Stream_Element_Offset'First then
+            Last := Output'First - 1;
+         else
+            Last := Output'First;
+         end if;
          return;
       end if;
       for I in 1 .. Prefix_Len loop
@@ -198,7 +193,11 @@ package body Adacraft.Protocol.Packet_Encoder is
       N : constant Natural := Natural'Min (E.Count, Natural (Data'Length));
    begin
       if N = 0 then
-         Empty_Last (Data, Last);
+         if Data'First > Ada.Streams.Stream_Element_Offset'First then
+            Last := Data'First - 1;
+         else
+            Last := Data'First;
+         end if;
          return;
       end if;
       for I in 1 .. N loop

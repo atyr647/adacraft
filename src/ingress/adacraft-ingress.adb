@@ -1,12 +1,13 @@
-with Adacraft.Auth;
 with Adacraft.Protocol.Frame;
-with Adacraft.Protocol.Ids;
-with Adacraft.Protocol.Packets;
+with Adacraft.Protocol.Handshake_Exchange;
+with Adacraft.Protocol.State;
+with Adacraft.Protocol.Status_Exchange;
 
 package body Adacraft.Ingress is
    use type Protocol.Status_Kind;
-   use type Interfaces.Unsigned_32;
-   use type Protocol.Octet;
+   use type Protocol.State.Connection_State;
+   use type Protocol.Handshake_Exchange.Disposition_Kind;
+   use type Protocol.Status_Exchange.Disposition_Kind;
 
    procedure Close_Connection (Connection : in out Connection_Type) is
    begin
@@ -62,41 +63,6 @@ package body Adacraft.Ingress is
       return Connection.Closed;
    end Is_Closed;
 
-   function Same_UUID (Left : Protocol.Octets; Right : Auth.Digest) return Boolean is
-   begin
-      if Left'Length /= 16 then
-         return False;
-      end if;
-      for I in 1 .. 16 loop
-         if Left (Left'First + I - 1) /= Right (I) then
-            return False;
-         end if;
-      end loop;
-      return True;
-   end Same_UUID;
-   procedure Append (W : in out Protocol.Buffer.Writer; Framed : Protocol.Buffer.Writer) is
-   begin
-      if Framed.Failed then
-         W.Failed := True;
-         return;
-      end if;
-      Protocol.Buffer.Put_Bytes (W, Framed.Data (1 .. Framed.Len));
-   end Append;
-
-   procedure Disconnect
-     (W : in out Protocol.Buffer.Writer; Reason : String; Close_Now : out Boolean)
-   is
-      Body_W : Protocol.Buffer.Writer (512);
-      Framed : Protocol.Buffer.Writer (640);
-   begin
-      Protocol.Packets.Encode_Login_Disconnect (Body_W, Reason);
-      if Protocol.Packets.Frame (Framed, Body_W) then
-         Append (W, Framed);
-      else
-         W.Failed := True;
-      end if;
-      Close_Now := True;
-   end Disconnect;
 
    procedure Ingest
      (S         : in out Session;
@@ -124,96 +90,51 @@ package body Adacraft.Ingress is
          end if;
 
          declare
-            Payload : constant Protocol.Octets :=
+            Packet : constant Protocol.Octets :=
               Incoming (Frame.Payload_First .. Frame.Payload_Last);
          begin
             case S.State is
-               when Protocol.Handshake =>
-                  if Frame.Packet_Id /= Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Handshake_Intention) then
-                     Close_Now := True;
-                  else
-                     declare
-                        Hello : constant Protocol.Packets.Handshake :=
-                          Protocol.Packets.Decode_Handshake (Payload);
-                     begin
-                        if Hello.Status /= Protocol.Ok then
-                           Close_Now := True;
-                        elsif Hello.Intent = 1 then
-                           S.State := Protocol.Status;
-                           S.Version := Hello.Version;
-                        elsif Hello.Intent = 2 and then Hello.Version = Adacraft.Protocol_Version then
-                           S.State := Protocol.Login;
-                           S.Version := Hello.Version;
-                        elsif Hello.Intent = 2 then
-                           S.State := Protocol.Login;
-                           S.Version := Hello.Version;
-                           Disconnect (Outgoing, "This server is Minecraft 26.3, protocol 777", Close_Now);
-                        else
-                           Close_Now := True;
-                        end if;
-                     end;
-                  end if;
+               when Protocol.State.Handshake =>
+                  declare
+                     Disposition : Protocol.Handshake_Exchange.Disposition_Kind;
+                     Client_Version : Natural;
+                  begin
+                     Protocol.Handshake_Exchange.Handle
+                       (Input => Packet,
+                        Current_State => S.State,
+                        Client_Version => Client_Version,
+                        Disposition => Disposition,
+                        Output => Outgoing);
+                     if Disposition =
+                       Protocol.Handshake_Exchange.Silent_Close
+                     then
+                        Close_Now := True;
+                     else
+                        S.Version := Client_Version;
+                     end if;
+                  end;
 
-               when Protocol.Status =>
-                  if Frame.Packet_Id = Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Status_Status_Request) then
-                     declare
-                        Body_W : Protocol.Buffer.Writer (512);
-                        Framed : Protocol.Buffer.Writer (640);
-                     begin
-                        Protocol.Packets.Encode_Status_Response (Body_W);
-                        if Protocol.Packets.Frame (Framed, Body_W) then
-                           Append (Outgoing, Framed);
-                        else
+               when Protocol.State.Status =>
+                  declare
+                     Disposition : Protocol.Status_Exchange.Disposition_Kind;
+                  begin
+                     Protocol.Status_Exchange.Handle
+                       (Input => Packet,
+                        Current_State => S.State,
+                        Status_Sent => S.Status_Sent,
+                        Disposition => Disposition,
+                        Output => Outgoing);
+                     case Disposition is
+                        when Protocol.Status_Exchange.Progress =>
+                           null;
+                        when Protocol.Status_Exchange.Close_After_Send =>
                            Close_Now := True;
-                        end if;
-                     end;
-                  elsif Frame.Packet_Id = Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Status_Ping_Request) then
-                     declare
-                        Ping   : constant Protocol.Packets.Ping := Protocol.Packets.Decode_Ping (Payload);
-                        Body_W : Protocol.Buffer.Writer (32);
-                        Framed : Protocol.Buffer.Writer (48);
-                     begin
-                        if Ping.Status /= Protocol.Ok then
+                        when Protocol.Status_Exchange.Silent_Close =>
                            Close_Now := True;
-                        else
-                           Protocol.Packets.Encode_Pong (Body_W, Ping.Value);
-                           if Protocol.Packets.Frame (Framed, Body_W) then
-                              Append (Outgoing, Framed);
-                           else
-                              Close_Now := True;
-                           end if;
-                        end if;
-                     end;
-                  else
-                     Close_Now := True;
-                  end if;
+                     end case;
+                  end;
 
-               when Protocol.Login =>
-                  if Frame.Packet_Id /= Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Login_Hello) then
-                     Close_Now := True;
-                  else
-                     declare
-                        Hello : constant Protocol.Packets.Login_Hello :=
-                          Protocol.Packets.Decode_Login_Hello (Payload);
-                        Expected : Auth.Digest;
-                     begin
-                        if Hello.Status /= Protocol.Ok then
-                           Disconnect (Outgoing, "Malformed login", Close_Now);
-                        else
-                           Expected := Auth.Offline_UUID (Hello.Name (1 .. Hello.Name_Len));
-                           if not Same_UUID (Hello.Uuid, Expected) then
-                              Disconnect (Outgoing, "Offline UUID does not match the player name", Close_Now);
-                           else
-                              Disconnect
-                                (Outgoing,
-                                 "AdaCraft accepted the offline identity; play is not in this build",
-                                 Close_Now);
-                           end if;
-                        end if;
-                     end;
-                  end if;
-
-               when Protocol.Configuration | Protocol.Play =>
+               when others =>
                   Close_Now := True;
             end case;
          end;

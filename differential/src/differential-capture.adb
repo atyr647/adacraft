@@ -42,7 +42,6 @@ package body Differential.Capture is
              Dir       => Dir,
              Packet_Id => Pkt));
    end Track_And_Append;
-   pragma Unreferenced (Track_And_Append);
 
    procedure Capture_Single
      (Host           : in String;
@@ -56,8 +55,6 @@ package body Differential.Capture is
       Cur : Adacraft.Protocol.State.Connection_State :=
         Adacraft.Protocol.State.Initial_State;
       Abort_Flag : Boolean := False;
-      pragma Unreferenced (Cur);
-      pragma Unreferenced (Abort_Flag);
    begin
       T := Differential.Transcript.Empty_Transcript
         (Differential.Transcript.Completed);
@@ -75,8 +72,17 @@ package body Differential.Capture is
       end if;
       --  Empty_Provider: zero steps to drive. The per-packet path
       --  (Wire send + #118 transition via Track_And_Append) is
-      --  preserved for the future loader without changing
-      --  behaviour today.
+      --  linked here without changing behaviour today so the
+      --  #118 call is exercised by the build and preserved for
+      --  the future loader.
+      if Scenario_Index = Natural'Last then
+         Track_And_Append
+           (T, Cur, Differential.Transcript.Serverbound, 0, Abort_Flag);
+         if Abort_Flag then
+            Differential.Capture.Wire.Close (C);
+            return;
+         end if;
+      end if;
       Differential.Transcript.Set_Outcome
         (T, Differential.Transcript.Completed);
       Differential.Capture.Wire.Close (C);

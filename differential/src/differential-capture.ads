@@ -1,3 +1,4 @@
+with Adacraft.Protocol.State;
 with Differential.Transcript;
 
 package Differential.Capture is

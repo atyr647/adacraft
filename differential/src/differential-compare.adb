@@ -1,3 +1,4 @@
+with Adacraft.Protocol.State;
 with Differential.Transcript;
 
 package body Differential.Compare is
@@ -22,19 +23,14 @@ package body Differential.Compare is
       if Len_E /= Len_G then
          R.Kind := Diverge_Length;
          R.Index := Natural'Min (Len_E, Len_G) + 1;
-         if Len_E > 0 and then Len_G > 0 then
-            null;
-         end if;
-         --  Provide neighbouring entries when both sides non-empty
-         --  is not possible for length mismatch; leave default entries.
          return R;
       end if;
 
       for I in 1 .. Len_E loop
          declare
-            E : constant Differential.Transcript.Entry :=
+            E : constant Differential.Transcript.Transcript_Entry :=
               Differential.Transcript.Get (Expected.Entries, I);
-            G : constant Differential.Transcript.Entry :=
+            G : constant Differential.Transcript.Transcript_Entry :=
               Differential.Transcript.Get (Got.Entries, I);
          begin
             if E.State /= G.State

@@ -1,5 +1,7 @@
 with Ada.Command_Line;
+with Ada.Directories;
 with Ada.Streams;
+with GNAT.OS_Lib;
 with Ada.Strings.Fixed;
 with Ada.Unchecked_Deallocation;
 with Ada.Text_IO;
@@ -740,6 +742,23 @@ begin
    end;
 
    Test_Protocol_Packet_Encoder;
+   --  Login-encryption driver hook (glue only): run the standalone
+   --  tests/test_protocol_login_encryption.adb driver when it has been
+   --  built. No with/use of the future unit here so this runner still
+   --  builds before the crypto/protocol logic item lands.
+   declare
+      Driver : constant String := "bin/test_protocol_login_encryption";
+      Code   : Integer;
+   begin
+      if Ada.Directories.Exists (Driver) then
+         Code := GNAT.OS_Lib.Spawn
+           (Driver, GNAT.OS_Lib.Argument_List'(1 .. 0 => null));
+         Check (Code = 0, "login encryption driver");
+      end if;
+   exception
+      when others =>
+         Check (False, "login encryption driver spawn");
+   end;
    if Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Handshake_Intention) /= 0
      or else Protocol.Ids.Protocol_Id (Protocol.Ids.Cb_Status_Status_Response) /= 0
      or else Protocol.Ids.Protocol_Id (Protocol.Ids.Cb_Login_Login_Disconnect) /= 0

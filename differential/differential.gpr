@@ -1,6 +1,6 @@
 project Differential is
    for Languages use ("Ada");
-   for Source_Dirs use (".", "src", "../src", "../src/protocol", "../src/ingress", "../src/auth", "../generated");
+   for Source_Dirs use (".", "src", "../src", "../src/protocol", "../src/ingress", "../src/auth", "../src/crypto", "../generated");
    for Object_Dir use "obj";
    for Exec_Dir use "bin";
    for Main use ("differential-main.adb");
@@ -12,4 +12,8 @@ project Differential is
    package Builder is
       for Default_Switches ("Ada") use ("-g");
    end Builder;
+
+   package Linker is
+      for Default_Switches ("Ada") use ("-lcrypto");
+   end Linker;
 end Differential;

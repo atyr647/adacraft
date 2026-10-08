@@ -20,30 +20,324 @@ package body Test_Auth_Session is
       end if;
    end Check;
 
-   function BS (Text : String) return S.Body_Bytes is
+   procedure T1 is
+      function BS (Text : String) return S.Body_Bytes is
+      begin
+         return S.Body_Bounded.To_Bounded_String (Text);
+      end BS;
+      procedure Call_Fake
+        (F : in out S.Fake_Check; Result : out S.Auth_Result) is
+         Uu : constant S.Username :=
+           S.Username_Bounded.To_Bounded_String ("Notch");
+         Hh : constant S.Server_Hash :=
+           S.Hash_Bounded.To_Bounded_String ("hash1");
+         Ip : constant S.Optional_Ip := (Present => False);
+      begin
+         Result := F.Has_Joined (Uu, Hh, Ip);
+      end Call_Fake;
+      Valid_Body : constant String :=
+        "{""id"":""069a79f444e94726a5befca90e38aaf5"",""name"":""Notch""}";
+      Expected_Uuid : constant S.Uuid :=
+        (16#06#, 16#9A#, 16#79#, 16#F4#, 16#44#, 16#E9#, 16#47#, 16#26#,
+         16#A5#, 16#BE#, 16#FC#, 16#A9#, 16#0E#, 16#38#, 16#AA#, 16#F5#);
+      F : S.Fake_Check;
+      R : S.Auth_Result;
    begin
-      return S.Body_Bounded.To_Bounded_String (Text);
-   end BS;
+      F := (Mode => S.Replay_Reply, Scripted_Status => 200,
+            Scripted_Body => BS (Valid_Body), others => <>);
+      Call_Fake (F, R);
+      Check (R.Kind = S.Accepted, "T1 accept kind");
+      if R.Kind = S.Accepted then
+         Check (R.Profile.Id = Expected_Uuid, "T1 uuid");
+         Check (S.Profile_Name_Bounded.To_String (R.Profile.Name) = "Notch",
+                "T1 name");
+         Check (R.Profile.Prop_Count = 0, "T1 no props");
+      end if;
+   end T1;
 
-   function Mk_Reply (Status : Integer; Text : String) return S.Http_Reply is
+   procedure T2 is
+      F : S.Fake_Check;
+      R : S.Auth_Result;
+      Uu : constant S.Username := S.Username_Bounded.To_Bounded_String ("Notch");
+      Hh : constant S.Server_Hash := S.Hash_Bounded.To_Bounded_String ("h");
+      Ip : constant S.Optional_Ip := (Present => False);
    begin
-      return (Transport_Failed => False,
-              Status           => Status,
-              Body_Text        => BS (Text));
-   end Mk_Reply;
+      F := (Mode => S.Replay_Reply, Scripted_Status => 204,
+            Scripted_Body => S.Body_Bounded.Null_Bounded_String, others => <>);
+      R := F.Has_Joined (Uu, Hh, Ip);
+      Check (R.Kind = S.Rejected and then R.Reason = S.Auth_Failed,
+             "T2 204 auth-failed");
+   end T2;
 
-   function Is_Accept (R : S.Auth_Result) return Boolean is (R.Kind = S.Accepted);
-   function Is_Failed (R : S.Auth_Result) return Boolean is
-     (R.Kind = S.Rejected and then R.Reason = S.Auth_Failed);
-   function Is_Unavail (R : S.Auth_Result) return Boolean is
-     (R.Kind = S.Rejected and then R.Reason = S.Auth_Service_Unavailable);
+   procedure T3 is
+      F : S.Fake_Check;
+      R : S.Auth_Result;
+      Uu : constant S.Username := S.Username_Bounded.To_Bounded_String ("Notch");
+      Hh : constant S.Server_Hash := S.Hash_Bounded.To_Bounded_String ("h");
+      Ip : constant S.Optional_Ip := (Present => False);
+   begin
+      F := (Mode => S.Replay_Reply, Scripted_Status => 200,
+            Scripted_Body => S.Body_Bounded.Null_Bounded_String, others => <>);
+      R := F.Has_Joined (Uu, Hh, Ip);
+      Check (R.Kind = S.Rejected and then R.Reason = S.Auth_Failed,
+             "T3 200-empty auth-failed");
+   end T3;
 
-   Valid_Body : constant String :=
-     "{""id"":""069a79f444e94726a5befca90e38aaf5"",""name"":""Notch""}";
+   procedure T4 is
+      F : S.Fake_Check;
+      R, R2 : S.Auth_Result;
+      Uu : constant S.Username := S.Username_Bounded.To_Bounded_String ("Notch");
+      Hh : constant S.Server_Hash := S.Hash_Bounded.To_Bounded_String ("h");
+      Ip : constant S.Optional_Ip := (Present => False);
+   begin
+      F := (Mode => S.Fail_Transport, others => <>);
+      R := F.Has_Joined (Uu, Hh, Ip);
+      Check (R.Kind = S.Rejected and then R.Reason = S.Auth_Service_Unavailable,
+             "T4 transport unavailable");
+      R2 := S.Interpret_Reply (S.Http_Reply'(Transport_Failed => True));
+      Check (R2.Kind = S.Rejected
+             and then R2.Reason = S.Auth_Service_Unavailable,
+             "T4 pure transport unavailable");
+   end T4;
 
-   Expected_Uuid : constant S.Uuid :=
-     (16#06#, 16#9A#, 16#79#, 16#F4#, 16#44#, 16#E9#, 16#47#, 16#26#,
-      16#A5#, 16#BE#, 16#FC#, 16#A9#, 16#0E#, 16#38#, 16#AA#, 16#F5#);
+   procedure T5 is
+      function BS (Text : String) return S.Body_Bytes is
+      begin
+         return S.Body_Bounded.To_Bounded_String (Text);
+      end BS;
+      Valid_Body : constant String :=
+        "{""id"":""069a79f444e94726a5befca90e38aaf5"",""name"":""Notch""}";
+      F : S.Fake_Check;
+      R, R2 : S.Auth_Result;
+      Uu : constant S.Username := S.Username_Bounded.To_Bounded_String ("Notch");
+      Hh : constant S.Server_Hash := S.Hash_Bounded.To_Bounded_String ("h");
+      Ip : constant S.Optional_Ip := (Present => False);
+   begin
+      F := (Mode => S.Replay_Reply, Scripted_Status => 500,
+            Scripted_Body => BS (Valid_Body), others => <>);
+      R := F.Has_Joined (Uu, Hh, Ip);
+      Check (R.Kind = S.Rejected
+             and then R.Reason = S.Auth_Service_Unavailable,
+             "T5 500 unavailable");
+      F := (Mode => S.Replay_Reply, Scripted_Status => 404,
+            Scripted_Body => BS (Valid_Body), others => <>);
+      R2 := F.Has_Joined (Uu, Hh, Ip);
+      Check (R2.Kind = S.Rejected
+             and then R2.Reason = S.Auth_Service_Unavailable,
+             "T5 404 unavailable");
+   end T5;
+
+   procedure T6 is
+      function BS (Text : String) return S.Body_Bytes is
+      begin
+         return S.Body_Bounded.To_Bounded_String (Text);
+      end BS;
+      function Via (Text : String) return S.Auth_Result is
+         F : S.Fake_Check :=
+           (Mode => S.Replay_Reply, Scripted_Status => 200,
+            Scripted_Body => BS (Text), others => <>);
+         Uu : constant S.Username :=
+           S.Username_Bounded.To_Bounded_String ("Notch");
+         Hh : constant S.Server_Hash :=
+           S.Hash_Bounded.To_Bounded_String ("h");
+         Ip : constant S.Optional_Ip := (Present => False);
+      begin
+         return F.Has_Joined (Uu, Hh, Ip);
+      end Via;
+      R : S.Auth_Result;
+   begin
+      R := Via ("not json{{{");
+      Check (R.Kind = S.Rejected
+             and then R.Reason = S.Auth_Service_Unavailable,
+             "T6 malformed unavailable");
+      R := Via ("{""id"":""069a79f444e94726a5befca90e38aaf5"","
+                & """name"":""x""");
+      Check (R.Kind = S.Rejected
+             and then R.Reason = S.Auth_Service_Unavailable,
+             "T6 truncated unavailable");
+      R := Via ("{""id"":""069a79f444e94726a5befca90e38aaf5"","
+                & """name"":""x""} trailing");
+      Check (R.Kind = S.Rejected
+             and then R.Reason = S.Auth_Service_Unavailable,
+             "T6 trailing-garbage unavailable");
+      R := Via ("{""name"":""Notch""}");
+      Check (R.Kind = S.Rejected
+             and then R.Reason = S.Auth_Service_Unavailable,
+             "T6 missing id unavailable");
+      R := Via ("{""id"":""069a79f444e94726a5befca90e38aaf5""}");
+      Check (R.Kind = S.Rejected
+             and then R.Reason = S.Auth_Service_Unavailable,
+             "T6 missing name unavailable");
+      R := Via ("{""id"":""ZZZZ"",""name"":""Notch""}");
+      Check (R.Kind = S.Rejected
+             and then R.Reason = S.Auth_Service_Unavailable,
+             "T6 bad id unavailable");
+   end T6;
+
+   function Props_Body (N : Natural) return String is
+      Head : constant String :=
+        "{""id"":""069a79f444e94726a5befca90e38aaf5"",""name"":""Notch"","
+        & """properties"":[";
+      Tail : constant String := "]}";
+      One  : constant String := "{""name"":""n"",""value"":""v""}";
+   begin
+      declare
+         Res : String (1 .. Head'Length + N * 32 + Tail'Length) :=
+           (others => ' ');
+         Pos : Natural := 1;
+      begin
+         Res (Pos .. Pos + Head'Length - 1) := Head;
+         Pos := Pos + Head'Length;
+         for I in 1 .. N loop
+            Res (Pos .. Pos + One'Length - 1) := One;
+            Pos := Pos + One'Length;
+            if I < N then
+               Res (Pos) := ',';
+               Pos := Pos + 1;
+            end if;
+         end loop;
+         Res (Pos .. Pos + Tail'Length - 1) := Tail;
+         Pos := Pos + Tail'Length;
+         return Res (1 .. Pos - 1);
+      end;
+   end Props_Body;
+
+   procedure T7 is
+      function BS (Text : String) return S.Body_Bytes is
+      begin
+         return S.Body_Bounded.To_Bounded_String (Text);
+      end BS;
+      Big : S.Body_Bytes := S.Body_Bounded.Null_Bounded_String;
+      Chunk : constant String (1 .. 4096) := (others => 'x');
+      R : S.Auth_Result;
+   begin
+      for I in 1 .. 16 loop
+         S.Body_Bounded.Append (Big, Chunk);
+      end loop;
+      begin
+         R := S.Interpret_Reply
+           (S.Http_Reply'(Transport_Failed => False, Status => 200,
+                          Body_Text => Big));
+         Check (R.Kind = S.Rejected
+                and then R.Reason = S.Auth_Service_Unavailable,
+                "T7 max-body unavailable");
+      exception
+         when others => Check (False, "T7 max-body no crash");
+      end;
+      begin
+         R := S.Interpret_Reply
+           (S.Http_Reply'(Transport_Failed => False, Status => 200,
+                          Body_Text => BS (Props_Body (17))));
+         Check (R.Kind = S.Rejected
+                and then R.Reason = S.Auth_Service_Unavailable,
+                "T7 17-props unavailable");
+      exception
+         when others => Check (False, "T7 17-props no crash");
+      end;
+      begin
+         R := S.Interpret_Reply
+           (S.Http_Reply'(Transport_Failed => False, Status => 200,
+                          Body_Text => BS (Props_Body (16))));
+         Check (R.Kind = S.Accepted and then R.Profile.Prop_Count = 16,
+                "T7 16-props accepted");
+      exception
+         when others => Check (False, "T7 16-props no crash");
+      end;
+   end T7;
+
+   procedure T8 is
+      F8 : S.Fake_Check := (Mode => S.Return_Accepted, others => <>);
+      Uu : constant S.Username :=
+        S.Username_Bounded.To_Bounded_String ("Steve");
+      Hh : constant S.Server_Hash :=
+        S.Hash_Bounded.To_Bounded_String ("h2");
+      Ip : constant S.Optional_Ip :=
+        (Present => True,
+         Value => S.Ip_Bounded.To_Bounded_String ("1.2.3.4"));
+      R : S.Auth_Result;
+   begin
+      R := F8.Has_Joined (Uu, Hh, Ip);
+      Check (F8.Call_Count = 1, "T8 call count");
+      Check (F8.Has_Last, "T8 has last");
+      Check (S.Username_Bounded.To_String (F8.Last_Username) = "Steve",
+                "T8 username recorded");
+         Check (S.Hash_Bounded.To_String (F8.Last_Hash) = "h2",
+                "T8 hash recorded");
+         Check (F8.Last_Ip.Present
+                and then S.Ip_Bounded.To_String (F8.Last_Ip.Value) = "1.2.3.4",
+                "T8 ip recorded");
+         R := F8.Has_Joined (Uu, Hh, (Present => False));
+         Check (F8.Call_Count = 2, "T8 second call count");
+         Check (not F8.Last_Ip.Present, "T8 absent ip recorded");
+   end T8;
+
+   procedure T9 is
+      function BS (Text : String) return S.Body_Bytes is
+      begin
+         return S.Body_Bounded.To_Bounded_String (Text);
+      end BS;
+      Expected_Uuid : constant S.Uuid :=
+        (16#06#, 16#9A#, 16#79#, 16#F4#, 16#44#, 16#E9#, 16#47#, 16#26#,
+         16#A5#, 16#BE#, 16#FC#, 16#A9#, 16#0E#, 16#38#, 16#AA#, 16#F5#);
+      F9 : S.Fake_Check;
+      P : S.Auth_Profile;
+      R : S.Auth_Result;
+      Uu : constant S.Username :=
+        S.Username_Bounded.To_Bounded_String ("Notch");
+      Hh : constant S.Server_Hash :=
+        S.Hash_Bounded.To_Bounded_String ("h");
+      Ip : constant S.Optional_Ip := (Present => False);
+      Sig_Body : constant String :=
+        "{""id"":""069a79f444e94726a5befca90e38aaf5"",""name"":""Notch"","
+        & """properties"":[{""name"":""textures"",""value"":""vvv"","
+        & """signature"":""sss""}]}";
+      No_Sig_Body : constant String :=
+        "{""id"":""069a79f444e94726a5befca90e38aaf5"",""name"":""Notch"","
+        & """properties"":[{""name"":""n2"",""value"":""v2""}]}";
+   begin
+      F9 := (Mode => S.Return_Accepted, others => <>);
+      P.Id := Expected_Uuid;
+      P.Name := S.Profile_Name_Bounded.To_Bounded_String ("Notch");
+      P.Prop_Count := 2;
+      P.Properties (1) :=
+        (Name => S.Prop_Bounded.To_Bounded_String ("textures"),
+         Value => S.Prop_Bounded.To_Bounded_String ("vvv"),
+         Has_Sig => True,
+         Signature => S.Prop_Bounded.To_Bounded_String ("sss"));
+      P.Properties (2) :=
+        (Name => S.Prop_Bounded.To_Bounded_String ("n2"),
+         Value => S.Prop_Bounded.To_Bounded_String ("v2"),
+         Has_Sig => False,
+         Signature => S.Prop_Bounded.Null_Bounded_String);
+      F9.Scripted_Profile := P;
+      R := F9.Has_Joined (Uu, Hh, Ip);
+      Check (R.Kind = S.Accepted, "T9 scripted accept");
+      if R.Kind = S.Accepted then
+         Check (R.Profile.Prop_Count = 2, "T9 prop count");
+         Check (R.Profile.Properties (1).Has_Sig
+                and then S.Prop_Bounded.To_String
+                  (R.Profile.Properties (1).Signature) = "sss",
+                "T9 sig preserved");
+         Check (not R.Profile.Properties (2).Has_Sig,
+                "T9 no-sig preserved");
+      end if;
+      F9 := (Mode => S.Replay_Reply, Scripted_Status => 200,
+             Scripted_Body => BS (Sig_Body), others => <>);
+      R := F9.Has_Joined (Uu, Hh, Ip);
+      Check (R.Kind = S.Accepted
+             and then R.Profile.Prop_Count = 1
+             and then R.Profile.Properties (1).Has_Sig
+             and then S.Prop_Bounded.To_String
+               (R.Profile.Properties (1).Signature) = "sss",
+             "T9 parsed sig preserved");
+      F9 := (Mode => S.Replay_Reply, Scripted_Status => 200,
+             Scripted_Body => BS (No_Sig_Body), others => <>);
+      R := F9.Has_Joined (Uu, Hh, Ip);
+      Check (R.Kind = S.Accepted
+             and then R.Profile.Prop_Count = 1
+             and then not R.Profile.Properties (1).Has_Sig,
+             "T9 parsed no-sig preserved");
+   end T9;
 
    function Same_Result (A, B : S.Auth_Result) return Boolean is
    begin
@@ -71,7 +365,8 @@ package body Test_Auth_Session is
              S.Prop_Bounded.To_String (B.Profile.Properties (I).Value)
            or else A.Profile.Properties (I).Has_Sig /=
              B.Profile.Properties (I).Has_Sig
-           or else S.Prop_Bounded.To_String (A.Profile.Properties (I).Signature) /=
+           or else S.Prop_Bounded.To_String
+             (A.Profile.Properties (I).Signature) /=
              S.Prop_Bounded.To_String (B.Profile.Properties (I).Signature)
          then
             return False;
@@ -80,234 +375,46 @@ package body Test_Auth_Session is
       return True;
    end Same_Result;
 
-   procedure Call_Fake
-     (F      : in out S.Fake_Check;
-      U      : String := "Notch";
-      H      : String := "hash1";
-      Result : out S.Auth_Result)
-   is
-      Uu : constant S.Username :=
-        S.Username_Bounded.To_Bounded_String (U);
-      Hh : constant S.Server_Hash :=
-        S.Hash_Bounded.To_Bounded_String (H);
-      Ip : constant S.Optional_Ip := (Present => False);
-   begin
-      Result := F.Has_Joined (Uu, Hh, Ip);
-   end Call_Fake;
-
-   function Props_Body_17 return String is
-      Head : constant String :=
-        "{""id"":""069a79f444e94726a5befca90e38aaf5"",""name"":""Notch"","
-        & """properties"":[";
-      Tail : constant String := "]}";
-      One  : constant String := "{""name"":""n"",""value"":""v""}";
-   begin
-      declare
-         Res : String (1 .. Head'Length + 17 * 32 + Tail'Length) :=
-           (others => ' ');
-         Pos : Natural := 1;
+   procedure T10 is
+      function BS (Text : String) return S.Body_Bytes is
       begin
-         Res (Pos .. Pos + Head'Length - 1) := Head;
-         Pos := Pos + Head'Length;
-         for I in 1 .. 17 loop
-            Res (Pos .. Pos + One'Length - 1) := One;
-            Pos := Pos + One'Length;
-            if I < 17 then
-               Res (Pos) := ',';
-               Pos := Pos + 1;
-            end if;
-         end loop;
-         Res (Pos .. Pos + Tail'Length - 1) := Tail;
-         Pos := Pos + Tail'Length;
-         return Res (1 .. Pos - 1);
-      end;
-   end Props_Body_17;
-
-   procedure Run is
+         return S.Body_Bounded.To_Bounded_String (Text);
+      end BS;
+      Valid_Body : constant String :=
+        "{""id"":""069a79f444e94726a5befca90e38aaf5"",""name"":""Notch""}";
       F : S.Fake_Check;
       R, R2 : S.Auth_Result;
+      Uu : constant S.Username :=
+        S.Username_Bounded.To_Bounded_String ("Notch");
+      Hh : constant S.Server_Hash :=
+        S.Hash_Bounded.To_Bounded_String ("h");
+      Ip : constant S.Optional_Ip := (Present => False);
+   begin
+      F := (Mode => S.Replay_Reply, Scripted_Status => 200,
+            Scripted_Body => BS (Valid_Body), others => <>);
+      R := F.Has_Joined (Uu, Hh, Ip);
+      R2 := F.Has_Joined (Uu, Hh, Ip);
+      Check (Same_Result (R, R2), "T10 determinism accept");
+      F := (Mode => S.Replay_Reply, Scripted_Status => 500,
+            Scripted_Body => BS ("oops"), others => <>);
+      R := F.Has_Joined (Uu, Hh, Ip);
+      R2 := F.Has_Joined (Uu, Hh, Ip);
+      Check (Same_Result (R, R2), "T10 determinism reject");
+   end T10;
+
+   procedure Run is
    begin
       Failures := 0;
-
-      --  T1 valid 200 accept (fake only, replay through pure interpreter).
-      F := (Mode => S.Replay_Reply,
-            Scripted_Status => 200,
-            Scripted_Body => BS (Valid_Body),
-            others => <>);
-      Call_Fake (F, Result => R);
-      Check (Is_Accept (R), "T1 accept kind");
-      if R.Kind = S.Accepted then
-         Check (R.Profile.Id = Expected_Uuid, "T1 uuid");
-         Check (S.Profile_Name_Bounded.To_String (R.Profile.Name) = "Notch",
-                "T1 name");
-      end if;
-
-      --  T2 204 => Auth_Failed.
-      F := (Mode => S.Replay_Reply,
-            Scripted_Status => 204,
-            Scripted_Body => BS (""),
-            others => <>);
-      Call_Fake (F, Result => R);
-      Check (Is_Failed (R), "T2 204 auth-failed");
-
-      --  T3 200-empty => Auth_Failed.
-      F := (Mode => S.Replay_Reply,
-            Scripted_Status => 200,
-            Scripted_Body => BS (""),
-            others => <>);
-      Call_Fake (F, Result => R);
-      Check (Is_Failed (R), "T3 200-empty auth-failed");
-
-      --  T4 transport-fail => Unavailable.
-      F := (Mode => S.Fail_Transport, others => <>);
-      Call_Fake (F, Result => R);
-      Check (Is_Unavail (R), "T4 transport unavailable");
-      R2 := S.Interpret_Reply (S.Http_Reply'(Transport_Failed => True));
-      Check (Is_Unavail (R2), "T4 pure transport unavailable");
-
-      --  T5 500 + one other non-200/204 => Unavailable.
-      F := (Mode => S.Replay_Reply,
-            Scripted_Status => 500,
-            Scripted_Body => BS (Valid_Body),
-            others => <>);
-      Call_Fake (F, Result => R);
-      Check (Is_Unavail (R), "T5 500 unavailable");
-      F := (Mode => S.Replay_Reply,
-            Scripted_Status => 404,
-            Scripted_Body => BS (Valid_Body),
-            others => <>);
-      Call_Fake (F, Result => R2);
-      Check (Is_Unavail (R2), "T5 404 unavailable");
-
-      --  T6 malformed / missing id / missing name / bad id.
-      F := (Mode => S.Replay_Reply,
-            Scripted_Status => 200,
-            Scripted_Body => BS ("not json{{{"),
-            others => <>);
-      Call_Fake (F, Result => R);
-      Check (Is_Unavail (R), "T6 malformed unavailable");
-      F := (Mode => S.Replay_Reply,
-            Scripted_Status => 200,
-            Scripted_Body => BS ("{""name"":""Notch""}"),
-            others => <>);
-      Call_Fake (F, Result => R);
-      Check (Is_Unavail (R), "T6 missing id unavailable");
-      F := (Mode => S.Replay_Reply,
-            Scripted_Status => 200,
-            Scripted_Body =>
-              BS ("{""id"":""069a79f444e94726a5befca90e38aaf5""}"),
-            others => <>);
-      Call_Fake (F, Result => R);
-      Check (Is_Unavail (R), "T6 missing name unavailable");
-      F := (Mode => S.Replay_Reply,
-            Scripted_Status => 200,
-            Scripted_Body =>
-              BS ("{""id"":""ZZZZ"",""name"":""Notch""}"),
-            others => <>);
-      Call_Fake (F, Result => R);
-      Check (Is_Unavail (R), "T6 bad id unavailable");
-
-      --  T7 oversize body and 17-properties: must not crash.
-      declare
-         Big : S.Body_Bytes := S.Body_Bounded.Null_Bounded_String;
-         Chunk : constant String (1 .. 4096) := (others => 'x');
-      begin
-         for I in 1 .. 16 loop
-            S.Body_Bounded.Append (Big, Chunk);
-         end loop;
-         R := S.Interpret_Reply
-           (S.Http_Reply'(Transport_Failed => False,
-                          Status => 200, Body_Text => Big));
-         Check (Is_Unavail (R), "T7 max-body malformed unavailable");
-      exception
-         when others => Check (False, "T7 max-body no crash");
-      end;
-      declare
-         Pb : constant String := Props_Body_17;
-      begin
-         R := S.Interpret_Reply (Mk_Reply (200, Pb));
-         Check ((R.Kind = S.Accepted or else Is_Unavail (R)),
-                "T7 17-props no crash");
-      exception
-         when others => Check (False, "T7 17-props no crash");
-      end;
-
-      --  T8 input recording.
-      declare
-         F8 : S.Fake_Check :=
-           (Mode => S.Return_Accepted, others => <>);
-         Uu : constant S.Username :=
-           S.Username_Bounded.To_Bounded_String ("Steve");
-         Hh : constant S.Server_Hash :=
-           S.Hash_Bounded.To_Bounded_String ("h2");
-         Ip : constant S.Optional_Ip :=
-           (Present => True,
-            Value => S.Ip_Bounded.To_Bounded_String ("1.2.3.4"));
-      begin
-         R := F8.Has_Joined (Uu, Hh, Ip);
-         Check (F8.Call_Count = 1, "T8 call count");
-         Check (F8.Has_Last, "T8 has last");
-         Check (S.Username_Bounded.To_String (F8.Last_Username) = "Steve",
-                "T8 username recorded");
-         Check (S.Hash_Bounded.To_String (F8.Last_Hash) = "h2",
-                "T8 hash recorded");
-         Check (F8.Last_Ip.Present
-                and then S.Ip_Bounded.To_String (F8.Last_Ip.Value) = "1.2.3.4",
-                "T8 ip recorded");
-         R := F8.Has_Joined (Uu, Hh, (Present => False));
-         Check (F8.Call_Count = 2, "T8 second call count");
-         Check (not F8.Last_Ip.Present, "T8 absent ip recorded");
-      end;
-
-      --  T9 with/without signature preserved (scripted accepted profile).
-      declare
-         F9 : S.Fake_Check :=
-           (Mode => S.Return_Accepted, others => <>);
-         P : S.Auth_Profile;
-      begin
-         P.Id := Expected_Uuid;
-         P.Name := S.Profile_Name_Bounded.To_Bounded_String ("Notch");
-         P.Prop_Count := 2;
-         P.Properties (1) :=
-           (Name => S.Prop_Bounded.To_Bounded_String ("textures"),
-            Value => S.Prop_Bounded.To_Bounded_String ("vvv"),
-            Has_Sig => True,
-            Signature => S.Prop_Bounded.To_Bounded_String ("sss"));
-         P.Properties (2) :=
-           (Name => S.Prop_Bounded.To_Bounded_String ("n2"),
-            Value => S.Prop_Bounded.To_Bounded_String ("v2"),
-            Has_Sig => False,
-            Signature => S.Prop_Bounded.Null_Bounded_String);
-         F9.Scripted_Profile := P;
-         Call_Fake (F9, Result => R);
-         Check (Is_Accept (R), "T9 scripted accept");
-         if R.Kind = S.Accepted then
-            Check (R.Profile.Prop_Count = 2, "T9 prop count");
-            Check (R.Profile.Properties (1).Has_Sig
-                   and then S.Prop_Bounded.To_String
-                     (R.Profile.Properties (1).Signature) = "sss",
-                   "T9 sig preserved");
-            Check (not R.Profile.Properties (2).Has_Sig,
-                   "T9 no-sig preserved");
-         end if;
-      end;
-
-      --  T10 double-run equality.
-      F := (Mode => S.Replay_Reply,
-            Scripted_Status => 200,
-            Scripted_Body => BS (Valid_Body),
-            others => <>);
-      Call_Fake (F, Result => R);
-      Call_Fake (F, Result => R2);
-      Check (Same_Result (R, R2), "T10 determinism accept");
-      F := (Mode => S.Replay_Reply,
-            Scripted_Status => 500,
-            Scripted_Body => BS ("oops"),
-            others => <>);
-      Call_Fake (F, Result => R);
-      Call_Fake (F, Result => R2);
-      Check (Same_Result (R, R2), "T10 determinism reject");
-
+      T1;
+      T2;
+      T3;
+      T4;
+      T5;
+      T6;
+      T7;
+      T8;
+      T9;
+      T10;
       if Failures = 0 then
          Ada.Text_IO.Put_Line ("auth-session tests passed");
       else

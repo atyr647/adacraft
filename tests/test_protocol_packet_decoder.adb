@@ -15,6 +15,7 @@ procedure Test_Protocol_Packet_Decoder is
    use type Interfaces.Integer_32;
    use type Interfaces.Integer_64;
    use type Interfaces.Unsigned_8;
+   use type Interfaces.Unsigned_64;
 
    subtype Bytes is P.Octets;
 

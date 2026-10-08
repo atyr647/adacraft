@@ -40,7 +40,7 @@ package body Adacraft.Protocol.Status_Exchange is
          end if;
 
          declare
-            Body_Writer : Buffer.Writer (256);
+            Body_Writer : Buffer.Writer (512);
          begin
             Buffer.Put_Varint
               (Body_Writer,
@@ -65,7 +65,7 @@ package body Adacraft.Protocol.Status_Exchange is
          end if;
 
          declare
-            Body_Writer : Buffer.Writer (9);
+            Body_Writer : Buffer.Writer (16);
             Echo : Adacraft.Protocol.Octets (1 .. 8);
          begin
             for I in Echo'Range loop

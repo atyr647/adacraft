@@ -237,14 +237,16 @@ package body Adacraft.Protocol.Packet_Encoder is
          return;
       end if;
 
-      First := Body'First;
+      First := Body_Data'First;
 
       --  Packet ID via Varnum on a bounded 5-byte window (no local codec,
-      --  no allocation from untrusted lengths).
+      --  no allocation from untrusted lengths). A 6-byte VarInt ID presents
+      --  five continuation bytes in this window, which Varnum reports as
+      --  Overlong; a short unterminated prefix reports Truncated.
       Id_Take := Natural'Min (Len, 5);
       for I in 1 .. Id_Take loop
          Id_Buf (I) :=
-           Adacraft.Protocol.Octet (Body (First + I - 1));
+           Adacraft.Protocol.Octet (Body_Data (First + I - 1));
       end loop;
       Adacraft.Protocol.Varnum.Decode
         (Id_Buf (1 .. Id_Take), 1, Id_Val, Consumed, V_Status);
@@ -281,20 +283,26 @@ package body Adacraft.Protocol.Packet_Encoder is
                      return;
                   end if;
                   declare
-                     B : constant Byte := Body (First + Pos);
+                     B : constant Byte := Body_Data (First + Pos);
                   begin
-                     Pos := Pos + 1;
-                     Count := Count + 1;
                      if B = 16#00# then
+                        Pos := Pos + 1;
+                        Count := Count + 1;
                         Values (Count) :=
                           (Kind => Field_Boolean, Bool_Val => False);
                      elsif B = 16#01# then
+                        Pos := Pos + 1;
+                        Count := Count + 1;
                         Values (Count) :=
                           (Kind => Field_Boolean, Bool_Val => True);
                      else
+                        --  Encoder only writes 0x00/0x01; any other byte
+                        --  is malformed. No dedicated status exists for
+                        --  the shipped kinds, so Invalid_Length is used
+                        --  (documented in the spec).
                         Result :=
                           (Status => Invalid_Length,
-                           Error_Offset => Pos - 1);
+                           Error_Offset => Pos);
                         return;
                      end if;
                   end;
@@ -305,7 +313,8 @@ package body Adacraft.Protocol.Packet_Encoder is
                   end if;
                   Count := Count + 1;
                   Values (Count) :=
-                    (Kind => Field_Byte, Byte_Val => Body (First + Pos));
+                    (Kind => Field_Byte,
+                     Byte_Val => Body_Data (First + Pos));
                   Pos := Pos + 1;
                when Field_Int =>
                   if Pos + 4 > Len then
@@ -318,7 +327,7 @@ package body Adacraft.Protocol.Packet_Encoder is
                      for J in 0 .. 3 loop
                         U := Interfaces.Shift_Left (U, 8)
                           or Interfaces.Unsigned_32
-                               (Body (First + Pos + J));
+                               (Body_Data (First + Pos + J));
                      end loop;
                      Pos := Pos + 4;
                      Count := Count + 1;
@@ -336,7 +345,7 @@ package body Adacraft.Protocol.Packet_Encoder is
                      for J in 0 .. 7 loop
                         U := Interfaces.Shift_Left (U, 8)
                           or Interfaces.Unsigned_64
-                               (Body (First + Pos + J));
+                               (Body_Data (First + Pos + J));
                      end loop;
                      Pos := Pos + 8;
                      Count := Count + 1;

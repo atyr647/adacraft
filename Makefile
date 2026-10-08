@@ -4,11 +4,15 @@ FLAGS := -gnat2022 -gnata -D obj
 
 .PHONY: all test server clean check check-packets-table
 
-all: bin/adacraft bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus
+all: bin/adacraft bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_packet_decoder bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus
 
 bin/test_protocol_varnum: tests/test_protocol_varnum.adb
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_protocol_varnum.adb -o $@
+
+bin/test_protocol_packet_decoder: tests/test_protocol_packet_decoder.adb
+	mkdir -p bin obj
+	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_protocol_packet_decoder.adb -o $@
 
 bin/test_protocol_state: tests/test_protocol_state.adb
 	mkdir -p bin obj
@@ -34,12 +38,13 @@ bin/adacraft: src/adacraft_server.adb
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) src/adacraft_server.adb -o $@
 
-test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus
+test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_packet_decoder bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus
 	$(MAKE) --no-print-directory check-packets-table
 	$(MAKE) --no-print-directory check
 	./bin/adacraft_tests
 	./bin/test_ingress_framing
 	./bin/test_protocol_varnum
+	./bin/test_protocol_packet_decoder
 	./bin/test_protocol_state
 	./bin/test_corpus_loader
 	./bin/test_golden_corpus

@@ -46,6 +46,33 @@ is
      (Current : Connection_State;
       Event   : Packet_Event) return Transition_Result;
 
+   --  Per-connection login state for the encryption handshake.
+   --  No framing or state-machine change; the token is issued per
+   --  login attempt and stored here until the Encryption Response
+   --  is verified.
+
+   subtype Token_Index is Positive range 1 .. 4;
+   type Verify_Token_Bytes is array (Token_Index) of Octet;
+
+   type Login_Session is record
+      Verify_Token : Verify_Token_Bytes := (others => 0);
+      Token_Valid  : Boolean := False;
+   end record;
+
+   function Initial_Login_Session return Login_Session
+   is ((Verify_Token => (others => 0), Token_Valid => False));
+
+   procedure Issue_Token
+     (Session : in out Login_Session;
+      Token   : Verify_Token_Bytes);
+
+   procedure Invalidate_Token (Session : in out Login_Session);
+
+   function Get_Verify_Token
+     (Session : Login_Session) return Verify_Token_Bytes;
+
+   function Has_Valid_Token (Session : Login_Session) return Boolean;
+
    Protocol_Number   : constant := 777;
    Minecraft_Version : constant String := "26.3";
    Report_Source     : constant String :=

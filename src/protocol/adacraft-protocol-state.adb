@@ -50,6 +50,28 @@ is
       return Transition_Result
    is (Kind => Rejected, Next_State => Current, Reason => R);
 
+   procedure Issue_Token
+     (Session : in out Login_Session;
+      Token   : Verify_Token_Bytes)
+   is
+   begin
+      Session.Verify_Token := Token;
+      Session.Token_Valid := True;
+   end Issue_Token;
+
+   procedure Invalidate_Token (Session : in out Login_Session) is
+   begin
+      Session.Verify_Token := (others => 0);
+      Session.Token_Valid := False;
+   end Invalidate_Token;
+
+   function Get_Verify_Token
+     (Session : Login_Session) return Verify_Token_Bytes
+   is (Session.Verify_Token);
+
+   function Has_Valid_Token (Session : Login_Session) return Boolean
+   is (Session.Token_Valid);
+
    function Transition
      (Current : Connection_State;
       Event   : Packet_Event) return Transition_Result

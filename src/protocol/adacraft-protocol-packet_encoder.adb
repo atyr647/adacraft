@@ -86,27 +86,24 @@ package body Adacraft.Protocol.Packet_Encoder is
       E.Id_Written := True;
    end Write_Packet_Id;
 
-   --  Task 1 stubs: sticky status + ordering guards only.
-   --  Full field encoding belongs to later tasks. Bodies match the
-   --  spec profiles exactly; nothing public is added here.
+   --  Task 1 stubs for later-task field writers: sticky status and
+   --  ordering guards only; no bytes are written.
 
    procedure Write_Boolean
      (E   : in out Encoder;
       Buf : in out Byte_Array;
       V   : Boolean)
    is
-      Ready : Boolean := False;
+      pragma Unreferenced (Buf);
+      pragma Unreferenced (V);
    begin
-      Reserve (E, Buf, 1, Ready);
-      if not Ready then
+      if E.St /= Ok then
          return;
       end if;
-      if V then
-         Buf (Buf'First + E.Len) := 16#01#;
-      else
-         Buf (Buf'First + E.Len) := 16#00#;
+      if not E.Id_Written then
+         E.St := Invalid_Sequence;
+         return;
       end if;
-      E.Len := E.Len + 1;
    end Write_Boolean;
 
    procedure Write_Byte
@@ -114,16 +111,16 @@ package body Adacraft.Protocol.Packet_Encoder is
       Buf : in out Byte_Array;
       V   : Interfaces.Integer_8)
    is
-      Ready : Boolean := False;
-      U     : Interfaces.Unsigned_8;
+      pragma Unreferenced (Buf);
+      pragma Unreferenced (V);
    begin
-      Reserve (E, Buf, 1, Ready);
-      if not Ready then
+      if E.St /= Ok then
          return;
       end if;
-      U := Interfaces.Unsigned_8 (V);
-      Buf (Buf'First + E.Len) := U;
-      E.Len := E.Len + 1;
+      if not E.Id_Written then
+         E.St := Invalid_Sequence;
+         return;
+      end if;
    end Write_Byte;
 
    procedure Write_UByte
@@ -131,14 +128,16 @@ package body Adacraft.Protocol.Packet_Encoder is
       Buf : in out Byte_Array;
       V   : Interfaces.Unsigned_8)
    is
-      Ready : Boolean := False;
+      pragma Unreferenced (Buf);
+      pragma Unreferenced (V);
    begin
-      Reserve (E, Buf, 1, Ready);
-      if not Ready then
+      if E.St /= Ok then
          return;
       end if;
-      Buf (Buf'First + E.Len) := V;
-      E.Len := E.Len + 1;
+      if not E.Id_Written then
+         E.St := Invalid_Sequence;
+         return;
+      end if;
    end Write_UByte;
 
    procedure Write_Short
@@ -146,20 +145,16 @@ package body Adacraft.Protocol.Packet_Encoder is
       Buf : in out Byte_Array;
       V   : Interfaces.Integer_16)
    is
-      use type Interfaces.Unsigned_16;
-      Ready : Boolean := False;
-      U     : Interfaces.Unsigned_16;
+      pragma Unreferenced (Buf);
+      pragma Unreferenced (V);
    begin
-      Reserve (E, Buf, 2, Ready);
-      if not Ready then
+      if E.St /= Ok then
          return;
       end if;
-      U := Interfaces.Unsigned_16 (V);
-      Buf (Buf'First + E.Len) :=
-        Interfaces.Unsigned_8 (Interfaces.Shift_Right (U, 8));
-      Buf (Buf'First + E.Len + 1) :=
-        Interfaces.Unsigned_8 (U and 16#FF#);
-      E.Len := E.Len + 2;
+      if not E.Id_Written then
+         E.St := Invalid_Sequence;
+         return;
+      end if;
    end Write_Short;
 
    procedure Write_UShort
@@ -167,19 +162,16 @@ package body Adacraft.Protocol.Packet_Encoder is
       Buf : in out Byte_Array;
       V   : Interfaces.Unsigned_16)
    is
-      use type Interfaces.Unsigned_16;
-      Ready : Boolean := False;
+      pragma Unreferenced (Buf);
+      pragma Unreferenced (V);
    begin
-      Reserve (E, Buf, 2, Ready);
-      if not Ready then
+      if E.St /= Ok then
          return;
       end if;
-      Buf (Buf'First + E.Len) :=
-        Interfaces.Unsigned_8 (Interfaces.Shift_Right (V, 8));
-      Buf (Buf'First + E.Len + 1) :=
-        Interfaces.Unsigned_8 (V and 16#FF#);
-      E.Len := E.Len + 2;
-      null;
+      if not E.Id_Written then
+         E.St := Invalid_Sequence;
+         return;
+      end if;
    end Write_UShort;
 
    procedure Write_Int
@@ -187,26 +179,16 @@ package body Adacraft.Protocol.Packet_Encoder is
       Buf : in out Byte_Array;
       V   : Interfaces.Integer_32)
    is
-      use type Interfaces.Unsigned_32;
-      Ready : Boolean := False;
-      U     : Interfaces.Unsigned_32;
+      pragma Unreferenced (Buf);
+      pragma Unreferenced (V);
    begin
-      Reserve (E, Buf, 4, Ready);
-      if not Ready then
+      if E.St /= Ok then
          return;
       end if;
-      U := Interfaces.Unsigned_32 (V);
-      Buf (Buf'First + E.Len) :=
-        Interfaces.Unsigned_8 (Interfaces.Shift_Right (U, 24));
-      Buf (Buf'First + E.Len + 1) :=
-        Interfaces.Unsigned_8
-          ((Interfaces.Shift_Right (U, 16)) and 16#FF#);
-      Buf (Buf'First + E.Len + 2) :=
-        Interfaces.Unsigned_8
-          ((Interfaces.Shift_Right (U, 8)) and 16#FF#);
-      Buf (Buf'First + E.Len + 3) :=
-        Interfaces.Unsigned_8 (U and 16#FF#);
-      E.Len := E.Len + 4;
+      if not E.Id_Written then
+         E.St := Invalid_Sequence;
+         return;
+      end if;
    end Write_Int;
 
    procedure Write_Long
@@ -214,38 +196,16 @@ package body Adacraft.Protocol.Packet_Encoder is
       Buf : in out Byte_Array;
       V   : Interfaces.Integer_64)
    is
-      use type Interfaces.Unsigned_64;
-      Ready : Boolean := False;
-      U     : Interfaces.Unsigned_64;
+      pragma Unreferenced (Buf);
+      pragma Unreferenced (V);
    begin
-      Reserve (E, Buf, 8, Ready);
-      if not Ready then
+      if E.St /= Ok then
          return;
       end if;
-      U := Interfaces.Unsigned_64 (V);
-      Buf (Buf'First + E.Len) :=
-        Interfaces.Unsigned_8 (Interfaces.Shift_Right (U, 56));
-      Buf (Buf'First + E.Len + 1) :=
-        Interfaces.Unsigned_8
-          ((Interfaces.Shift_Right (U, 48)) and 16#FF#);
-      Buf (Buf'First + E.Len + 2) :=
-        Interfaces.Unsigned_8
-          ((Interfaces.Shift_Right (U, 40)) and 16#FF#);
-      Buf (Buf'First + E.Len + 3) :=
-        Interfaces.Unsigned_8
-          ((Interfaces.Shift_Right (U, 32)) and 16#FF#);
-      Buf (Buf'First + E.Len + 4) :=
-        Interfaces.Unsigned_8
-          ((Interfaces.Shift_Right (U, 24)) and 16#FF#);
-      Buf (Buf'First + E.Len + 5) :=
-        Interfaces.Unsigned_8
-          ((Interfaces.Shift_Right (U, 16)) and 16#FF#);
-      Buf (Buf'First + E.Len + 6) :=
-        Interfaces.Unsigned_8
-          ((Interfaces.Shift_Right (U, 8)) and 16#FF#);
-      Buf (Buf'First + E.Len + 7) :=
-        Interfaces.Unsigned_8 (U and 16#FF#);
-      E.Len := E.Len + 8;
+      if not E.Id_Written then
+         E.St := Invalid_Sequence;
+         return;
+      end if;
    end Write_Long;
 
    procedure Write_VarInt
@@ -253,6 +213,8 @@ package body Adacraft.Protocol.Packet_Encoder is
       Buf : in out Byte_Array;
       V   : Interfaces.Integer_32)
    is
+      pragma Unreferenced (Buf);
+      pragma Unreferenced (V);
       use type Varnum.Status_Type;
       Staging : Adacraft.Protocol.Octets (1 .. Max_Varint_Bytes) := (others => 0);
       Written : Natural := 0;
@@ -452,6 +414,15 @@ package body Adacraft.Protocol.Packet_Encoder is
          return;
       end if;
       if E.Len > Buf'Length then
+         S := Overflow;
+         return;
+      end if;
+      --  Pre-check output capacity before copying or framing anything,
+      --  so a too-small Out_Buf reports Overflow with no bytes written.
+      --  Bound uses Frame.Max_Frame_Prefix_Bytes; no prefix logic here.
+      if Out_Buf'Length
+        < E.Len + Adacraft.Protocol.Frame.Max_Frame_Prefix_Bytes
+      then
          S := Overflow;
          return;
       end if;

@@ -1,7 +1,9 @@
 with Ada.Command_Line;
+with Ada.Streams;
 with Ada.Text_IO;
 with Interfaces;
 with Adacraft.Protocol;
+with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Packet_Encoder;
 with Adacraft.Protocol.Varnum;
 
@@ -55,8 +57,8 @@ procedure Test_Protocol_Packet_Encoder is
       end if;
    end Check_Id;
 
-begin
-   --  T1 packet-ID vectors (VarInt encodings).
+   --  T1 packet-ID vectors (VarInt encodings) run in the single
+   --  statement part at the end of this procedure.
    Check_Id (0, PE.Byte_Array'(1 => 16#00#), "T1 id 0");
    Check_Id (127, PE.Byte_Array'(1 => 16#7F#), "T1 id 127");
    Check_Id (128, PE.Byte_Array'(16#80#, 16#01#), "T1 id 128");
@@ -80,19 +82,6 @@ begin
 
    --  T2: fixed-width big-endian field writers vs hand-computed bytes.
    --  Each case writes packet ID 0 (16#00#) then one field.
-   declare
-      procedure Check_Body
-        (Name     : String;
-         Expected : PE.Byte_Array)
-      is
-         pragma Unreferenced (Name);
-         pragma Unreferenced (Expected);
-      begin
-         null;
-      end Check_Body;
-   begin
-      null;
-   end;
 
    procedure Check_Bool (V : Boolean; Second : Interfaces.Unsigned_8; Name : String) is
       E    : PE.Encoder;

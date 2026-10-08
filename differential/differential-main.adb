@@ -1396,16 +1396,18 @@ procedure Differential_Main is
    end D_Main;
 
    package D_Selftest is
-      --  In-binary selftest for pure D_Compare (no Java, no network).
-      --  Exercises identical->MATCH, ID diff->DIVERGE+index,
-      --  payload-ignored->MATCH (payload never stored), outcome
-      --  diff->DIVERGE. Prints deterministic lines, sets Passed.
+      --  In-binary selftest (no Java): pure D_Compare cases + loopback
+      --  Ada tasks on 127.0.0.1 replaying fixed S2C bytes (overlong
+      --  VarInt / oversize frame => malformed_input survival), one
+      --  corpus-scenario loopback, unreachable-oracle exit-2 mapping,
+      --  and double-run determinism check. Prints deterministic lines.
       procedure Run (Passed : out Boolean);
    end D_Selftest;
 
    package body D_Selftest is
+      use type D_Defs.Outcome;
+
       procedure Run (Passed : out Boolean) is
-         use type D_Defs.Outcome;
          TA, TB : D_Defs.Transcript;
          Full   : Boolean;
          Ok     : Boolean := True;
@@ -1419,38 +1421,248 @@ procedure Differential_Main is
                Ok := False;
             end if;
          end Check;
+
+         procedure Check_Pure is
+         begin
+            TA := (others => <>);
+            TB := (others => <>);
+            D_Defs.Append (TA, (State => 0, Dir => D_Defs.S2C, Id => 0), Full);
+            D_Defs.Append (TB, (State => 0, Dir => D_Defs.S2C, Id => 0), Full);
+            D_Defs.Append (TA, (State => 1, Dir => D_Defs.S2C, Id => 2), Full);
+            D_Defs.Append (TB, (State => 1, Dir => D_Defs.S2C, Id => 2), Full);
+            TA.Result := D_Defs.Closed_By_Peer;
+            TB.Result := D_Defs.Closed_By_Peer;
+            Check (D_Compare.Equal (TA, TB)
+                   and then D_Compare.First_Divergence_Index (TA, TB) = 0,
+                   "identical-match");
+            TB := (others => <>);
+            D_Defs.Append (TB, (State => 0, Dir => D_Defs.S2C, Id => 0), Full);
+            D_Defs.Append (TB, (State => 1, Dir => D_Defs.S2C, Id => 3), Full);
+            TB.Result := D_Defs.Closed_By_Peer;
+            Check ((not D_Compare.Equal (TA, TB))
+                   and then D_Compare.First_Divergence_Index (TA, TB) = 2,
+                   "id-diverge");
+            TB := TA;
+            Check (D_Compare.Equal (TA, TB), "payload-ignored-match");
+            TB := TA;
+            TB.Result := D_Defs.Still_Open_At_End;
+            Check ((not D_Compare.Equal (TA, TB))
+                   and then D_Compare.First_Divergence_Index (TA, TB)
+                            = TA.Count + 1,
+                   "outcome-diverge");
+         end Check_Pure;
+
+         function Sock_Addr (Port : Natural) return GNAT.Sockets.Sock_Addr_Type is
+            A : GNAT.Sockets.Sock_Addr_Type;
+         begin
+            A.Family := GNAT.Sockets.Family_Inet;
+            A.Addr := GNAT.Sockets.Inet_Addr ("127.0.0.1");
+            A.Port := GNAT.Sockets.Port_Type (Port);
+            return A;
+         end Sock_Addr;
+
+         procedure Check_One_Frame
+           (Port     : Natural;
+            To_Send  : Ada.Streams.Stream_Element_Array;
+            Expect   : D_Net.Recv_Status;
+            Exp_Len  : Natural;
+            Exp_B0   : Natural;
+            Label    : String)
+         is
+            task Srv;
+            task body Srv is
+               LS, CS : GNAT.Sockets.Socket_Type;
+               SA     : GNAT.Sockets.Sock_Addr_Type;
+               Last   : Ada.Streams.Stream_Element_Offset;
+            begin
+               GNAT.Sockets.Create_Socket (LS);
+               GNAT.Sockets.Set_Socket_Option
+                 (LS, GNAT.Sockets.Socket_Level,
+                  (GNAT.Sockets.Reuse_Address, True));
+               GNAT.Sockets.Bind_Socket (LS, Sock_Addr (Port));
+               GNAT.Sockets.Listen_Socket (LS, 1);
+               GNAT.Sockets.Accept_Socket (LS, CS, SA);
+               if To_Send'Length > 0 then
+                  begin
+                     GNAT.Sockets.Send_Socket (CS, To_Send, Last);
+                  exception
+                     when others => null;
+                  end;
+               end if;
+               delay 0.2;
+               begin GNAT.Sockets.Close_Socket (CS); exception when others => null; end;
+               begin GNAT.Sockets.Close_Socket (LS); exception when others => null; end;
+            exception
+               when others => null;
+            end Srv;
+            CSock : GNAT.Sockets.Socket_Type;
+            Conn_Ok : Boolean;
+            Buf : D_Net.Frame_Storage;
+            Len : Natural := 0;
+            St  : D_Net.Recv_Status := D_Net.Malformed;
+            DL  : constant Ada.Real_Time.Time :=
+              Ada.Real_Time.Clock + Ada.Real_Time.To_Time_Span (5.0);
+         begin
+            delay 0.1;
+            D_Net.Connect ("127.0.0.1", Port, CSock, Conn_Ok);
+            if not Conn_Ok then
+               Check (False, Label & "-connect");
+               return;
+            end if;
+            begin
+               D_Net.Recv_Frame (CSock, DL, Buf, Len, St);
+            exception
+               when others =>
+                  St := D_Net.Malformed;
+                  Len := 0;
+            end;
+            D_Net.Close (CSock);
+            if St /= Expect then
+               Check (False, Label);
+            elsif Expect = D_Net.Got_Frame then
+               Check (Len = Exp_Len and then Natural (Buf (1)) = Exp_B0, Label);
+            else
+               Check (True, Label);
+            end if;
+         end Check_One_Frame;
+
+         procedure Check_Loopback_Suite is
+            --  Normal 1-byte frame (length 1, id 0).
+            Norm : constant Ada.Streams.Stream_Element_Array (1 .. 2) :=
+              (1, 0);
+            --  Overlong VarInt: value 0 encoded as 0x80 0x00.
+            Over : constant Ada.Streams.Stream_Element_Array (1 .. 2) :=
+              (16#80#, 16#00#);
+            --  Oversize: length 2097152 => bytes 80 80 80 01.
+            Big  : constant Ada.Streams.Stream_Element_Array (1 .. 4) :=
+              (16#80#, 16#80#, 16#80#, 16#01#);
+         begin
+            Check_One_Frame (24511, Norm, D_Net.Got_Frame, 1, 0, "loopback-normal");
+            Check_One_Frame (24512, Over, D_Net.Malformed, 0, 0, "loopback-overlong-varint");
+            Check_One_Frame (24513, Big, D_Net.Malformed, 0, 0, "loopback-oversize-frame");
+         end Check_Loopback_Suite;
+
+         procedure Check_Corpus_Loopback is
+            Port : constant := 24514;
+            task Srv;
+            task body Srv is
+               LS, CS : GNAT.Sockets.Socket_Type;
+               SA     : GNAT.Sockets.Sock_Addr_Type;
+               Item   : Ada.Streams.Stream_Element_Array (1 .. 4096);
+               Last   : Ada.Streams.Stream_Element_Offset;
+               Resp   : constant Ada.Streams.Stream_Element_Array (1 .. 2) :=
+                 (1, 0);
+               RL     : Ada.Streams.Stream_Element_Offset;
+            begin
+               GNAT.Sockets.Create_Socket (LS);
+               GNAT.Sockets.Set_Socket_Option
+                 (LS, GNAT.Sockets.Socket_Level,
+                  (GNAT.Sockets.Reuse_Address, True));
+               GNAT.Sockets.Bind_Socket (LS, Sock_Addr (Port));
+               GNAT.Sockets.Listen_Socket (LS, 1);
+               GNAT.Sockets.Accept_Socket (LS, CS, SA);
+               delay 0.3;
+               --  Drain whatever the driver sent; ignore errors.
+               for K in 1 .. 8 loop
+                  declare
+                     Sel  : GNAT.Sockets.Selector_Type;
+                     RS, WS : GNAT.Sockets.Socket_Set_Type;
+                     Stat : GNAT.Sockets.Selector_Status;
+                  begin
+                     GNAT.Sockets.Create_Selector (Sel);
+                     GNAT.Sockets.Empty (RS);
+                     GNAT.Sockets.Empty (WS);
+                     GNAT.Sockets.Set (RS, CS);
+                     GNAT.Sockets.Check_Selector (Sel, RS, WS, Stat, 0.05);
+                     declare
+                        Ready : constant Boolean :=
+                          Stat = GNAT.Sockets.Completed
+                          and then GNAT.Sockets.Is_Set (RS, CS);
+                     begin
+                        begin GNAT.Sockets.Close_Selector (Sel);
+                        exception when others => null; end;
+                        exit when not Ready;
+                     end;
+                  exception
+                     when others => exit;
+                  end;
+                  begin
+                     GNAT.Sockets.Receive_Socket (CS, Item, Last);
+                  exception
+                     when others => exit;
+                  end;
+                  exit when Last < Item'First;
+               end loop;
+               begin
+                  GNAT.Sockets.Send_Socket (CS, Resp, RL);
+               exception
+                  when others => null;
+               end;
+               delay 0.2;
+               begin GNAT.Sockets.Close_Socket (CS); exception when others => null; end;
+               begin GNAT.Sockets.Close_Socket (LS); exception when others => null; end;
+            exception
+               when others => null;
+            end Srv;
+            T : D_Defs.Transcript;
+         begin
+            delay 0.1;
+            D_Run.Run_Target
+              ("127.0.0.1", Port, "tests/corpus/status-request.scenario",
+               5, 10, T);
+            Check (T.Count = 1 and then D_Defs.Get (T, 1).Id = 0
+                   and then T.Result = D_Defs.Closed_By_Peer,
+                   "loopback-corpus-scenario");
+         end Check_Corpus_Loopback;
+
+         procedure Check_Unreachable is
+            S : GNAT.Sockets.Socket_Type;
+            Conn_Ok : Boolean := True;
+         begin
+            D_Net.Connect ("127.0.0.1", 1, S, Conn_Ok);
+            if Conn_Ok then
+               D_Net.Close (S);
+            end if;
+            Check ((not Conn_Ok)
+                   and then D_Main.Map_Exit (True, False) = 2
+                   and then D_Main.Map_Exit (True, True) = 2,
+                   "unreachable-oracle-exit-2");
+         end Check_Unreachable;
+
+         procedure Check_Determinism is
+            A, B : D_Defs.Transcript;
+            F : Boolean;
+         begin
+            A := (others => <>);
+            D_Defs.Set_Scenario_Name (A, "det");
+            D_Defs.Append (A, (State => 1, Dir => D_Defs.S2C, Id => 0), F);
+            D_Defs.Append (A, (State => 1, Dir => D_Defs.S2C, Id => 1), F);
+            A.Result := D_Defs.Closed_By_Peer;
+            B := A;
+            declare
+               I1 : constant String := D_Report.Entry_Image (D_Defs.Get (A, 1));
+               I2 : constant String := D_Report.Entry_Image (D_Defs.Get (B, 1));
+               O1 : constant String := D_Report.Outcome_Image (A.Result);
+               O2 : constant String := D_Report.Outcome_Image (B.Result);
+               E1 : constant Boolean := D_Compare.Equal (A, B);
+               E2 : constant Boolean := D_Compare.Equal (A, B);
+               X1 : constant Natural :=
+                 D_Compare.First_Divergence_Index (A, B);
+               X2 : constant Natural :=
+                 D_Compare.First_Divergence_Index (A, B);
+            begin
+               Check (I1 = I2 and then O1 = O2 and then E1 = E2
+                      and then X1 = X2 and then X1 = 0,
+                      "determinism-double-run");
+            end;
+         end Check_Determinism;
+
       begin
-         --  Identical -> MATCH / index 0.
-         TA := (others => <>);
-         TB := (others => <>);
-         D_Defs.Append (TA, (State => 0, Dir => D_Defs.S2C, Id => 0), Full);
-         D_Defs.Append (TB, (State => 0, Dir => D_Defs.S2C, Id => 0), Full);
-         D_Defs.Append (TA, (State => 1, Dir => D_Defs.S2C, Id => 2), Full);
-         D_Defs.Append (TB, (State => 1, Dir => D_Defs.S2C, Id => 2), Full);
-         TA.Result := D_Defs.Closed_By_Peer;
-         TB.Result := D_Defs.Closed_By_Peer;
-         Check (D_Compare.Equal (TA, TB)
-                and then D_Compare.First_Divergence_Index (TA, TB) = 0,
-                "identical-match");
-         --  One packet-ID diff -> DIVERGE at index 2.
-         TB := (others => <>);
-         D_Defs.Append (TB, (State => 0, Dir => D_Defs.S2C, Id => 0), Full);
-         D_Defs.Append (TB, (State => 1, Dir => D_Defs.S2C, Id => 3), Full);
-         TB.Result := D_Defs.Closed_By_Peer;
-         Check ((not D_Compare.Equal (TA, TB))
-                and then D_Compare.First_Divergence_Index (TA, TB) = 2,
-                "id-diverge");
-         --  Payload-only diff -> MATCH (payload never stored, so equal
-         --  transcripts compare equal).
-         TB := TA;
-         Check (D_Compare.Equal (TA, TB), "payload-ignored-match");
-         --  Outcome diff -> DIVERGE at Count+1.
-         TB := TA;
-         TB.Result := D_Defs.Still_Open_At_End;
-         Check ((not D_Compare.Equal (TA, TB))
-                and then D_Compare.First_Divergence_Index (TA, TB)
-                         = TA.Count + 1,
-                "outcome-diverge");
+         Check_Pure;
+         Check_Loopback_Suite;
+         Check_Corpus_Loopback;
+         Check_Unreachable;
+         Check_Determinism;
          Passed := Ok;
       end Run;
    end D_Selftest;

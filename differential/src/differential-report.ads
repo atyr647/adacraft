@@ -33,6 +33,8 @@ package Differential.Report is
       Diverged : Natural) return String;
    --  "total=<n> match=<m> diverge=<d>" with no leading blanks.
 
+   type Named_Result_Array is array (Positive range <>) of Named_Result;
+
    function Count_Matches
      (Items : Named_Result_Array) return Natural is abstract;
    --  Placeholder to catch accidental whole-file rewrite; not used.

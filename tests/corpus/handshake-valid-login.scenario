@@ -1,7 +1,7 @@
 corpus_format: 1
 id: handshake-valid-login
 title: Valid handshake, login intent
-description: Handshake with next-state login is accepted.
+description: Handshake with login intent transitions to LOGIN only; no login handling is exercised.
 category: handshake
 protocol: 777
 provenance: hand-authored

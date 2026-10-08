@@ -1,7 +1,5 @@
 with Ada.Strings.Unbounded;
-with Ada.Text_IO;
 with Differential.Compare;
-with Differential.Transcript;
 
 --  Lab-only pure deterministic report renderer.
 --  One line per scenario in corpus order plus a summary line.
@@ -32,11 +30,5 @@ package Differential.Report is
       Matched  : Natural;
       Diverged : Natural) return String;
    --  "total=<n> match=<m> diverge=<d>" with no leading blanks.
-
-   type Named_Result_Array is array (Positive range <>) of Named_Result;
-
-   function Count_Matches
-     (Items : Named_Result_Array) return Natural is abstract;
-   --  Placeholder to catch accidental whole-file rewrite; not used.
 
 end Differential.Report;

@@ -1,6 +1,9 @@
 with Ada.Command_Line;
+with Ada.Real_Time;
+with Ada.Streams;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
+with GNAT.Sockets;
 
 procedure Differential_Main is
 
@@ -402,6 +405,416 @@ procedure Differential_Main is
          end if;
       end Parse;
    end D_Args;
+
+   package D_Net is
+      --  Bounded TCP layer (GNAT.Sockets + Ada.Real_Time only).
+      --  No Java, no process spawn, single-threaded per target.
+      --  Pattern only inspected from src/network/adacraft-network.*
+      --  (Send/Receive_Socket) and src/protocol/adacraft-protocol-buffer.*
+      --  (bounded octet handling); nothing copied semantically.
+      --  All waits use Check_Selector + Real_Time deadlines; per-read and
+      --  per-scenario deadlines enforced by callers via Deadline params.
+
+      Max_Frame_Len : constant := 2_097_151;
+      --  Minecraft length-prefix ceiling (2**21 - 1). Larger => malformed.
+
+      Max_Slice : constant Duration := 0.050;
+      --  Single Check_Selector slice; outer loop re-checks Deadline so
+      --  per-read/per-scenario caps hold even on portable platforms.
+
+      type Recv_Status is
+        (Got_Frame, Peer_Closed, Timeout_Expired, Malformed);
+
+      type Frame_Storage is
+        array (1 .. Max_Frame_Len) of Ada.Streams.Stream_Element;
+
+      procedure Connect
+        (Host_Image : String;
+         Port       : Natural;
+         Sock       : out GNAT.Sockets.Socket_Type;
+         Ok         : out Boolean;
+         Timeout_Secs : Natural := 5);
+      --  Blocking Connect_Socket wrapped in a handler; Ok=False on any
+      --  failure (bad host/port/unreachable). Timeout_Secs documents the
+      --  5s budget enforced by the caller's scenario deadline and the OS;
+      --  no thread is spawned. Sock is valid only when Ok=True.
+
+      procedure Close (Sock : in out GNAT.Sockets.Socket_Type);
+      --  Never raises; ignores errors.
+
+      procedure Send_All
+        (Sock : GNAT.Sockets.Socket_Type;
+         Data : Ada.Streams.Stream_Element_Array;
+         Ok   : out Boolean);
+      --  Bounded loop over Send_Socket until all bytes sent. Ok=False on
+      --  any socket error; never raises.
+
+      function Is_Readable
+        (Sock     : GNAT.Sockets.Socket_Type;
+         Deadline : Ada.Real_Time.Time) return Boolean;
+      --  Check_Selector loop in Max_Slice slices until readable or
+      --  Deadline passes. False on timeout or any selector error.
+
+      procedure Recv_Frame
+        (Sock     : GNAT.Sockets.Socket_Type;
+         Deadline : Ada.Real_Time.Time;
+         Buf      : in out Frame_Storage;
+         Len      : out Natural;
+         Status   : out Recv_Status);
+      --  Reads one length-prefixed frame: VarInt length (max 5 bytes,
+      --  minimal encoding, 0 .. Max_Frame_Len) then Length payload bytes.
+      --  Payload is stored in Buf(1..Len) for the caller to frame/decode;
+      --  D_Net never interprets it. Oversize/overlong/negative/truncated
+      --  encodings => Malformed (never raises). Peer close with zero bytes
+      --  outstanding => Peer_Closed. Deadline passed while waiting =>
+      --  Timeout_Expired. Never raises; all exceptions map to a Status.
+   end D_Net;
+
+   package body D_Net is
+      use type Ada.Real_Time.Time;
+      use type Ada.Streams.Stream_Element_Offset;
+      use type GNAT.Sockets.Selector_Status;
+
+      procedure Connect
+        (Host_Image : String;
+         Port       : Natural;
+         Sock       : out GNAT.Sockets.Socket_Type;
+         Ok         : out Boolean;
+         Timeout_Secs : Natural := 5)
+      is
+         pragma Unreferenced (Timeout_Secs);
+         Addr : GNAT.Sockets.Sock_Addr_Type;
+      begin
+         Ok := False;
+         if Port > 65_535 or else Host_Image'Length = 0 then
+            return;
+         end if;
+         begin
+            GNAT.Sockets.Create_Socket (Sock);
+         exception
+            when others =>
+               return;
+         end;
+         begin
+            Addr.Addr := GNAT.Sockets.Inet_Addr (Host_Image);
+            Addr.Port := GNAT.Sockets.Port_Type (Port);
+            GNAT.Sockets.Connect_Socket (Sock, Addr);
+            Ok := True;
+         exception
+            when others =>
+               begin
+                  GNAT.Sockets.Close_Socket (Sock);
+               exception
+                  when others =>
+                     null;
+               end;
+               Ok := False;
+         end;
+      end Connect;
+
+      procedure Close (Sock : in out GNAT.Sockets.Socket_Type) is
+      begin
+         begin
+            GNAT.Sockets.Close_Socket (Sock);
+         exception
+            when others =>
+               null;
+         end;
+      end Close;
+
+      procedure Send_All
+        (Sock : GNAT.Sockets.Socket_Type;
+         Data : Ada.Streams.Stream_Element_Array;
+         Ok   : out Boolean)
+      is
+         Next : Ada.Streams.Stream_Element_Offset := Data'First;
+         Last : Ada.Streams.Stream_Element_Offset;
+      begin
+         Ok := False;
+         if Data'Length = 0 then
+            Ok := True;
+            return;
+         end if;
+         while Next <= Data'Last loop
+            begin
+               GNAT.Sockets.Send_Socket (Sock, Data (Next .. Data'Last), Last);
+            exception
+               when others =>
+                  return;
+            end;
+            exit when Last < Next;
+            Next := Last + 1;
+         end loop;
+         Ok := (Next > Data'Last);
+      end Send_All;
+
+      function Is_Readable
+        (Sock     : GNAT.Sockets.Socket_Type;
+         Deadline : Ada.Real_Time.Time) return Boolean
+      is
+      begin
+         loop
+            declare
+               Now : constant Ada.Real_Time.Time := Ada.Real_Time.Clock;
+            begin
+               if Now >= Deadline then
+                  return False;
+               end if;
+               declare
+                  Remaining : constant Duration :=
+                    Ada.Real_Time.To_Duration (Deadline - Now);
+                  Slice : Duration := Max_Slice;
+                  Sel   : GNAT.Sockets.Selector_Type;
+                  R_Set : GNAT.Sockets.Socket_Set_Type;
+                  W_Set : GNAT.Sockets.Socket_Set_Type;
+                  Stat  : GNAT.Sockets.Selector_Status;
+               begin
+                  if Remaining < Slice then
+                     Slice := Remaining;
+                  end if;
+                  begin
+                     GNAT.Sockets.Create_Selector (Sel);
+                  exception
+                     when others =>
+                        return False;
+                  end;
+                  begin
+                     GNAT.Sockets.Empty (R_Set);
+                     GNAT.Sockets.Empty (W_Set);
+                     GNAT.Sockets.Set (R_Set, Sock);
+                     GNAT.Sockets.Check_Selector
+                       (Sel, R_Set, W_Set, Stat, Slice);
+                     declare
+                        Ready : constant Boolean :=
+                          (Stat = GNAT.Sockets.Completed
+                           and then GNAT.Sockets.Is_Set (R_Set, Sock));
+                     begin
+                        begin
+                           GNAT.Sockets.Close_Selector (Sel);
+                        exception
+                           when others =>
+                              null;
+                        end;
+                        if Ready then
+                           return True;
+                        end if;
+                        if Stat = GNAT.Sockets.Expired then
+                           null; --  re-check Deadline above
+                        else
+                           --  Aborted or empty: poll again until Deadline.
+                           null;
+                        end if;
+                     end;
+                  exception
+                     when others =>
+                        begin
+                           GNAT.Sockets.Close_Selector (Sel);
+                        exception
+                           when others =>
+                              null;
+                        end;
+                        return False;
+                  end;
+               end;
+            end;
+         end loop;
+      exception
+         when others =>
+            return False;
+      end Is_Readable;
+
+      procedure Recv_Byte
+        (Sock     : GNAT.Sockets.Socket_Type;
+         Deadline : Ada.Real_Time.Time;
+         Value    : out Ada.Streams.Stream_Element;
+         Got      : out Boolean;
+         Closed   : out Boolean;
+         Timedout : out Boolean)
+      is
+         Item : Ada.Streams.Stream_Element_Array (1 .. 1);
+         Last : Ada.Streams.Stream_Element_Offset;
+      begin
+         Value := 0;
+         Got := False;
+         Closed := False;
+         Timedout := False;
+         if not Is_Readable (Sock, Deadline) then
+            if Ada.Real_Time.Clock >= Deadline then
+               Timedout := True;
+            else
+               Closed := True;
+            end if;
+            return;
+         end if;
+         begin
+            GNAT.Sockets.Receive_Socket (Sock, Item, Last);
+         exception
+            when others =>
+               Closed := True;
+               return;
+         end;
+         if Last < Item'First then
+            Closed := True;
+            return;
+         end if;
+         Value := Item (Item'First);
+         Got := True;
+      end Recv_Byte;
+
+      function Minimal_Varint_Len (V : Natural) return Natural is
+      begin
+         if V < 128 then
+            return 1;
+         elsif V < 16_384 then
+            return 2;
+         elsif V < 2_097_152 then
+            return 3;
+         elsif V < 268_435_456 then
+            return 4;
+         else
+            return 5;
+         end if;
+      end Minimal_Varint_Len;
+
+      procedure Recv_Frame
+        (Sock     : GNAT.Sockets.Socket_Type;
+         Deadline : Ada.Real_Time.Time;
+         Buf      : in out Frame_Storage;
+         Len      : out Natural;
+         Status   : out Recv_Status)
+      is
+         Value : Natural := 0;
+         Shift : Natural := 0;
+         Used  : Natural := 0;
+      begin
+         Len := 0;
+         Status := Malformed;
+         --  Length prefix: up to 5 VarInt bytes, minimal encoding only.
+         loop
+            declare
+               B        : Ada.Streams.Stream_Element;
+               Got      : Boolean;
+               Closed   : Boolean;
+               Timedout : Boolean;
+            begin
+               Recv_Byte (Sock, Deadline, B, Got, Closed, Timedout);
+               if Timedout then
+                  Status := Timeout_Expired;
+                  return;
+               elsif Closed or else not Got then
+                  Status := Peer_Closed;
+                  return;
+               end if;
+               Used := Used + 1;
+               if Used > 5 then
+                  Status := Malformed; --  overlong VarInt
+                  return;
+               end if;
+               declare
+                  Low7 : constant Natural :=
+                    Natural (B and 16#7F#);
+               begin
+                  if Shift >= 28 and then Low7 > 15 then
+                     Status := Malformed; --  overflow / negative
+                     return;
+                  end if;
+                  Value := Value + Low7 * (2 ** Shift);
+               end;
+               if (B and 16#80#) = 0 then
+                  exit;
+               end if;
+               Shift := Shift + 7;
+            end;
+         end loop;
+         if Value > Max_Frame_Len then
+            Status := Malformed; --  oversize frame
+            return;
+         end if;
+         if Minimal_Varint_Len (Value) /= Used then
+            Status := Malformed; --  non-minimal (overlong) encoding
+            return;
+         end if;
+         Len := Value;
+         if Len = 0 then
+            Status := Got_Frame;
+            return;
+         end if;
+         --  Payload: exactly Len bytes, bounded by Max_Frame_Len.
+         declare
+            Have : Natural := 0;
+         begin
+            while Have < Len loop
+               exit when Ada.Real_Time.Clock >= Deadline;
+               if not Is_Readable (Sock, Deadline) then
+                  if Ada.Real_Time.Clock >= Deadline then
+                     Status := Timeout_Expired;
+                  else
+                     Status := Peer_Closed;
+                  end if;
+                  Len := 0;
+                  return;
+               end if;
+               declare
+                  Want  : constant Positive := Len - Have;
+                  Chunk : constant Positive := Natural'Min (Want, 4096);
+                  Item  : Ada.Streams.Stream_Element_Array
+                    (1 .. Ada.Streams.Stream_Element_Offset (Chunk));
+                  Last  : Ada.Streams.Stream_Element_Offset;
+               begin
+                  begin
+                     GNAT.Sockets.Receive_Socket (Sock, Item, Last);
+                  exception
+                     when others =>
+                        --  Truncated payload counts as malformed; a clean
+                        --  close with zero bytes read is peer-closed, but
+                        --  mid-frame loss cannot be decoded.
+                        if Have = 0 and then Len = 0 then
+                           Status := Peer_Closed;
+                        else
+                           Status := Malformed;
+                        end if;
+                        Len := 0;
+                        return;
+                  end;
+                  if Last < Item'First then
+                     if Have = 0 then
+                        --  Length said >0 but peer closed immediately:
+                        --  truncated frame.
+                        Status := Malformed;
+                     else
+                        Status := Malformed;
+                     end if;
+                     Len := 0;
+                     return;
+                  end if;
+                  declare
+                     N : constant Natural :=
+                       Natural (Last - Item'First + 1);
+                  begin
+                     for I in 0 .. N - 1 loop
+                        Buf (Have + I + 1) := Item (Item'First + Ada.Streams.Stream_Element_Offset (I));
+                     end loop;
+                     Have := Have + N;
+                  end;
+               end;
+            end loop;
+            if Have < Len then
+               if Ada.Real_Time.Clock >= Deadline then
+                  Status := Timeout_Expired;
+               else
+                  Status := Malformed; --  truncated frame
+               end if;
+               Len := 0;
+               return;
+            end if;
+         end;
+         Status := Got_Frame;
+      exception
+         when others =>
+            Len := 0;
+            Status := Malformed;
+      end Recv_Frame;
+   end D_Net;
 
    package D_Report is
       --  Deterministic human-readable report (AC 6, FR-8).

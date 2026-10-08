@@ -37,6 +37,22 @@ is
       Reason     : Rejection_Reason;
    end record;
 
+   --  Minimal LOGIN progress tracking for the Start -> Success (once) ->
+   --  wait Ack -> CONFIGURATION path. Kept here so ingress sessions can
+   --  reuse one session-local record; ordering enforcement itself lives
+   --  in the ingress LOGIN handler, not in the global state enum.
+   type Login_Progress is record
+      Start_Seen   : Boolean := False;
+      Success_Sent : Boolean := False;
+   end record;
+
+   Initial_Login_Progress : constant Login_Progress :=
+     (Start_Seen => False, Success_Sent => False);
+
+   procedure Mark_Start_Seen (P : in out Login_Progress);
+   procedure Mark_Success_Sent (P : in out Login_Progress);
+   procedure Reset_Login_Progress (P : out Login_Progress);
+
    function Is_Packet_Valid
      (State : Connection_State;
       Dir   : Packet_Direction;

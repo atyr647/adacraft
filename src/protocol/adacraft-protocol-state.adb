@@ -6,6 +6,21 @@ package body Adacraft.Protocol.State
 is
    use type Ids.Packet_Name;
 
+   procedure Mark_Start_Seen (P : in out Login_Progress) is
+   begin
+      P.Start_Seen := True;
+   end Mark_Start_Seen;
+
+   procedure Mark_Success_Sent (P : in out Login_Progress) is
+   begin
+      P.Success_Sent := True;
+   end Mark_Success_Sent;
+
+   procedure Reset_Login_Progress (P : out Login_Progress) is
+   begin
+      P := Initial_Login_Progress;
+   end Reset_Login_Progress;
+
    function Is_Packet_Valid
      (State : Connection_State;
       Dir   : Packet_Direction;

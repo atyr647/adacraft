@@ -47,6 +47,13 @@ is
       Name_First => 1,
       Name_Last  => 0);
 
+   --  LOGIN decode rows: pinned serverbound Login Start
+   --  (Sb_Login_Hello, id 0) and Login Acknowledged
+   --  (Sb_Login_Login_Acknowledged, id 3) are table-valid in LOGIN.
+   --  Handshake/status/configuration/unknown ids have no LOGIN row, so
+   --  Is_Packet_Valid (Login, _, _) is False for them by construction.
+   --  CONFIGURATION rows are present so post-Ack inbound rests against
+   --  the configuration table; no configuration-phase logic lives here.
    function State_Of (N : Packet_Name) return Parent_State is
      (if N in Cb_Configuration_Names | Sb_Configuration_Names then Configuration
       elsif N in Cb_Login_Names | Sb_Login_Names then Login

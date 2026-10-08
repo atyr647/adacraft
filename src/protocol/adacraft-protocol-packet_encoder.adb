@@ -185,6 +185,179 @@ package body Adacraft.Protocol.Packet_Encoder is
       Last := Output'First + Need - 1;
    end Get_Framed;
 
+   function From_U32 (U : Interfaces.Unsigned_32) return Interfaces.Integer_32 is
+      Half : constant Interfaces.Unsigned_32 := 2 ** 31;
+   begin
+      if U < Half then
+         return Interfaces.Integer_32 (U);
+      else
+         --  Map [2**31 .. 2**32-1] onto [-2**31 .. -1] without overflow.
+         return Interfaces.Integer_32 (U - Half) + Interfaces.Integer_32'First;
+      end if;
+   end From_U32;
+
+   function From_U64 (U : Interfaces.Unsigned_64) return Interfaces.Integer_64 is
+      Half : constant Interfaces.Unsigned_64 := 2 ** 63;
+   begin
+      if U < Half then
+         return Interfaces.Integer_64 (U);
+      else
+         return Interfaces.Integer_64 (U - Half) + Interfaces.Integer_64'First;
+      end if;
+   end From_U64;
+
+   procedure Decode
+     (Body   : in Body_Bytes;
+      Layout : in Layout_Array;
+      Result : out Decode_Result)
+   is
+      Len      : constant Natural := Natural (Body'Length);
+      Pos      : Natural := 0;
+      Id_Buf   : Adacraft.Protocol.Octets (1 .. 5) := (others => 0);
+      Id_Take  : Natural;
+      Id_Val   : Interfaces.Integer_32 := 0;
+      Consumed : Natural := 0;
+      V_Status : Adacraft.Protocol.Varnum.Status_Type;
+      Values   : Bounded_Values;
+      Count    : Field_Count := 0;
+      First    : Natural;
+   begin
+      --  Default to Truncated so every path assigns Result fully.
+      Result := (Status => Truncated, Error_Offset => 0);
+
+      if Layout'Length > Max_Decoded_Fields then
+         Result := (Status => Invalid_Length, Error_Offset => 0);
+         return;
+      end if;
+
+      if Len = 0
+        or else Len > Adacraft.Protocol.Frame.Max_Frame_Body_Length
+      then
+         Result := (Status => Truncated, Error_Offset => 0);
+         return;
+      end if;
+
+      First := Body'First;
+
+      --  Packet ID via Varnum on a bounded 5-byte window (no local codec,
+      --  no allocation from untrusted lengths).
+      Id_Take := Natural'Min (Len, 5);
+      for I in 1 .. Id_Take loop
+         Id_Buf (I) :=
+           Adacraft.Protocol.Octet (Body (First + I - 1));
+      end loop;
+      Adacraft.Protocol.Varnum.Decode
+        (Id_Buf (1 .. Id_Take), 1, Id_Val, Consumed, V_Status);
+      case V_Status is
+         when Adacraft.Protocol.Varnum.Ok =>
+            null;
+         when Adacraft.Protocol.Varnum.Overlong =>
+            Result := (Status => Overlong_Varint, Error_Offset => 0);
+            return;
+         when Adacraft.Protocol.Varnum.Truncated
+            | Adacraft.Protocol.Varnum.Buffer_Too_Small =>
+            Result := (Status => Truncated, Error_Offset => 0);
+            return;
+      end case;
+
+      if Id_Val < 0 then
+         Result := (Status => Id_Out_Of_Range, Error_Offset => 0);
+         return;
+      end if;
+
+      Pos := Consumed;
+      Count := 0;
+
+      for Lx in Layout'Range loop
+         pragma Loop_Invariant (Pos <= Len);
+         pragma Loop_Invariant (Count <= Field_Count'Last);
+         declare
+            K : constant Field_Kind := Layout (Lx);
+         begin
+            case K is
+               when Field_Boolean =>
+                  if Pos >= Len then
+                     Result := (Status => Truncated, Error_Offset => Pos);
+                     return;
+                  end if;
+                  declare
+                     B : constant Byte := Body (First + Pos);
+                  begin
+                     Pos := Pos + 1;
+                     Count := Count + 1;
+                     if B = 16#00# then
+                        Values (Count) :=
+                          (Kind => Field_Boolean, Bool_Val => False);
+                     elsif B = 16#01# then
+                        Values (Count) :=
+                          (Kind => Field_Boolean, Bool_Val => True);
+                     else
+                        Result :=
+                          (Status => Invalid_Length,
+                           Error_Offset => Pos - 1);
+                        return;
+                     end if;
+                  end;
+               when Field_Byte =>
+                  if Pos >= Len then
+                     Result := (Status => Truncated, Error_Offset => Pos);
+                     return;
+                  end if;
+                  Count := Count + 1;
+                  Values (Count) :=
+                    (Kind => Field_Byte, Byte_Val => Body (First + Pos));
+                  Pos := Pos + 1;
+               when Field_Int =>
+                  if Pos + 4 > Len then
+                     Result := (Status => Truncated, Error_Offset => Pos);
+                     return;
+                  end if;
+                  declare
+                     U : Interfaces.Unsigned_32 := 0;
+                  begin
+                     for J in 0 .. 3 loop
+                        U := Interfaces.Shift_Left (U, 8)
+                          or Interfaces.Unsigned_32
+                               (Body (First + Pos + J));
+                     end loop;
+                     Pos := Pos + 4;
+                     Count := Count + 1;
+                     Values (Count) :=
+                       (Kind => Field_Int, Int_Val => From_U32 (U));
+                  end;
+               when Field_Long =>
+                  if Pos + 8 > Len then
+                     Result := (Status => Truncated, Error_Offset => Pos);
+                     return;
+                  end if;
+                  declare
+                     U : Interfaces.Unsigned_64 := 0;
+                  begin
+                     for J in 0 .. 7 loop
+                        U := Interfaces.Shift_Left (U, 8)
+                          or Interfaces.Unsigned_64
+                               (Body (First + Pos + J));
+                     end loop;
+                     Pos := Pos + 8;
+                     Count := Count + 1;
+                     Values (Count) :=
+                       (Kind => Field_Long, Long_Val => From_U64 (U));
+                  end;
+            end case;
+         end;
+      end loop;
+
+      if Pos /= Len then
+         Result := (Status => Trailing_Bytes, Error_Offset => Pos);
+         return;
+      end if;
+
+      Result := (Status => Ok,
+                 Packet_Id => Natural (Id_Val),
+                 Count => Count,
+                 Values => Values);
+   end Decode;
+
    procedure Get_Body
      (E     : in Encoder_Type;
       Data  : out Ada.Streams.Stream_Element_Array;

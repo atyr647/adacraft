@@ -1,0 +1,7 @@
+project Differential is
+   for Main use ("differential-main.adb");
+   for Exec_Dir use "bin";
+   for Source_Dirs use
+     (".", "src", "../src", "../src/protocol", "../src/ingress",
+      "../generated");
+end Differential;

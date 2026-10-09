@@ -46,6 +46,22 @@ is
      (Current : Connection_State;
       Event   : Packet_Event) return Transition_Result;
 
+   --  LOGIN dispatch hooks (protocol 777, pinned 26.3 report).
+   --  Direction + state check: Start is routed only serverbound in
+   --  LOGIN, Acknowledged only serverbound in LOGIN_AWAITING_ACK.
+   --  Any LOGIN packet after the transition to CONFIGURATION rejects.
+   --  No STATUS / HANDSHAKE / CONFIGURATION behaviour changes.
+   type Login_Dispatch is (Dispatch_Reject, Dispatch_Start, Dispatch_Acknowledged);
+
+   function Dispatch_Login
+     (Current : Connection_State;
+      Dir     : Packet_Direction;
+      Id      : Packet_Id) return Login_Dispatch;
+
+   function Login_Ack_Allowed
+     (Current      : Connection_State;
+      Success_Sent : Boolean) return Boolean;
+
    Protocol_Number   : constant := 777;
    Minecraft_Version : constant String := "26.3";
    Report_Source     : constant String :=

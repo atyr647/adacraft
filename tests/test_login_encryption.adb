@@ -25,6 +25,7 @@ procedure Test_Login_Encryption is
    use type Ada.Streams.Stream_Element;
    use type Proto.Octet;
    use type Frm.Feed_Status;
+   use type Frm.Encode_Status;
    use type Pkts.Start_Dispatch_Outcome;
    use type Pkts.Key_Dispatch_Outcome;
    use type St.Connection_State;

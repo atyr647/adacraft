@@ -222,28 +222,57 @@ is
       Status      :    out Status_Type)
    is
       Acc : Interfaces.Unsigned_64 := 0;
-      C   : Natural;
-      S   : Status_Type;
+      Pos : Integer;
    begin
       Value    := 0;
       Consumed := 0;
+      Status   := Truncated;
 
-      Decode_Unsigned
-        (Buffer, Start_Index, Max_Varlong_Bytes, 16#01#, Acc, C, S);
-
-      if S /= Ok then
-         Status := S;
+      if Buffer'Length = 0
+        or else Start_Index < Buffer'First
+        or else Start_Index > Buffer'Last
+      then
          return;
       end if;
 
-      if Acc >= 2 ** 63 then
-         Value := Interfaces.Integer_64 (Acc - 2 ** 63)
-                  + Interfaces.Integer_64'First;
-      else
-         Value := Interfaces.Integer_64 (Acc);
-      end if;
-      Consumed := C;
-      Status   := Ok;
+      Pos := Start_Index;
+
+      for Step in 1 .. Max_Varlong_Bytes loop
+         pragma Loop_Invariant (Pos in Buffer'Range);
+         pragma Loop_Invariant (Step in 1 .. Max_Varlong_Bytes);
+         declare
+            B    : constant Octet := Buffer (Pos);
+            Bits : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (B and 16#7F#);
+         begin
+            if Step = Max_Varlong_Bytes and then B > 16#01# then
+               Status := Overlong;
+               return;
+            end if;
+
+            Acc := Acc or Interfaces.Shift_Left (Bits, (Step - 1) * 7);
+
+            if (B and 16#80#) = 0 then
+               if Acc >= 2 ** 63 then
+                  Value := Interfaces.Integer_64 (Acc - 2 ** 63)
+                           + Interfaces.Integer_64'First;
+               else
+                  Value := Interfaces.Integer_64 (Acc);
+               end if;
+               Consumed := Step;
+               Status   := Ok;
+               return;
+            end if;
+
+            if Pos >= Buffer'Last then
+               Status := Truncated;
+               return;
+            end if;
+            Pos := Pos + 1;
+         end;
+      end loop;
+
+      Status := Overlong;
    end Decode_Varlong;
 
    function Decode_Varint (Buffer : Octets; From : Positive) return Varint_Result is
@@ -258,9 +287,6 @@ is
       Decode (Buffer, From, V, C, S);
       case S is
          when Ok =>
-            if C > 1 and then Buffer (From + C - 1) = 0 then
-               return (Status => Rejected, Value => 0, Next => From);
-            end if;
             return
               (Status => Status_Kind'(Ok),
                Value  =>
@@ -277,22 +303,21 @@ is
    end Decode_Varint;
 
    function Decode_Varlong (Buffer : Octets; From : Positive) return Varlong_Result is
-      Acc : Interfaces.Unsigned_64 := 0;
-      C   : Natural;
-      S   : Status_Type;
+      V : Interfaces.Integer_64;
+      C : Natural;
+      S : Status_Type;
    begin
       if From > Buffer'Last then
          return (Status => Need_More, Value => 0, Next => From);
       end if;
 
-      Decode_Unsigned
-        (Buffer, From, Max_Varlong_Bytes, 16#01#, Acc, C, S);
+      Decode_Varlong (Buffer, From, V, C, S);
       case S is
          when Ok =>
-            if C > 1 and then Buffer (From + C - 1) = 0 then
-               return (Status => Rejected, Value => 0, Next => From);
-            end if;
-            return (Status => Status_Kind'(Ok), Value => Acc, Next => From + C);
+            return
+              (Status => Status_Kind'(Ok),
+               Value  => Interfaces.Unsigned_64 (V),
+               Next   => From + C);
          when Truncated =>
             return (Status => Need_More, Value => 0, Next => From);
          when Overlong | Buffer_Too_Small =>

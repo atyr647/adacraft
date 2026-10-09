@@ -1,19 +1,25 @@
 with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
+with Interfaces;
+with Adacraft.Auth;
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Ids;
+with Adacraft.Protocol.Login;
 with Adacraft.Protocol.Packets;
 
 package body Adacraft.Corpus.Runner is
 
    package P renames Adacraft.Protocol;
    package PS renames Adacraft.Protocol.State;
+   package Prot_Login renames Adacraft.Protocol.Login;
    use Ada.Strings.Unbounded;
    use type P.Status_Kind;
    use type PS.Result_Kind;
    use type PS.Connection_State;
+   use type PS.Login_Dispatch;
+   use type Prot_Login.Ack_Outcome;
    use type Byte_Vectors.Vector;
    use type Interfaces.Unsigned_32;
 
@@ -22,6 +28,31 @@ package body Adacraft.Corpus.Runner is
 
    function Low (S : String) return String is
      (Ada.Characters.Handling.To_Lower (S));
+
+   Login_Start_Pid      : constant := 0;
+   Login_Ack_Pid        : constant := 3;
+   Login_Success_Pid    : constant := 2;
+   Login_Disconnect_Pid : constant := 0;
+
+   function Frame_Packet
+     (Pid : Natural; WB : P.Buffer.Writer) return Byte_Vectors.Vector
+   is
+      use type Interfaces.Unsigned_32;
+      Body_W : P.Buffer.Writer (Capacity => WB.Len + 16 + 1);
+      Framed : P.Buffer.Writer (Capacity => WB.Len + 32 + 1);
+      Result : Byte_Vectors.Vector;
+   begin
+      P.Buffer.Put_Varint (Body_W, Interfaces.Unsigned_32 (Pid));
+      for I in 1 .. WB.Len loop
+         P.Buffer.Put_Octet (Body_W, WB.Data (I));
+      end loop;
+      if P.Packets.Frame (Framed, Body_W) and then not Framed.Failed then
+         for I in 1 .. Framed.Len loop
+            Result.Append (Framed.Data (I));
+         end loop;
+      end if;
+      return Result;
+   end Frame_Packet;
 
    type Feed_Result is record
       Actual    : Outcome := Rejected;
@@ -33,6 +64,7 @@ package body Adacraft.Corpus.Runner is
 
    procedure Feed
      (State : in out PS.Connection_State;
+      Ctx   : in out Login_Ctx;
       Dir   : Direction;
       Input : P.Octets;
       R     : out Feed_Result)
@@ -40,6 +72,41 @@ package body Adacraft.Corpus.Runner is
       F : constant P.Frame.Frame_Decode := P.Frame.Decode_Frame (Input, 1);
    begin
       R := (others => <>);
+      --  Clientbound expectation step: assert the exact server
+      --  frame produced by the previous LOGIN step (Success bytes
+      --  or Disconnect bytes). State is unchanged.
+      if Dir = Clientbound and then Ctx.Has_Pending then
+         if Input'Length = Natural (Ctx.Pending_Output.Length) then
+            declare
+               Same : Boolean := True;
+            begin
+               for I in 1 .. Input'Length loop
+                  if Input (Input'First + I - 1)
+                    /= Ctx.Pending_Output (I)
+                  then
+                     Same := False;
+                     exit;
+                  end if;
+               end loop;
+               if Same then
+                  R.Actual := Accepted;
+                  R.Pid := F.Packet_Id;
+                  R.Category := To_Unbounded_String ("login");
+                  R.Detail := To_Unbounded_String ("login output matches");
+                  Ctx.Has_Pending := False;
+                  return;
+               end if;
+            end;
+         end if;
+         R.Category := To_Unbounded_String ("login");
+         R.Detail := To_Unbounded_String ("login output mismatch");
+         return;
+      end if;
+      if Ctx.Closed then
+         R.Category := To_Unbounded_String ("closed");
+         R.Detail := To_Unbounded_String ("connection already closed");
+         return;
+      end if;
       if F.Status = P.Need_More then
          if F.Declared_Length > P.Max_Packet_Length then
             R.Actual := Rejected;
@@ -61,6 +128,132 @@ package body Adacraft.Corpus.Runner is
          R.Category := To_Unbounded_String ("framing");
          R.Detail := To_Unbounded_String ("input is not exactly one frame");
          return;
+      end if;
+
+      --  LOGIN-state dispatch onto the existing codec. Start is
+      --  handled only serverbound in LOGIN, Ack only serverbound
+      --  in LOGIN_AWAITING_ACK; anything else in LOGIN context
+      --  closes (validation failures produce a Disconnect frame
+      --  held as pending output before close).
+      if Dir = Serverbound
+        and then (State = PS.Login or else State = PS.Login_Awaiting_Ack)
+        and then (F.Packet_Id = Login_Start_Pid
+                  or else F.Packet_Id = Login_Ack_Pid
+                  or else PS.Dispatch_Login
+                    (State,
+                     PS.Serverbound,
+                     PS.Packet_Id (F.Packet_Id)) = PS.Dispatch_Reject
+                  or else True)
+      then
+         declare
+            Parent_Login : constant Boolean :=
+              State = PS.Login or else State = PS.Login_Awaiting_Ack;
+         begin
+            if Parent_Login and then F.Packet_Id = Login_Start_Pid then
+               if State /= PS.Login then
+                  Ctx.Closed := True;
+                  Ctx.Has_Pending := False;
+                  R.Category := To_Unbounded_String ("login");
+                  R.Detail := To_Unbounded_String ("duplicate login start");
+                  return;
+               end if;
+               if not Ctx.Active then
+                  Ctx.Session := (others => <>);
+                  Ctx.Active := True;
+               end if;
+               declare
+                  Payload : constant P.Octets :=
+                    Input (F.Payload_First .. F.Payload_Last);
+                  Res : constant Prot_Login.Start_Result :=
+                    Prot_Login.Handle_Start
+                      (Ctx.Session, Payload, Auth.Offline);
+                  W : P.Buffer.Writer (Capacity => 512);
+               begin
+                  case Res.Outcome is
+                     when Prot_Login.Ready_Success =>
+                        Ctx.Session := Res.Session;
+                        P.Buffer.Reset (W);
+                        declare
+                           WB : P.Buffer.Writer (Capacity => 256);
+                        begin
+                           Prot_Login.Encode_Login_Success (WB, Res.Identity);
+                           Ctx.Pending_Output :=
+                             Frame_Packet (Login_Success_Pid, WB);
+                           Ctx.Has_Pending := True;
+                        end;
+                        State := PS.Login_Awaiting_Ack;
+                        R.Actual := Accepted;
+                        R.Pid := F.Packet_Id;
+                        R.Category := To_Unbounded_String ("login");
+                        R.Detail := To_Unbounded_String ("login start ok");
+                        return;
+                     when Prot_Login.Need_Disconnect_Close
+                        | Prot_Login.Refuse_Online =>
+                        Ctx.Session := Res.Session;
+                        declare
+                           WB : P.Buffer.Writer (Capacity => 512);
+                        begin
+                           Prot_Login.Encode_Login_Disconnect
+                             (WB,
+                              Res.Reason (1 .. Res.Reason_Len));
+                           Ctx.Pending_Output :=
+                             Frame_Packet (Login_Disconnect_Pid, WB);
+                           Ctx.Has_Pending := True;
+                        end;
+                        Ctx.Closed := True;
+                        R.Category := To_Unbounded_String ("disconnect");
+                        R.Detail := To_Unbounded_String
+                          ("login rejected with disconnect");
+                        return;
+                     when Prot_Login.Protocol_Error_Close =>
+                        Ctx.Session := Res.Session;
+                        Ctx.Closed := True;
+                        Ctx.Has_Pending := False;
+                        R.Category := To_Unbounded_String ("login");
+                        R.Detail := To_Unbounded_String
+                          ("malformed login start");
+                        return;
+                  end case;
+               end;
+            elsif Parent_Login and then F.Packet_Id = Login_Ack_Pid then
+               if State /= PS.Login_Awaiting_Ack then
+                  Ctx.Closed := True;
+                  Ctx.Has_Pending := False;
+                  R.Category := To_Unbounded_String ("login");
+                  R.Detail := To_Unbounded_String ("early login ack");
+                  return;
+               end if;
+               declare
+                  Payload : constant P.Octets :=
+                    Input (F.Payload_First .. F.Payload_Last);
+                  Res : constant Prot_Login.Ack_Result :=
+                    Prot_Login.Handle_Acknowledged (Ctx.Session, Payload);
+               begin
+                  if Res.Outcome = Prot_Login.To_Configuration then
+                     Ctx.Session := Res.Session;
+                     Ctx.Has_Pending := False;
+                     State := PS.Configuration;
+                     R.Actual := Accepted;
+                     R.Pid := F.Packet_Id;
+                     R.Category := To_Unbounded_String ("login");
+                     R.Detail := To_Unbounded_String ("ack ok");
+                     return;
+                  else
+                     Ctx.Closed := True;
+                     R.Category := To_Unbounded_String ("login");
+                     R.Detail := To_Unbounded_String ("bad ack body");
+                     return;
+                  end if;
+               end;
+            elsif Parent_Login then
+               Ctx.Closed := True;
+               Ctx.Has_Pending := False;
+               R.Category := To_Unbounded_String ("login");
+               R.Detail := To_Unbounded_String
+                 ("unknown login packet id");
+               return;
+            end if;
+         end;
       end if;
 
       declare
@@ -126,6 +319,7 @@ package body Adacraft.Corpus.Runner is
 
    procedure Replay (S : Scenario; Failure : out Unbounded_String) is
       State : PS.Connection_State := S.Initial_State;
+      Ctx   : Login_Ctx;
       Idx   : Natural := 0;
 
       procedure Fail (Expected, Actual, Detail : String) is
@@ -146,7 +340,7 @@ package body Adacraft.Corpus.Runner is
             for I in Input'Range loop
                Input (I) := St.Input (I);
             end loop;
-            Feed (State, St.Dir, Input, R);
+            Feed (State, Ctx, St.Dir, Input, R);
             if R.Actual /= St.Expected then
                Fail (Low (Outcome'Image (St.Expected)),
                      Low (Outcome'Image (R.Actual)), To_String (R.Detail));
@@ -171,7 +365,10 @@ package body Adacraft.Corpus.Runner is
                      return;
                   end if;
                when Rejected | Incomplete =>
-                  if State /= Before then
+                  if State /= Before
+                    and then not (Ctx.Closed
+                      and then State = Before)
+                  then
                      Fail ("state unchanged", "state changed",
                            "state changed on terminal step");
                      return;

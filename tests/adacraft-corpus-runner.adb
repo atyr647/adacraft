@@ -68,18 +68,20 @@ package body Adacraft.Corpus.Runner is
       end if;
       declare
          Payload : P.Octets (1 .. WB.Len);
-         Framed  : P.Octets (1 .. WB.Len + 64 + 16);
       begin
          for I in 1 .. WB.Len loop
             Payload (I) := WB.Data (I);
          end loop;
-         Framed :=
-           P.Frame.Encode_Compressed_Frame
-             (Uncompressed_Payload => Payload,
-              Threshold            => Threshold);
-         for I in Framed'Range loop
-            Result.Append (Interfaces.Unsigned_8 (Framed (I)));
-         end loop;
+         declare
+            Framed : constant P.Octets :=
+              P.Frame.Encode_Compressed_Frame
+                (Uncompressed_Payload => Payload,
+                 Threshold            => Threshold);
+         begin
+            for I in Framed'Range loop
+               Result.Append (Interfaces.Unsigned_8 (Framed (I)));
+            end loop;
+         end;
       end;
       return Result;
    end Frame_Packet_Compressed;

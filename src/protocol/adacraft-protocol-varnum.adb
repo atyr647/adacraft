@@ -73,14 +73,19 @@ is
       Status  := Ok;
    end Encode;
 
-   procedure Decode
+   procedure Decode_Unsigned
      (Buffer      : in     Octets;
       Start_Index : in     Integer;
-      Value       :    out Interfaces.Integer_32;
+      Max_Bytes   : in     Positive;
+      Last_Limit  : in     Octet;
+      Value       :    out Interfaces.Unsigned_64;
       Consumed    :    out Natural;
       Status      :    out Status_Type)
+     with
+       Global => null,
+       Pre    => Max_Bytes in 1 .. Max_Varlong_Bytes
    is
-      Acc : Interfaces.Unsigned_32 := 0;
+      Acc : Interfaces.Unsigned_64 := 0;
       Pos : Integer;
    begin
       Value    := 0;
@@ -90,20 +95,23 @@ is
       if Buffer'Length = 0
         or else Start_Index < Buffer'First
         or else Start_Index > Buffer'Last
+        or else Max_Bytes > Max_Varlong_Bytes
       then
          return;
       end if;
 
       Pos := Start_Index;
 
-      for Step in 1 .. Max_Varint_Bytes loop
+      for Step in 1 .. Max_Varlong_Bytes loop
+         exit when Step > Max_Bytes;
          pragma Loop_Invariant (Pos in Buffer'Range);
+         pragma Loop_Invariant (Step in 1 .. Max_Bytes);
          declare
             B    : constant Octet := Buffer (Pos);
-            Bits : constant Interfaces.Unsigned_32 :=
-              Interfaces.Unsigned_32 (B and 16#7F#);
+            Bits : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (B and 16#7F#);
          begin
-            if Step = Max_Varint_Bytes and then B > 16#0F# then
+            if Step = Max_Bytes and then B > Last_Limit then
                Status := Overlong;
                return;
             end if;
@@ -111,12 +119,7 @@ is
             Acc := Acc or Interfaces.Shift_Left (Bits, (Step - 1) * 7);
 
             if (B and 16#80#) = 0 then
-               if Acc >= 2 ** 31 then
-                  Value := Interfaces.Integer_32
-                    (Interfaces.Integer_64 (Acc) - 2 ** 32);
-               else
-                  Value := Interfaces.Integer_32 (Acc);
-               end if;
+               Value    := Acc;
                Consumed := Step;
                Status   := Ok;
                return;
@@ -131,6 +134,38 @@ is
       end loop;
 
       Status := Overlong;
+   end Decode_Unsigned;
+
+   procedure Decode
+     (Buffer      : in     Octets;
+      Start_Index : in     Integer;
+      Value       :    out Interfaces.Integer_32;
+      Consumed    :    out Natural;
+      Status      :    out Status_Type)
+   is
+      Acc : Interfaces.Unsigned_64 := 0;
+      C   : Natural;
+      S   : Status_Type;
+   begin
+      Value    := 0;
+      Consumed := 0;
+
+      Decode_Unsigned
+        (Buffer, Start_Index, Max_Varint_Bytes, 16#0F#, Acc, C, S);
+
+      if S /= Ok then
+         Status := S;
+         return;
+      end if;
+
+      if Acc >= 2 ** 31 then
+         Value := Interfaces.Integer_32
+           (Interfaces.Integer_64 (Acc) - 2 ** 32);
+      else
+         Value := Interfaces.Integer_32 (Acc);
+      end if;
+      Consumed := C;
+      Status   := Ok;
    end Decode;
 
    function Encoded_Length_Varlong (Value : Interfaces.Integer_64) return Natural is
@@ -186,56 +221,28 @@ is
       Status      :    out Status_Type)
    is
       Acc : Interfaces.Unsigned_64 := 0;
-      Pos : Integer;
+      C   : Natural;
+      S   : Status_Type;
    begin
       Value    := 0;
       Consumed := 0;
-      Status   := Truncated;
 
-      if Buffer'Length = 0
-        or else Start_Index < Buffer'First
-        or else Start_Index > Buffer'Last
-      then
+      Decode_Unsigned
+        (Buffer, Start_Index, Max_Varlong_Bytes, 16#01#, Acc, C, S);
+
+      if S /= Ok then
+         Status := S;
          return;
       end if;
 
-      Pos := Start_Index;
-
-      for Step in 1 .. Max_Varlong_Bytes loop
-         pragma Loop_Invariant (Pos in Buffer'Range);
-         declare
-            B    : constant Octet := Buffer (Pos);
-            Bits : constant Interfaces.Unsigned_64 :=
-              Interfaces.Unsigned_64 (B and 16#7F#);
-         begin
-            if Step = Max_Varlong_Bytes and then B > 1 then
-               Status := Overlong;
-               return;
-            end if;
-
-            Acc := Acc or Interfaces.Shift_Left (Bits, (Step - 1) * 7);
-
-            if (B and 16#80#) = 0 then
-               if Acc >= 2 ** 63 then
-                  Value := Interfaces.Integer_64 (Acc - 2 ** 63)
-                           + Interfaces.Integer_64'First;
-               else
-                  Value := Interfaces.Integer_64 (Acc);
-               end if;
-               Consumed := Step;
-               Status   := Ok;
-               return;
-            end if;
-
-            if Pos >= Buffer'Last then
-               Status := Truncated;
-               return;
-            end if;
-            Pos := Pos + 1;
-         end;
-      end loop;
-
-      Status := Overlong;
+      if Acc >= 2 ** 63 then
+         Value := Interfaces.Integer_64 (Acc - 2 ** 63)
+                  + Interfaces.Integer_64'First;
+      else
+         Value := Interfaces.Integer_64 (Acc);
+      end if;
+      Consumed := C;
+      Status   := Ok;
    end Decode_Varlong;
 
    function Decode_Varint (Buffer : Octets; From : Positive) return Varint_Result is

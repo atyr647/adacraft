@@ -1,74 +1,677 @@
+with Ada.Calendar;
+with Ada.Exceptions;
 with Ada.Streams;
-with Adacraft.Ingress;
+with Ada.Text_IO;
+with GNAT.Sockets;
+with Interfaces;
 with Adacraft.Protocol.Buffer;
+with Adacraft.Protocol.Frame;
+with Adacraft.Protocol.Handshake_Exchange;
+with Adacraft.Protocol.State;
+with Adacraft.Protocol.Status_Exchange;
+with Adacraft.Protocol.Varnum;
 
 package body Adacraft.Network is
-   procedure Serve_Client (Client : GNAT.Sockets.Socket_Type) is
-      use type Ada.Streams.Stream_Element_Offset;
-      Cap    : constant := 8192;
-      Hold   : Protocol.Octets (1 .. Cap) := (others => 0);
-      Used   : Natural := 0;
-      Item   : Ada.Streams.Stream_Element_Array (1 .. 2048);
-      Last   : Ada.Streams.Stream_Element_Offset;
-      Out_W  : Protocol.Buffer.Writer (4096);
-      S      : Ingress.Session;
-   begin
-      loop
-         GNAT.Sockets.Receive_Socket (Client, Item, Last);
-         exit when Last < Item'First;
-         if Used > Cap - Natural (Last - Item'First + 1) then
-            exit;
-         end if;
-         for I in Item'First .. Last loop
-            Used := Used + 1;
-            Hold (Used) := Protocol.Octet (Item (I));
-         end loop;
+   use type Ada.Streams.Stream_Element_Offset;
+   use type GNAT.Sockets.Selector_Status;
 
-         Protocol.Buffer.Reset (Out_W);
-         declare
-            Consumed  : Natural;
-            Close_Now : Boolean;
+   function Fd_Of (S : GNAT.Sockets.Socket_Type) return Integer is
+   begin
+      return GNAT.Sockets.To_C (S);
+   end Fd_Of;
+
+   function Slot_For_Fd (Fd : Integer) return Positive is
+   begin
+      return Positive ((abs Fd mod Max_Conns) + 1);
+   end Slot_For_Fd;
+
+   function Find_Free_Slot return Natural is
+   begin
+      for I in 1 .. Max_Conns loop
+         if Conn_Table (I) = null then
+            return I;
+         end if;
+      end loop;
+      return 0;
+   end Find_Free_Slot;
+
+   function Find_Slot_For_Sock (S : GNAT.Sockets.Socket_Type) return Natural is
+      Fd : constant Integer := Fd_Of (S);
+   begin
+      for I in 1 .. Max_Conns loop
+         if Conn_Table (I) /= null
+           and then Conn_Table (I).Has_Sock
+           and then Conn_Table (I).Fd_Key = Fd
+         then
+            return I;
+         end if;
+      end loop;
+      return 0;
+   end Find_Slot_For_Sock;
+
+   procedure Log_One_Line (Msg : String) is
+   begin
+      Ada.Text_IO.Put_Line (Ada.Text_IO.Standard_Error, Msg);
+   exception
+      when others => null;
+   end Log_One_Line;
+
+   procedure Close_Conn (Idx : Positive; Reason : String := "") is
+      C : Conn_Access;
+   begin
+      if Idx < 1 or else Idx > Max_Conns then
+         return;
+      end if;
+      C := Conn_Table (Idx);
+      if C = null then
+         return;
+      end if;
+      if Reason'Length > 0 then
          begin
-            Ingress.Ingest (S, Hold (1 .. Used), 1, Consumed, Out_W, Close_Now);
-            if Out_W.Len > 0 and then not Out_W.Failed then
-               declare
-                  Msg : Ada.Streams.Stream_Element_Array (1 .. Ada.Streams.Stream_Element_Offset (Out_W.Len));
-                  Sent : Ada.Streams.Stream_Element_Offset;
+            Log_One_Line ("adacraft_server: closing connection: " & Reason);
+         exception
+            when others => null;
+         end;
+      end if;
+      if C.Has_Sock then
+         begin
+            GNAT.Sockets.Shutdown_Socket (C.Sock);
+         exception
+            when others => null;
+         end;
+         begin
+            GNAT.Sockets.Close_Socket (C.Sock);
+         exception
+            when others => null;
+         end;
+         C.Has_Sock := False;
+      end if;
+      C.Recv_Len := 0;
+      C.Send_Pos := 1;
+      C.Send_Len := 0;
+      C.Closing := True;
+      C.In_Use := False;
+      C.Fd_Key := -1;
+      Conn_Table (Idx) := null;
+      begin
+         --  Release per-connection resources (unconstrained deallocation).
+         declare
+            procedure Free is new Ada.Unchecked_Deallocation (Conn, Conn_Access);
+            Tmp : Conn_Access := C;
+         begin
+            Free (Tmp);
+         end;
+      exception
+         when others => null;
+      end;
+   end Close_Conn;
+
+   procedure Set_Non_Blocking (S : GNAT.Sockets.Socket_Type) is
+      Req : GNAT.Sockets.Request_Type (GNAT.Sockets.Non_Blocking_IO);
+   begin
+      Req.Enabled := True;
+      GNAT.Sockets.Control_Socket (S, Req);
+   end Set_Non_Blocking;
+
+   function Msg_Is_Again (Msg : String) return Boolean;
+
+   function Is_Would_Block (E : Ada.Exceptions.Exception_Occurrence) return Boolean is
+   begin
+      --  EAGAIN / EWOULDBLOCK surface here as Socket_Error with assorted
+      --  messages by platform; treat them as "try later", not fatal.
+      return Msg_Is_Again (Ada.Exceptions.Exception_Message (E));
+   end Is_Would_Block;
+
+   function Msg_Is_Again (Msg : String) return Boolean is
+   begin
+      --  Case-insensitive substring scan for would-block markers.
+      if Msg'Length = 0 then
+         return False;
+      end if;
+      declare
+         Needle1 : constant String := "again";
+         Needle2 : constant String := "WOULD";
+         Needle3 : constant String := "would";
+         Needle4 : constant String := "BLOCK";
+         Needle5 : constant String := "Block";
+      begin
+         for I in Msg'Range loop
+            if I + 4 <= Msg'Last then
+               if Msg (I .. I + 4) = "again"
+                 or else Msg (I .. I + 4) = "Again"
+                 or else Msg (I .. I + 4) = "AGAIN"
+               then
+                  return True;
+               end if;
+            end if;
+            if I + 4 <= Msg'Last then
+               if Msg (I .. I + 4) = "would"
+                 or else Msg (I .. I + 4) = "WOULD"
+                 or else Msg (I .. I + 4) = "Would"
+               then
+                  return True;
+               end if;
+            end if;
+            if I + 4 <= Msg'Last then
+               if Msg (I .. I + 4) = "Block"
+                 or else Msg (I .. I + 4) = "BLOCK"
+                 or else Msg (I .. I + 4) = "block"
+               then
+                  return True;
+               end if;
+            end if;
+         end loop;
+         return False;
+      end;
+   end Msg_Is_Again;
+
+   procedure Queue_Bytes
+     (C    : Conn_Access;
+      Data : Adacraft.Protocol.Frame.Byte_Array)
+   is
+      Room : Natural;
+   begin
+      if C = null or else Data'Length = 0 then
+         return;
+      end if;
+      --  Compact pending region first.
+      if C.Send_Len > 0 and then C.Send_Pos > 1 then
+         declare
+            N : constant Natural := C.Send_Len;
+         begin
+            for I in 1 .. N loop
+               C.Send_Buf (Ada.Streams.Stream_Element_Offset (I)) :=
+                 C.Send_Buf (Ada.Streams.Stream_Element_Offset (C.Send_Pos + I - 1));
+            end loop;
+            C.Send_Pos := 1;
+         end;
+      elsif C.Send_Len = 0 then
+         C.Send_Pos := 1;
+      end if;
+      Room := Send_Capacity - C.Send_Len;
+      if Data'Length > Room then
+         --  No room: drop (caller closes after flush attempt).
+         return;
+      end if;
+      declare
+         Dst : constant Natural := C.Send_Pos + C.Send_Len;
+         K   : Natural := 0;
+      begin
+         for I in Data'Range loop
+            C.Send_Buf (Ada.Streams.Stream_Element_Offset (Dst + K)) := Data (I);
+            K := K + 1;
+         end loop;
+         C.Send_Len := C.Send_Len + Data'Length;
+      end;
+      C.Last_Activity := Ada.Calendar.Clock;
+   end Queue_Bytes;
+
+   procedure Queue_Response
+     (C           : Conn_Access;
+      Response_Id : Natural;
+      Resp        : Adacraft.Protocol.Octets;
+      Resp_Len    : Natural)
+   is
+      Body_W : Adacraft.Protocol.Buffer.Writer (33_000 + 8);
+      Prefix : Adacraft.Protocol.Frame.Prefix_Buffer;
+      Prefix_Last : Ada.Streams.Stream_Element_Offset;
+      Body_Len : Natural;
+      Wire : Adacraft.Protocol.Frame.Byte_Array (1 .. Send_Capacity);
+      WLast : Ada.Streams.Stream_Element_Offset := 0;
+   begin
+      if C = null or else Resp_Len = 0 then
+         return;
+      end if;
+      Adacraft.Protocol.Buffer.Reset (Body_W);
+      Adacraft.Protocol.Buffer.Put_Varint
+        (Body_W, Interfaces.Unsigned_32 (Response_Id));
+      for I in 1 .. Resp_Len loop
+         Adacraft.Protocol.Buffer.Put_Octet
+           (Body_W, Resp (Resp'First + I - 1));
+      end loop;
+      if Body_W.Failed then
+         return;
+      end if;
+      Body_Len := Body_W.Len;
+      Adacraft.Protocol.Frame.Write_Length_Prefix
+        (Adacraft.Protocol.Frame.Frame_Body_Length (Body_Len),
+         Prefix, Prefix_Last);
+      for I in 1 .. Prefix_Last loop
+         WLast := WLast + 1;
+         Wire (WLast) := Prefix (Integer (I));
+      end loop;
+      for I in 1 .. Body_Len loop
+         exit when WLast >= Send_Capacity;
+         WLast := WLast + 1;
+         Wire (WLast) :=
+           Ada.Streams.Stream_Element (Body_W.Data (I));
+      end loop;
+      Queue_Bytes (C, Wire (1 .. WLast));
+   end Queue_Response;
+
+   procedure Handle_Frame_Body (C : Conn_Access; Frame_Data : Adacraft.Protocol.Frame.Byte_Array) is
+      use type Adacraft.Protocol.Status_Kind;
+      Oct : Adacraft.Protocol.Octets (1 .. 2_097_151);
+      Blen : Natural := 0;
+      VR   : Adacraft.Protocol.Varnum.Varint_Result;
+      Pid  : Natural;
+      Pay_First : Positive;
+      Resp_Buf : Adacraft.Protocol.Octets (1 .. 33_008) := (others => 0);
+      Resp_Id  : Natural := 0;
+      Resp_Len : Natural := 0;
+      Want_Close : Boolean := False;
+      use type Adacraft.Protocol.State.Connection_State;
+      use type Adacraft.Protocol.Handshake_Exchange.Handle_Result;
+   begin
+      if C = null then
+         return;
+      end if;
+      if Frame_Data'Length = 0 then
+         raise Constraint_Error with "empty frame";
+      end if;
+      if Frame_Data'Length > Oct'Length then
+         raise Constraint_Error with "frame too large";
+      end if;
+      Blen := Frame_Data'Length;
+      declare
+         K : Natural := 0;
+      begin
+         for I in Frame_Data'Range loop
+            K := K + 1;
+            Oct (K) := Adacraft.Protocol.Octet (Frame_Data (I));
+         end loop;
+      end;
+      --  Packet id is a VarInt of at most 5 bytes; enforced by decoder.
+      VR := Adacraft.Protocol.Varnum.Decode_Varint (Oct (1 .. Blen), 1);
+      if VR.Status /= Adacraft.Protocol.Ok then
+         raise Constraint_Error with "bad packet id";
+      end if;
+      Pid := Natural (VR.Value);
+      Pay_First := VR.Next;
+      if C.Proto_State = Adacraft.Protocol.State.Handshake then
+         declare
+            H_Res : Adacraft.Protocol.Handshake_Exchange.Handle_Result;
+            Empty : constant Adacraft.Protocol.Octets (2 .. 1) := (others => <>);
+         begin
+            if Pay_First > Blen then
+               Adacraft.Protocol.Handshake_Exchange.Handle
+                 (Packet_Id => Pid, Payload => Empty,
+                  Current => C.Proto_State, Stored => C.Stored, Result => H_Res);
+            else
+               Adacraft.Protocol.Handshake_Exchange.Handle
+                 (Packet_Id => Pid, Payload => Oct (Pay_First .. Blen),
+                  Current => C.Proto_State, Stored => C.Stored, Result => H_Res);
+            end if;
+            if H_Res /= Adacraft.Protocol.Handshake_Exchange.Accepted_Status
+              and then H_Res /= Adacraft.Protocol.Handshake_Exchange.Accepted_Login
+            then
+               raise Constraint_Error with "handshake rejected";
+            end if;
+         end;
+      elsif C.Proto_State = Adacraft.Protocol.State.Status then
+         declare
+            S_Res : Adacraft.Protocol.Status_Exchange.Handle_Result;
+            Empty : constant Adacraft.Protocol.Octets (2 .. 1) := (others => <>);
+         begin
+            if Pay_First > Blen then
+               Adacraft.Protocol.Status_Exchange.Handle
+                 (Packet_Id => Pid,
+                  Payload => Empty,
+                  Current => C.Proto_State, Session_State => C.Sess,
+                  Result => S_Res, Response_Id => Resp_Id,
+                  Response_Data => Resp_Buf, Response_Len => Resp_Len,
+                  Close_Connection => Want_Close);
+            else
+               Adacraft.Protocol.Status_Exchange.Handle
+                 (Packet_Id => Pid,
+                  Payload => Oct (Pay_First .. Blen),
+                  Current => C.Proto_State, Session_State => C.Sess,
+                  Result => S_Res, Response_Id => Resp_Id,
+                  Response_Data => Resp_Buf, Response_Len => Resp_Len,
+                  Close_Connection => Want_Close);
+            end if;
+            if Resp_Len > 0 then
+               Queue_Response (C, Resp_Id, Resp_Buf, Resp_Len);
+            end if;
+            if Want_Close and then C.Send_Len = 0 then
+               raise Constraint_Error with "status close";
+            elsif Want_Close then
+               C.Closing := True;
+            end if;
+            if S_Res = Adacraft.Protocol.Status_Exchange.Rejected_Close
+              and then Resp_Len = 0
+            then
+               raise Constraint_Error with "status rejected";
+            end if;
+         end;
+      else
+         --  Login onward: not implemented; plain close.
+         raise Constraint_Error with "login not implemented";
+      end if;
+      C.Last_Activity := Ada.Calendar.Clock;
+   end Handle_Frame_Body;
+
+   procedure Service_Readable (Idx : Positive) is
+      C    : Conn_Access;
+      Item : Adacraft.Protocol.Frame.Byte_Array (1 .. 2048);
+      Last : Ada.Streams.Stream_Element_Offset;
+   begin
+      if Idx < 1 or else Idx > Max_Conns then
+         return;
+      end if;
+      C := Conn_Table (Idx);
+      if C = null or else not C.Has_Sock then
+         return;
+      end if;
+      begin
+         GNAT.Sockets.Receive_Socket (C.Sock, Item, Last);
+      exception
+         when E : GNAT.Sockets.Socket_Error =>
+            if Msg_Is_Again (Ada.Exceptions.Exception_Message (E)) then
+               return;
+            else
+               Close_Conn (Idx, "read error");
+               return;
+            end if;
+         when others =>
+            Close_Conn (Idx, "read error");
+            return;
+      end;
+      if Last < Item'First then
+         --  EOF mid-frame or clean EOF: plain close.
+         Close_Conn (Idx, "eof");
+         return;
+      end if;
+      declare
+         Got : constant Adacraft.Protocol.Frame.Byte_Array :=
+           Item (Item'First .. Last);
+         FS : Adacraft.Protocol.Frame.Feed_Status;
+         C_Copy : constant Conn_Access := C;
+         Idx_Copy : constant Positive := Idx;
+         procedure On_Frame (Frame : Adacraft.Protocol.Frame.Byte_Array) is
+         begin
+            Handle_Frame_Body (C_Copy, Frame);
+         end On_Frame;
+      begin
+         Adacraft.Protocol.Frame.Feed (C.Frame_State, Got, On_Frame'Access, FS);
+         --  Feed enforces: VarInt/length prefix <= 3 bytes,
+         --  frame <= 2_097_151; overlong/over-max => Framing_Error.
+         if FS /= Adacraft.Protocol.Frame.Success then
+            Close_Conn (Idx_Copy, "framing error");
+            return;
+         end if;
+      exception
+         when others =>
+            --  Malformed/unknown-id/bad-next-state/truncated => plain close.
+            if Conn_Table (Idx_Copy) /= null then
+               --  Flush any queued reply before closing if present.
+               if C_Copy /= null and then C_Copy.Send_Len > 0 then
+                  begin
+                     Service_Writable (Idx_Copy);
+                  exception
+                     when others => null;
+                  end;
+               end if;
+               Close_Conn (Idx_Copy, "bad handshake");
+            end;
+            return;
+      end;
+      --  If handler marked closing and everything flushed, close now;
+      --  otherwise the writable path / timeout path finishes it.
+      if Conn_Table (Idx) /= null and then C.Closing and then C.Send_Len = 0 then
+         Close_Conn (Idx, "closing");
+      end if;
+   end Service_Readable;
+
+   procedure Service_Writable (Idx : Positive) is
+      C    : Conn_Access;
+      Sent : Ada.Streams.Stream_Element_Offset;
+   begin
+      if Idx < 1 or else Idx > Max_Conns then
+         return;
+      end if;
+      C := Conn_Table (Idx);
+      if C = null or else not C.Has_Sock then
+         return;
+      end if;
+      if C.Send_Len = 0 then
+         if C.Closing then
+            Close_Conn (Idx, "closing");
+         end if;
+         return;
+      end if;
+      declare
+         First : constant Ada.Streams.Stream_Element_Offset :=
+           Ada.Streams.Stream_Element_Offset (C.Send_Pos);
+         Last_I : constant Ada.Streams.Stream_Element_Offset :=
+           Ada.Streams.Stream_Element_Offset (C.Send_Pos + C.Send_Len - 1);
+      begin
+         GNAT.Sockets.Send_Socket (C.Sock, C.Send_Buf (First .. Last_I), Sent);
+         if Sent >= First and then Sent <= Last_I then
+            declare
+               N : constant Natural := Natural (Sent - First + 1);
+            begin
+               C.Send_Pos := C.Send_Pos + N;
+               C.Send_Len := C.Send_Len - N;
+               if C.Send_Len = 0 then
+                  C.Send_Pos := 1;
+               end if;
+               C.Last_Activity := Ada.Calendar.Clock;
+            end;
+         end if;
+      exception
+         when E : GNAT.Sockets.Socket_Error =>
+            if Msg_Is_Again (Ada.Exceptions.Exception_Message (E)) then
+               return;
+            else
+               Close_Conn (Idx, "write error");
+               return;
+            end if;
+         when others =>
+            Close_Conn (Idx, "write error");
+            return;
+      end;
+      if C.Send_Len = 0 and then C.Closing then
+         Close_Conn (Idx, "closing");
+      end if;
+   end Service_Writable;
+
+   procedure Accept_Ready (Listener : GNAT.Sockets.Socket_Type) is
+      use GNAT.Sockets;
+      Client : Socket_Type;
+      Peer   : Sock_Addr_Type;
+      Slot   : Natural;
+   begin
+      Accept_Socket (Listener, Client, Peer);
+      Slot := Find_Free_Slot;
+      if Slot = 0 then
+         begin
+            Close_Socket (Client);
+         exception
+            when others => null;
+         end;
+         return;
+      end if;
+      begin
+         Set_Non_Blocking (Client);
+      exception
+         when others => null;
+      end;
+      declare
+         C : constant Conn_Access := new Conn;
+      begin
+         C.Sock := Client;
+         C.Has_Sock := True;
+         C.Fd_Key := Fd_Of (Client);
+         C.Recv_Len := 0;
+         C.Frame_State := (others => <>);
+         C.Proto_State := Adacraft.Protocol.State.Initial_State;
+         C.Stored := (others => <>);
+         Adacraft.Protocol.Status_Exchange.Reset (C.Sess);
+         C.Last_Activity := Ada.Calendar.Clock;
+         C.Send_Pos := 1;
+         C.Send_Len := 0;
+         C.Closing := False;
+         C.In_Use := True;
+         Conn_Table (Slot) := C;
+      exception
+         when others =>
+            begin
+               Close_Socket (Client);
+            exception
+               when others => null;
+            end;
+      end;
+   exception
+      when E : GNAT.Sockets.Socket_Error =>
+         if Msg_Is_Again (Ada.Exceptions.Exception_Message (E)) then
+            null;
+         else
+            Log_One_Line ("adacraft_server: accept error");
+         end if;
+      when others =>
+         Log_One_Line ("adacraft_server: accept error");
+   end Accept_Ready;
+
+   procedure Initialize_Listener
+     (Port     : GNAT.Sockets.Port_Type;
+      Listener : out GNAT.Sockets.Socket_Type)
+   is
+      use GNAT.Sockets;
+      Addr : Sock_Addr_Type;
+   begin
+      Create_Socket (Listener);
+      Set_Socket_Option (Listener, Socket_Level, (Reuse_Address, True));
+      Addr.Addr := Any_Inet_Addr;
+      Addr.Port := Port;
+      Bind_Socket (Listener, Addr);
+      Listen_Socket (Listener);
+   end Initialize_Listener;
+
+   procedure Run_Event_Loop (Listener : GNAT.Sockets.Socket_Type) is
+      use GNAT.Sockets;
+      Selector : Selector_Type;
+      R_Set, W_Set, E_Set : Socket_Set_Type;
+      Status : Selector_Status;
+      Now    : Ada.Calendar.Time;
+   begin
+      Create_Selector (Selector);
+      loop
+         Empty (R_Set);
+         Empty (W_Set);
+         Empty (E_Set);
+         Set (R_Set, Listener);
+         for I in 1 .. Max_Conns loop
+            if Conn_Table (I) /= null and then Conn_Table (I).Has_Sock then
                begin
-                  for I in Msg'Range loop
-                     Msg (I) := Ada.Streams.Stream_Element (Out_W.Data (Positive (I)));
-                  end loop;
-                  GNAT.Sockets.Send_Socket (Client, Msg, Sent);
+                  Set (R_Set, Conn_Table (I).Sock);
+                  if Conn_Table (I).Send_Len > 0 then
+                     Set (W_Set, Conn_Table (I).Sock);
+                  end if;
+               exception
+                  when others => null;
                end;
             end if;
-            if Consumed > 0 and then Consumed <= Used then
-               if Consumed < Used then
-                  Hold (1 .. Used - Consumed) := Hold (Consumed + 1 .. Used);
-               end if;
-               Used := Used - Consumed;
-            end if;
-            exit when Close_Now or else Out_W.Failed;
+         end loop;
+         begin
+            Check_Selector
+              (Selector, R_Set, W_Set, E_Set, Status,
+               Timeout => Selector_Duration (Selector_Tick));
+         exception
+            when others =>
+               Status := Expired;
          end;
+         if Status = Completed then
+            if Is_Set (R_Set, Listener) then
+               begin
+                  Accept_Ready (Listener);
+               exception
+                  when E : others =>
+                     Log_One_Line
+                       ("adacraft_server: accept fault: "
+                        & Ada.Exceptions.Exception_Name (E));
+               end;
+            end if;
+            for I in 1 .. Max_Conns loop
+               if Conn_Table (I) /= null and then Conn_Table (I).Has_Sock then
+                  declare
+                     S : constant Socket_Type := Conn_Table (I).Sock;
+                     R_Hit : Boolean := False;
+                     W_Hit : Boolean := False;
+                  begin
+                     begin
+                        R_Hit := Is_Set (R_Set, S);
+                     exception
+                        when others => R_Hit := False;
+                     end;
+                     begin
+                        W_Hit := Is_Set (W_Set, S);
+                     exception
+                        when others => W_Hit := False;
+                     end;
+                     if R_Hit then
+                        begin
+                           Service_Readable (I);
+                        exception
+                           when E : others =>
+                              begin
+                                 Close_Conn (I, "read fault");
+                              exception
+                                 when others => null;
+                              end;
+                        end;
+                     end if;
+                     if Conn_Table (I) /= null
+                       and then Conn_Table (I).Has_Sock
+                       and then W_Hit
+                     then
+                        begin
+                           Service_Writable (I);
+                        exception
+                           when E : others =>
+                              begin
+                                 Close_Conn (I, "write fault");
+                              exception
+                                 when others => null;
+                              end;
+                        end;
+                     end if;
+                  end;
+               end if;
+            end loop;
+         end if;
+         --  Reap idle and half-frame conns under the single Read_Timeout.
+         Now := Ada.Calendar.Clock;
+         for I in 1 .. Max_Conns loop
+            if Conn_Table (I) /= null and then Conn_Table (I).Has_Sock then
+               begin
+                  if Now - Conn_Table (I).Last_Activity > Read_Timeout then
+                     Close_Conn (I, "read timeout");
+                  end if;
+               exception
+                  when others => null;
+               end;
+            end if;
+         end loop;
       end loop;
-   end Serve_Client;
+   exception
+      when others =>
+         --  Selector itself failed; keep process alive by retrying.
+         begin
+            Close_Selector (Selector);
+         exception
+            when others => null;
+         end;
+         Log_One_Line ("adacraft_server: selector fault, restarting loop");
+         Run_Event_Loop (Listener);
+   end Run_Event_Loop;
 
    procedure Serve (Port : GNAT.Sockets.Port_Type) is
       use GNAT.Sockets;
-      Server  : Socket_Type;
-      Client  : Socket_Type;
-      Address : Sock_Addr_Type;
-      Peer    : Sock_Addr_Type;
+      Listener : Socket_Type;
    begin
-      Create_Socket (Server);
-      Set_Socket_Option (Server, Socket_Level, (Reuse_Address, True));
-      Address.Addr := Any_Inet_Addr;
-      Address.Port := Port;
-      Bind_Socket (Server, Address);
-      Listen_Socket (Server);
-      loop
-         Accept_Socket (Server, Client, Peer);
-         Serve_Client (Client);
-         Close_Socket (Client);
-      end loop;
+      Initialize_Listener (Port, Listener);
+      Run_Event_Loop (Listener);
    end Serve;
+
 end Adacraft.Network;

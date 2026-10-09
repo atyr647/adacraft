@@ -1,7 +1,9 @@
 with Ada.Command_Line;
 with Ada.Streams;
 with Ada.Text_IO;
+with GNAT.OS_Lib;
 with GNAT.Sockets;
+with Adacraft.Network;
 with Interfaces;
 with Adacraft;
 with Adacraft.Protocol;
@@ -257,41 +259,57 @@ procedure Adacraft_Server is
       end loop;
    end Serve_Client;
 
-   procedure Serve (Port : in GNAT.Sockets.Port_Type) is
+   procedure Parse_Port (Image : String; Port : out GNAT.Sockets.Port_Type) is
       use GNAT.Sockets;
-      Server : Socket_Type;
-      Client : Socket_Type;
-      Address : Sock_Addr_Type;
-      Peer : Sock_Addr_Type;
+      V : Natural := 0;
    begin
-      Create_Socket (Server);
-      Set_Socket_Option (Server, Socket_Level, (Reuse_Address, True));
-      Address.Addr := Any_Inet_Addr;
-      Address.Port := Port;
-      Bind_Socket (Server, Address);
-      Listen_Socket (Server);
-      loop
-         Accept_Socket (Server, Client, Peer);
-         Serve_Client (Client);
-         Close_Socket (Client);
+      if Image'Length = 0 then
+         raise Constraint_Error with "empty port";
+      end if;
+      for I in Image'Range loop
+         if Image (I) < '0' or else Image (I) > '9' then
+            raise Constraint_Error with "non-digit port";
+         end if;
+         V := V * 10 + (Character'Pos (Image (I)) - Character'Pos ('0'));
+         if V > 65535 then
+            raise Constraint_Error with "port too large";
+         end if;
       end loop;
-   end Serve;
+      if V < 1 or else V > 65535 then
+         raise Constraint_Error with "port out of range";
+      end if;
+      Port := Port_Type (V);
+   end Parse_Port;
 
 begin
-   --  Ingress dispatch by current state: each received frame is decoded
-   --  with Frame.Decode_Frame via Dispatch_Raw_Buffer, then dispatched
-   --  by Current via Dispatch_Decoded_Frame: Handshake ->
-   --  Handshake_Exchange.Handle, Status -> Status_Exchange.Handle
-   --  (sending Response_Id/Response_Data (1 .. Response_Len) when
-   --  Response_Len > 0 and closing when Close_Connection is set), Login
-   --  onward -> not-yet-implemented close.  Per-connection handling keeps
-   --  its own Current/Stored/Sess and follows that path for every frame.
+   --  Event-driven server: Parse_Port -> Initialize_Listener ->
+   --  Run_Event_Loop.  Per-connection dispatch (Handshake_Exchange /
+   --  Status_Exchange via Frame.Feed) lives in Adacraft.Network.
    if Ada.Command_Line.Argument_Count >= 1 then
-      Port := GNAT.Sockets.Port_Type'Value (Ada.Command_Line.Argument (1));
+      declare
+         Arg : constant String := Ada.Command_Line.Argument (1);
+         P   : GNAT.Sockets.Port_Type;
+      begin
+         Parse_Port (Arg, P);
+         Port := P;
+      exception
+         when others =>
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "adacraft_server: invalid port """ & Arg
+               & """: must be 1..65535");
+            GNAT.OS_Lib.OS_Exit (1);
+      end;
    end if;
    Ada.Text_IO.Put_Line
      ("AdaCraft " & Adacraft.Minecraft_Version
       & " protocol" & Adacraft.Protocol_Version'Image
       & " listening on" & Port'Image);
-   Serve (Port);
+   declare
+      use GNAT.Sockets;
+      Listener : Socket_Type;
+   begin
+      Adacraft.Network.Initialize_Listener (Port, Listener);
+      Adacraft.Network.Run_Event_Loop (Listener);
+   end;
 end Adacraft_Server;

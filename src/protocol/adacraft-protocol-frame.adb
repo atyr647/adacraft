@@ -1,4 +1,5 @@
 with Interfaces;
+with Adacraft.Protocol.Compression;
 with Adacraft.Protocol.Varnum;
 
 package body Adacraft.Protocol.Frame
@@ -7,6 +8,8 @@ is
    use type Interfaces.Unsigned_32;
    use type Ada.Streams.Stream_Element_Offset;
    use type Ada.Streams.Stream_Element;
+   use type Adacraft.Protocol.Compression.Byte_Array_Access;
+   use type Adacraft.Protocol.Varnum.Status_Type;
 
    function Remaining (Last : Natural; From : Natural) return Natural is
      (if From > Last then 0 else Last - From + 1);
@@ -157,6 +160,198 @@ is
 
       Status := Success;
    end Feed;
+
+   function Encode_Compressed_Frame
+     (Uncompressed_Payload : Octets;
+      Threshold            : Natural) return Octets
+     with SPARK_Mode => Off
+   is
+      package V renames Adacraft.Protocol.Varnum;
+      package C renames Adacraft.Protocol.Compression;
+      Enc    : C.Encode_Result;
+      Chunk  : C.Byte_Array_Access := null;
+      Len32  : Interfaces.Integer_32;
+      Prefix : Octets (1 .. 5) := (others => 0);
+      W      : Natural := 0;
+      St     : V.Status_Type := V.Buffer_Too_Small;
+   begin
+      C.Encode (Threshold, Uncompressed_Payload, Enc);
+      if not Enc.Ok or else Enc.Data = null then
+         return (1 .. 0 => 0);
+      end if;
+      Chunk := Enc.Data;
+      if Chunk.all'Length = 0
+        or else Natural'Last - Chunk.all'Length < 5
+      then
+         C.Free (Chunk);
+         Enc.Data := null;
+         C.Free (Enc);
+         return (1 .. 0 => 0);
+      end if;
+      if Chunk.all'Length > Max_Frame_Body_Length
+        or else Chunk.all'Length > Max_Packet_Length
+      then
+         C.Free (Chunk);
+         Enc.Data := null;
+         C.Free (Enc);
+         return (1 .. 0 => 0);
+      end if;
+      Len32 := Interfaces.Integer_32 (Chunk.all'Length);
+      V.Encode (Len32, Prefix, 1, W, St);
+      if St /= V.Ok or else W not in 1 .. 5 then
+         C.Free (Chunk);
+         Enc.Data := null;
+         C.Free (Enc);
+         return (1 .. 0 => 0);
+      end if;
+      declare
+         Out_Len : constant Natural := W + Chunk.all'Length;
+         Result  : Octets (1 .. Out_Len) := (others => 0);
+      begin
+         for I in 1 .. W loop
+            Result (I) := Prefix (I);
+         end loop;
+         for I in 1 .. Chunk.all'Length loop
+            Result (W + I) := Chunk.all (Chunk.all'First + I - 1);
+         end loop;
+         C.Free (Chunk);
+         Enc.Data := null;
+         C.Free (Enc);
+         return Result;
+      end;
+   end Encode_Compressed_Frame;
+
+   function Split_Compressed_Frame
+     (Buffer : Octets;
+      From   : Positive) return Compressed_Split
+     with SPARK_Mode => Off
+   is
+      package V renames Adacraft.Protocol.Varnum;
+      Plen : V.Varint_Result;
+      Dlen : V.Varint_Result;
+      Size : Natural;
+      Data_End : Natural;
+      Frame_End : Natural;
+   begin
+      if From > Buffer'Last then
+         return (Status => Need_More, Data_Length => 0,
+                 Payload_First => 1, Payload_Last => 0, Next => From);
+      end if;
+      Plen := V.Decode_Varint (Buffer, From);
+      if Plen.Status = Need_More then
+         return (Status => Need_More, Data_Length => 0,
+                 Payload_First => 1, Payload_Last => 0, Next => From);
+      end if;
+      if Plen.Status /= Status_Kind'(Ok) then
+         return (Status => Rejected, Data_Length => 0,
+                 Payload_First => 1, Payload_Last => 0, Next => From);
+      end if;
+      if Plen.Next - From > Max_Length_Bytes
+        or else Plen.Value = 0
+        or else Plen.Value > Interfaces.Unsigned_32 (Max_Packet_Length)
+      then
+         return (Status => Rejected, Data_Length => 0,
+                 Payload_First => 1, Payload_Last => 0, Next => From);
+      end if;
+      Size := Natural (Plen.Value);
+      if Remaining (Buffer'Last, Plen.Next) < Size then
+         return (Status => Need_More, Data_Length => 0,
+                 Payload_First => 1, Payload_Last => 0, Next => From);
+      end if;
+      Frame_End := Plen.Next + Size - 1;
+      Dlen := V.Decode_Varint (Buffer, Plen.Next);
+      if Dlen.Status /= Status_Kind'(Ok)
+        or else Dlen.Next < Plen.Next
+        or else Dlen.Next > Frame_End + 1
+        or else Dlen.Value > Interfaces.Unsigned_32 (Natural'Last)
+      then
+         return (Status => Rejected, Data_Length => 0,
+                 Payload_First => 1, Payload_Last => 0, Next => From);
+      end if;
+      Data_End := Dlen.Next;
+      return
+        (Status        => Ok,
+         Data_Length   => Natural (Dlen.Value),
+         Payload_First => Data_End,
+         Payload_Last  => Frame_End,
+         Next          => Frame_End + 1);
+   end Split_Compressed_Frame;
+
+   procedure Decode_Compressed_Frame
+     (Buffer    : in     Octets;
+      From      : in     Positive;
+      Threshold : in     Natural;
+      Data      : in out Compression.Byte_Array_Access;
+      Next      :    out Natural;
+      Status    :    out Compressed_Split_Status)
+     with SPARK_Mode => Off
+   is
+      package C renames Adacraft.Protocol.Compression;
+      Split : Compressed_Split;
+      Dec   : C.Decode_Result;
+      First : Positive;
+   begin
+      C.Free (Data);
+      Data := null;
+      Next := From;
+      Status := Rejected;
+      Split := Split_Compressed_Frame (Buffer, From);
+      if Split.Status /= Ok then
+         Status := Split.Status;
+         return;
+      end if;
+      if Split.Data_Length /= 0 and then Split.Data_Length < Threshold then
+         return;
+      end if;
+      if Split.Data_Length > C.Max_Decompressed_Size then
+         return;
+      end if;
+      if Split.Payload_First > Split.Payload_Last then
+         --  Empty payload after Data_Length VarInt.
+         if Split.Data_Length = 0 then
+            Data := new Octets (1 .. 0);
+            Next := Split.Next;
+            Status := Ok;
+            return;
+         else
+            --  Declared bytes but no bytes to inflate: let the codec
+            --  report truncation so the reason stays fail-closed.
+            First := Split.Next;
+            declare
+               Empty : Octets (1 .. 0) := (others => 0);
+            begin
+               C.Decode (Threshold, Empty, Dec);
+               C.Free (Dec);
+               return;
+            end;
+         end if;
+      end if;
+      First := Split.Payload_First - (Split.Payload_First - Split.Payload_First);
+      --  Feed the codec the Data_Length VarInt plus the frame payload,
+      --  i.e. Buffer (Plen.Next .. Frame_End). Recover the Data_Length
+      --  start from the split: it is the byte after Packet_Length.
+      declare
+         package V renames Adacraft.Protocol.Varnum;
+         Plen : V.Varint_Result := V.Decode_Varint (Buffer, From);
+         Codec_Input : Octets renames Buffer (Plen.Next .. Split.Payload_Last);
+      begin
+         First := Plen.Next;
+         C.Decode (Threshold, Codec_Input, Dec);
+         if not Dec.Ok or else Dec.Data = null then
+            C.Free (Dec);
+            return;
+         end if;
+         if Dec.Data.all'Length /= Split.Data_Length then
+            C.Free (Dec);
+            return;
+         end if;
+         Data := Dec.Data;
+         Dec.Data := null;
+         C.Free (Dec);
+         Next := Split.Next;
+         Status := Ok;
+      end;
+   end Decode_Compressed_Frame;
 
    function Decode_Frame (Buffer : Octets; From : Positive) return Frame_Decode is
       Length      : Varnum.Varint_Result;

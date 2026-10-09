@@ -389,7 +389,11 @@ package body Adacraft.Corpus.Runner is
       Summary   : out Run_Summary)
    is
       Failure : Unbounded_String;
+      Saved_Online_Mode : constant Boolean := Adacraft.Kernel.Online_Mode;
    begin
+      --  Corpus login scenarios exercise the offline flow explicitly.
+      --  The runner's LOGIN dispatch still reads the configured mode.
+      Adacraft.Kernel.Online_Mode := False;
       Summary := (others => <>);
       for S of Scenarios loop
          if (not F.Has_Id or else S.Id = F.Id)

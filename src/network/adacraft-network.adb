@@ -16,15 +16,8 @@ with Adacraft.Protocol.Status_Exchange;
 with Adacraft.Protocol.Varnum;
 
 package body Adacraft.Network is
-   --  Explicit server authentication-mode configuration for the
-   --  LOGIN-state dispatch (Gate 4). Default is offline, matching the
-   --  default configuration used by tests and corpus. Read by
-   --  Handle_Frame_Body; never hardcoded at the branch site.
-   Server_Mode : Adacraft.Auth.Server_Auth_Mode := Adacraft.Auth.Offline;
-
    use type Ada.Calendar.Time;
    use type Ada.Streams.Stream_Element_Offset;
-   use type Adacraft.Auth.Server_Auth_Mode;
    use type Adacraft.Protocol.Frame.Feed_Status;
    use type Adacraft.Protocol.Status_Exchange.Handle_Result;
    use type GNAT.Sockets.Selector_Status;
@@ -427,10 +420,14 @@ package body Adacraft.Network is
          --  (1) state / packet-id check (Table validity + Start id),
          --  (2) Login.Decode_Login_Start only (no ad-hoc parsing),
          --  (3) well-formed check (Malformed / Invalid_Name),
-         --  (4) Config.Offline check (default offline; online keeps
-         --  its current handling).
-         --  Bit-for-bit preservation: wrong-state, malformed,
-         --  online-mode and non-Login behaviour unchanged.
+         --  (4) offline success path (base behaviour: well-formed
+         --  Start answers one framed Login Success).
+         --  Bit-for-bit preservation: no behaviour change on any
+         --  input; wrong-state, malformed, online-mode and non-Login
+         --  inputs behave exactly as before. No mode branch lives on
+         --  this path in the base (online refuse lives in
+         --  Login.Handle_Start, used by Ingress via Kernel.Online_Mode,
+         --  which this unit must not with per check_boundaries).
          declare
             LS  : Adacraft.Protocol.Login.Login_Start;
             use type Adacraft.Protocol.State.Connection_State;
@@ -490,22 +487,8 @@ package body Adacraft.Network is
                C.Last_Activity := Ada.Calendar.Clock;
                return;
             end if;
-            --  Gate 4: offline vs. online from the explicit server
-            --  configuration (package-body Server_Mode, default
-            --  offline). Online keeps its current handling: the same
-            --  single Disconnect with Online_Not_Yet_Supported_Reason
-            --  that Login.Handle_Start returns for Refuse_Online
-            --  (close, no Success, no state change).
-            if Server_Mode = Adacraft.Auth.Online then
-               Queue_Framed
-                 (C, Adacraft.Protocol.Login.Build_Login_Disconnect
-                   (Adacraft.Protocol.Login
-                      .Online_Not_Yet_Supported_Reason));
-               C.Closing := True;
-               C.Last_Activity := Ada.Calendar.Clock;
-               return;
-            end if;
-            --  Well-formed offline Start (LS.Status = Ok):
+            --  Gate 4: well-formed Start (LS.Status = Ok), offline
+            --  success path unchanged from base:
             --  offline-identified only; Online_Authenticated concept does
             --  not exist on this Conn (stays offline), one framed Login
             --  Success via Encode_Login_Success, then Login_Awaiting_Ack.

@@ -5,6 +5,7 @@ with Ada.Unchecked_Deallocation;
 with Ada.Text_IO;
 with GNAT.Sockets;
 with Interfaces;
+with Adacraft.Auth;
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Handshake_Exchange;
@@ -380,6 +381,7 @@ package body Adacraft.Network is
             Reason : String (1 .. 256) := (others => ' ');
             Reason_Len : Natural := 0;
             use type Adacraft.Protocol.State.Connection_State;
+            use type Adacraft.Protocol.Login.Login_Start_Status;
          begin
             --  Duplicate Start in same connection: a queued Disconnect
             --  means Start was already seen -> close, no second reply.
@@ -414,51 +416,84 @@ package body Adacraft.Network is
                     Adacraft.Protocol.Login.Decode_Login_Start (Empty);
                end;
             end if;
-            case LS.Status is
-               when Adacraft.Protocol.Login.Ok =>
-                  Reason_Len :=
-                    Adacraft.Protocol.Login.Default_Disconnect_Reason'Length;
-                  Reason (1 .. Reason_Len) :=
-                    Adacraft.Protocol.Login.Default_Disconnect_Reason;
-               when Adacraft.Protocol.Login.Invalid_Name =>
-                  Reason_Len :=
-                    Adacraft.Protocol.Login.Invalid_Name_Reason'Length;
-                  Reason (1 .. Reason_Len) :=
-                    Adacraft.Protocol.Login.Invalid_Name_Reason;
-               when Adacraft.Protocol.Login.Malformed =>
-                  --  Truncated / length mismatch -> close, no reply.
-                  raise Constraint_Error with "malformed login start";
-            end case;
-            --  Well-formed Start (v=777 or v/=777, already in Login):
-            --  one framed 777 Login Disconnect via the single
-            --  Protocol.Login builder, reason text from Protocol.Login.
+            --  Login Start outcome in Login_State (in place, no second
+            --  handler). Malformed -> close, no reply. Decodable but
+            --  invalid name -> one Disconnect, close. Valid -> offline
+            --  UUID via existing policy, one Success, await Ack.
+            --  Invalid-state reject above (Ack before Start) untouched.
+            if LS.Status = Adacraft.Protocol.Login.Malformed then
+               --  Truncated / length mismatch -> close, no reply, no raise.
+               C.Closing := True;
+               C.Last_Activity := Ada.Calendar.Clock;
+               return;
+            end if;
+            if LS.Status = Adacraft.Protocol.Login.Invalid_Name then
+               --  Decodable but invalid name: single Disconnect, close.
+               --  No Success, no state change.
+               declare
+                  Disc : Adacraft.Protocol.Octets :=
+                    Adacraft.Protocol.Login.Build_Login_Disconnect
+                      (Adacraft.Protocol.Login.Invalid_Name_Reason);
+                  Prefix : Adacraft.Protocol.Frame.Prefix_Buffer;
+                  P_Last : Ada.Streams.Stream_Element_Offset;
+                  Wire : Adacraft.Protocol.Frame.Byte_Array (1 .. 512) :=
+                    (others => 0);
+                  W_Last : Ada.Streams.Stream_Element_Offset := 0;
+               begin
+                  Adacraft.Protocol.Frame.Write_Length_Prefix
+                    (Adacraft.Protocol.Frame.Frame_Body_Length (Disc'Length),
+                     Prefix, P_Last);
+                  for I in 1 .. P_Last loop
+                     W_Last := W_Last + 1;
+                     Wire (W_Last) := Prefix (Integer (I));
+                  end loop;
+                  for I in Disc'Range loop
+                     W_Last := W_Last + 1;
+                     Wire (W_Last) :=
+                       Ada.Streams.Stream_Element (Disc (I));
+                  end loop;
+                  Queue_Bytes (C, Wire (1 .. W_Last));
+               end;
+               C.Closing := True;
+               C.Last_Activity := Ada.Calendar.Clock;
+               return;
+            end if;
+            --  Well-formed Start with valid name (LS.Status = Ok):
+            --  offline-identified only; Online_Authenticated concept does
+            --  not exist on this Conn (stays offline), one framed Login
+            --  Success via Encode_Login_Success, then Login_Awaiting_Ack.
             declare
-               Disc : Adacraft.Protocol.Octets :=
-                 Adacraft.Protocol.Login.Build_Login_Disconnect
-                   (Reason (1 .. Reason_Len));
+               Name_Str : constant String := LS.Name (1 .. LS.Name_Len);
+               Ident : constant Adacraft.Auth.Player_Identity :=
+                 Adacraft.Protocol.Login.Offline_Identity (Name_Str);
+               W : Adacraft.Protocol.Buffer.Writer (64);
                Prefix : Adacraft.Protocol.Frame.Prefix_Buffer;
                P_Last : Ada.Streams.Stream_Element_Offset;
                Wire : Adacraft.Protocol.Frame.Byte_Array (1 .. 512) :=
                  (others => 0);
                W_Last : Ada.Streams.Stream_Element_Offset := 0;
             begin
-               Adacraft.Protocol.Frame.Write_Length_Prefix
-                 (Adacraft.Protocol.Frame.Frame_Body_Length (Disc'Length),
-                  Prefix, P_Last);
-               for I in 1 .. P_Last loop
-                  W_Last := W_Last + 1;
-                  Wire (W_Last) := Prefix (Integer (I));
-               end loop;
-               for I in Disc'Range loop
-                  W_Last := W_Last + 1;
-                  Wire (W_Last) :=
-                    Ada.Streams.Stream_Element (Disc (I));
-               end loop;
-               Queue_Bytes (C, Wire (1 .. W_Last));
+               Adacraft.Protocol.Buffer.Reset (W);
+               Adacraft.Protocol.Login.Encode_Login_Success (W, Ident);
+               if not W.Failed and then W.Len > 0 then
+                  Adacraft.Protocol.Frame.Write_Length_Prefix
+                    (Adacraft.Protocol.Frame.Frame_Body_Length (W.Len),
+                     Prefix, P_Last);
+                  for I in 1 .. P_Last loop
+                     W_Last := W_Last + 1;
+                     Wire (W_Last) := Prefix (Integer (I));
+                  end loop;
+                  for I in 1 .. W.Len loop
+                     W_Last := W_Last + 1;
+                     Wire (W_Last) :=
+                       Ada.Streams.Stream_Element (W.Data (I));
+                  end loop;
+                  Queue_Bytes (C, Wire (1 .. W_Last));
+               end if;
             end;
-            C.Closing := True;
-            --  Return normally; event loop flushes via Service_Writable
-            --  then closes only this connection.
+            C.Proto_State := Adacraft.Protocol.State.Login_Awaiting_Ack;
+            C.Last_Activity := Ada.Calendar.Clock;
+            return;
          end;
       else
          --  Configuration onward: not implemented; plain close.

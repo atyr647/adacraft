@@ -1,15 +1,21 @@
 with Ada.Streams;
+with Interfaces;
 with Adacraft.Auth;
 with Adacraft.Kernel;
+with Adacraft.Protocol.Buffer;
+with Adacraft.Protocol.Compression;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Ids;
 with Adacraft.Protocol.Login;
 with Adacraft.Protocol.Packet_Encoder;
 with Adacraft.Protocol.Packets;
 with Adacraft.Protocol.State;
+with Adacraft.Protocol.Varnum;
 
 package body Adacraft.Ingress is
+   use type Protocol.Protocol_State;
    use type Protocol.Status_Kind;
+   use type Protocol.Compression.Byte_Array_Access;
    use type Interfaces.Unsigned_32;
    use type Protocol.Octet;
    use type Ada.Streams.Stream_Element_Offset;
@@ -125,6 +131,21 @@ package body Adacraft.Ingress is
       Protocol.Buffer.Put_Bytes (W, Bytes (1 .. Natural (Last)));
    end Append_Login_Packet;
 
+   --  Fail-closed compressed ingress dispatch (framing buffers only).
+   --  Session has no compression record (spec frozen), so the
+   --  per-connection switch is derived from existing login state:
+   --  once Login Success has been sent (Success_Sent), the next
+   --  serverbound frame (Login Acknowledged) arrives compressed.
+   --  Threshold is the single server default (256); negative/disabled
+   --  never reaches here because Success is sent uncompressed then.
+   Compression_Threshold : constant Natural := 256;
+
+   function Compression_Armed (S : Session) return Boolean is
+   begin
+      return S.State = Protocol.Login_Phase
+        and then S.Login_State.State = Protocol.Login.Success_Sent;
+   end Compression_Armed;
+
    procedure Ingest
      (S         : in out Session;
       Incoming  : Protocol.Octets;
@@ -135,28 +156,106 @@ package body Adacraft.Ingress is
    is
       Cursor : Natural := From;
       Frame  : Protocol.Frame.Frame_Decode;
+      C_Data : Protocol.Compression.Byte_Array_Access := null;
+      C_Next : Natural := 0;
+      C_Stat : Protocol.Frame.Compressed_Split_Status :=
+        Protocol.Frame.Rejected;
+      Use_C  : Boolean;
+      P_Id   : Natural := 0;
+      P_First : Positive := 1;
+      P_Last  : Natural := 0;
+      P_Next  : Natural := 0;
+      P_Ok   : Boolean := False;
    begin
       Consumed := From - 1;
       Close_Now := False;
       while Cursor <= Incoming'Last and then not Close_Now and then not Outgoing.Failed loop
-         Frame := Protocol.Frame.Decode_Frame (Incoming, Cursor);
-         if Frame.Status = Protocol.Need_More then
-            if Frame.Declared_Length > Protocol.Max_Packet_Length then
-               Close_Now := True;
+         Use_C := Compression_Armed (S);
+         P_Ok := False;
+         if Use_C then
+            --  decrypt happens in the live connection path before
+            --  these bytes reach Ingest; here: frame split ->
+            --  decompress -> decode. Any validation failure closes
+            --  with the existing protocol-error path (Close_Now),
+            --  nothing reaches the state machine.
+            Protocol.Frame.Decode_Compressed_Frame
+              (Buffer    => Incoming,
+               From      => Cursor,
+               Threshold => Compression_Threshold,
+               Data      => C_Data,
+               Next      => C_Next,
+               Status    => C_Stat);
+            case C_Stat is
+               when Protocol.Frame.Need_More =>
+                  Protocol.Compression.Free (C_Data);
+                  exit;
+               when Protocol.Frame.Rejected =>
+                  Protocol.Compression.Free (C_Data);
+                  Close_Now := True;
+                  Consumed := Incoming'Last;
+                  exit;
+               when Protocol.Frame.Ok =>
+                  null;
+            end case;
+            if Close_Now then
+               exit;
             end if;
-            exit;
-         elsif Frame.Status = Protocol.Rejected then
-            Close_Now := True;
-            exit;
+            if C_Data = null then
+               Close_Now := True;
+               Consumed := Incoming'Last;
+               exit;
+            end if;
+            declare
+               Id_R : constant Protocol.Varnum.Varint_Result :=
+                 Protocol.Varnum.Decode_Varint (C_Data.all, 1);
+            begin
+               if Id_R.Status /= Protocol.Ok then
+                  Protocol.Compression.Free (C_Data);
+                  Close_Now := True;
+                  Consumed := Incoming'Last;
+                  exit;
+               end if;
+               P_Id := Natural (Id_R.Value);
+               P_First := Id_R.Next;
+               P_Last := C_Data.all'Last;
+               P_Next := C_Next;
+               P_Ok := True;
+            end;
+         else
+            Frame := Protocol.Frame.Decode_Frame (Incoming, Cursor);
+            if Frame.Status = Protocol.Need_More then
+               if Frame.Declared_Length > Protocol.Max_Packet_Length then
+                  Close_Now := True;
+               end if;
+               exit;
+            elsif Frame.Status = Protocol.Rejected then
+               Close_Now := True;
+               exit;
+            end if;
+            P_Id := Frame.Packet_Id;
+            P_First := Frame.Payload_First;
+            P_Last := Frame.Payload_Last;
+            P_Next := Frame.Next;
+            P_Ok := True;
          end if;
 
          declare
             Payload : constant Protocol.Octets :=
-              Incoming (Frame.Payload_First .. Frame.Payload_Last);
+              (if Use_C then C_Data.all (P_First .. P_Last)
+               else Incoming (P_First .. P_Last));
+            Packet_Id : constant Natural := P_Id;
+            Frame_Next : constant Natural := P_Next;
+            Frame_Ok : constant Boolean := P_Ok;
          begin
+            if not Frame_Ok then
+               Protocol.Compression.Free (C_Data);
+               Close_Now := True;
+               Consumed := Incoming'Last;
+               exit;
+            end if;
             case S.State is
                when Protocol.Handshake =>
-                  if Frame.Packet_Id /= Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Handshake_Intention) then
+                  if Packet_Id /= Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Handshake_Intention) then
                      Close_Now := True;
                   else
                      declare
@@ -182,7 +281,7 @@ package body Adacraft.Ingress is
                   end if;
 
                when Protocol.Status =>
-                  if Frame.Packet_Id = Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Status_Status_Request) then
+                  if Packet_Id = Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Status_Status_Request) then
                      declare
                         Body_W : Protocol.Buffer.Writer (512);
                         Framed : Protocol.Buffer.Writer (640);
@@ -194,7 +293,7 @@ package body Adacraft.Ingress is
                            Close_Now := True;
                         end if;
                      end;
-                  elsif Frame.Packet_Id = Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Status_Ping_Request) then
+                  elsif Packet_Id = Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Status_Ping_Request) then
                      declare
                         Ping   : constant Protocol.Packets.Ping := Protocol.Packets.Decode_Ping (Payload);
                         Body_W : Protocol.Buffer.Writer (32);
@@ -224,7 +323,7 @@ package body Adacraft.Ingress is
                      Dispatch : constant Protocol.State.Login_Dispatch :=
                        Protocol.State.Dispatch_Login
                          (Dispatch_State, Protocol.State.Serverbound,
-                          Protocol.State.Packet_Id (Frame.Packet_Id));
+                          Protocol.State.Packet_Id (Packet_Id));
                   begin
                      case Dispatch is
                         when Protocol.State.Dispatch_Start =>
@@ -288,9 +387,10 @@ package body Adacraft.Ingress is
             end case;
          end;
 
+         Protocol.Compression.Free (C_Data);
          if not Close_Now then
-            Cursor := Frame.Next;
-            Consumed := Frame.Next - 1;
+            Cursor := P_Next;
+            Consumed := P_Next - 1;
          else
             Consumed := Incoming'Last;
          end if;

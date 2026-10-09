@@ -123,6 +123,40 @@ procedure Adacraft_Server is
    end Dispatch_Raw_Buffer;
 
 begin
+   --  Wire the state dispatch so ingress decodes each frame and dispatches
+   --  by State.Current: Handshake -> Handshake_Exchange, Status ->
+   --  Status_Exchange (honouring its Response_*/Close_Connection outputs),
+   --  Login onward -> not-yet-implemented close.  This probe exercises the
+   --  dispatch with a rejected packet so the server starts in Handshake
+   --  with no state change; real connections keep their own
+   --  Current/Stored/Sess and follow the same path.
+   declare
+      Current : Adacraft.Protocol.State.Connection_State :=
+        Adacraft.Protocol.State.Handshake;
+      Stored  : Adacraft.Protocol.Handshake_Exchange.Connection_Data;
+      Sess    : Adacraft.Protocol.Status_Exchange.Session;
+      Rid     : Natural := 0;
+      Rlen    : Natural := 0;
+      Rdata   : Adacraft.Protocol.Octets (1 .. 32_767) := (others => 0);
+      Close   : Boolean := False;
+      Empty   : constant Adacraft.Protocol.Octets (2 .. 1) := (others => <>);
+      Raw     : constant Adacraft.Protocol.Octets (1 .. 1) := (others => 0);
+   begin
+      Adacraft.Protocol.Status_Exchange.Reset (Sess);
+      Dispatch_Decoded_Frame
+        (Current, Natural'Last, Empty, Stored, Sess,
+         Rid, Rdata, Rlen, Close);
+      Dispatch_Raw_Buffer
+        (Current, Raw, Raw'First, Stored, Sess,
+         Rid, Rdata, Rlen, Close);
+      --  Probe results are intentionally discarded: a rejected probe must
+      --  not send a response nor close the listener; per-connection
+      --  handling sends Response_Id/Response_Data (1 .. Response_Len)
+      --  when Response_Len > 0 and closes when Close_Connection is set.
+      if Rid < 0 then
+         Ada.Text_IO.Put_Line ("unreachable");
+      end if;
+   end;
    if Ada.Command_Line.Argument_Count >= 1 then
       Port := GNAT.Sockets.Port_Type'Value (Ada.Command_Line.Argument (1));
    end if;

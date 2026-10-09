@@ -8,7 +8,11 @@ with Interfaces;
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Handshake_Exchange;
+with Adacraft.Protocol.Login;
+with Adacraft.Protocol.Packet_Decoder;
+with Adacraft.Protocol.Packet_Encoder;
 with Adacraft.Protocol.State;
+with Adacraft.Protocol.State.Table;
 with Adacraft.Protocol.Status_Exchange;
 with Adacraft.Protocol.Varnum;
 
@@ -371,9 +375,122 @@ package body Adacraft.Network is
                raise Constraint_Error with "status rejected";
             end if;
          end;
+      elsif C.Proto_State = Adacraft.Protocol.State.Login then
+         --  Handle_Login (single-shot): Frame body already fed by
+         --  Service_Readable via Frame.Feed.  Path:
+         --  Frame body -> Packet_Decoder.Decode -> State.Table validity
+         --  -> Login.Decode_Login_Start -> Packet_Encoder Disconnect.
+         declare
+            use type Adacraft.Protocol.Packet_Decoder.Decode_Status;
+            use type Adacraft.Protocol.Varnum.Status_Type;
+            use type Interfaces.Integer_32;
+            Full : Adacraft.Protocol.Octets (1 .. Blen);
+            Lay  : Adacraft.Protocol.Packet_Decoder.Layout_Type;
+            Dec_Id : Interfaces.Integer_32 := 0;
+            Fields : Adacraft.Protocol.Packet_Decoder.Field_Array;
+            F_Cnt  : Natural := 0;
+            D_St   : Adacraft.Protocol.Packet_Decoder.Decode_Status :=
+              Adacraft.Protocol.Packet_Decoder.Rejected;
+            Pay : Adacraft.Protocol.Octets (2 .. 1) := (others => <>);
+            LS  : Adacraft.Protocol.Login.Login_Start;
+            Reason : String (1 .. 256) := (others => ' ');
+            Reason_Len : Natural := 0;
+            use type Adacraft.Protocol.State.Connection_State;
+         begin
+            for I in 1 .. Blen loop
+               Full (I) := Oct (I);
+            end loop;
+            --  Duplicate Start in same connection: a queued Disconnect
+            --  means Start was already seen -> close, no second reply.
+            if C.Closing or else C.Send_Len > 0 then
+               raise Constraint_Error with "duplicate login start";
+            end if;
+            --  A2 gate: Packet_Decoder must yield typed Login Start.
+            --  Layout: no fixed fields; decoder still parses Packet_Id
+            --  via Varnum and validates VarInt framing (truncated /
+            --  overlong -> Rejected -> close, no reply).
+            Lay.Count := 0;
+            Adacraft.Protocol.Packet_Decoder.Decode
+              (Payload => Full (1 .. Blen), Layout => Lay,
+               Packet_Id => Dec_Id, Fields => Fields,
+               Field_Count => F_Cnt, Status => D_St);
+            if D_St /=
+              Adacraft.Protocol.Packet_Decoder.Success
+            then
+               raise Constraint_Error with "login decode rejected";
+            end if;
+            if not Interfaces."=" (Dec_Id, Interfaces.Integer_32 (Pid)) then
+               raise Constraint_Error with "login id mismatch";
+            end if;
+            --  Per-state validity (§19): only serverbound Login rows pass.
+            --  Status/Ping, Handshake, early Ack, unknown id, wrong
+            --  direction -> close, no reply.
+            if Adacraft.Protocol.State.Table.Find
+              (State => Adacraft.Protocol.State.Login,
+               Dir   => Adacraft.Protocol.State.Serverbound,
+               Id    => Adacraft.Protocol.State.Packet_Id (Pid)) = 0
+            then
+               raise Constraint_Error with "invalid in login";
+            end if;
+            if not Adacraft.Protocol.State.Table.Is_Login_Start_Id
+              (Adacraft.Protocol.State.Packet_Id (Pid))
+            then
+               raise Constraint_Error with "not login start";
+            end if;
+            if Pay_First <= Blen then
+               Pay := Oct (Pay_First .. Blen);
+               LS := Adacraft.Protocol.Login.Decode_Login_Start
+                 (Oct (Pay_First .. Blen));
+            else
+               declare
+                  Empty : constant Adacraft.Protocol.Octets (2 .. 1) :=
+                    (others => <>);
+               begin
+                  LS := Adacraft.Protocol.Login.Decode_Login_Start (Empty);
+               end;
+            end if;
+            case LS.Status is
+               when Adacraft.Protocol.Login.Ok =>
+                  Reason_Len :=
+                    Adacraft.Protocol.Login.Default_Disconnect_Reason'Length;
+                  Reason (1 .. Reason_Len) :=
+                    Adacraft.Protocol.Login.Default_Disconnect_Reason;
+               when Adacraft.Protocol.Login.Invalid_Name =>
+                  Reason_Len :=
+                    Adacraft.Protocol.Login.Invalid_Name_Reason'Length;
+                  Reason (1 .. Reason_Len) :=
+                    Adacraft.Protocol.Login.Invalid_Name_Reason;
+               when Adacraft.Protocol.Login.Malformed =>
+                  --  Truncated / length mismatch -> close, no reply.
+                  raise Constraint_Error with "malformed login start";
+            end case;
+            --  Well-formed Start (v=777 or v/=777, already in Login):
+            --  one framed 777 Login Disconnect via Packet_Encoder,
+            --  reason text from Protocol.Login.  Init out params first.
+            declare
+               E : Adacraft.Protocol.Packet_Encoder.Encoder_Type;
+               Out_Buf : Adacraft.Protocol.Frame.Byte_Array (1 .. 40_000) :=
+                 (others => 0);
+               Out_Last : Ada.Streams.Stream_Element_Offset := 0;
+            begin
+               Adacraft.Protocol.Packet_Encoder.Encode_Login_Disconnect
+                 (E, Reason (1 .. Reason_Len));
+               Adacraft.Protocol.Packet_Encoder.Get_Framed
+                 (E, Out_Buf, Out_Last);
+               if Out_Last < Out_Buf'First
+                 or else Adacraft.Protocol.Packet_Encoder.Has_Failed (E)
+               then
+                  raise Constraint_Error with "disconnect encode failed";
+               end if;
+               Queue_Bytes (C, Out_Buf (Out_Buf'First .. Out_Last));
+            end;
+            C.Closing := True;
+            --  Return normally; event loop flushes via Service_Writable
+            --  then closes only this connection.
+         end;
       else
-         --  Login onward: not implemented; plain close.
-         raise Constraint_Error with "login not implemented";
+         --  Configuration onward: not implemented; plain close.
+         raise Constraint_Error with "configuration not implemented";
       end if;
       C.Last_Activity := Ada.Calendar.Clock;
    end Handle_Frame_Body;

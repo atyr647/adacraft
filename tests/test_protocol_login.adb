@@ -1,5 +1,6 @@
 with Ada.Streams;
 with Ada.Text_IO;
+with Interfaces;
 with Adacraft.Auth;
 with Adacraft.Protocol;
 with Adacraft.Protocol.Buffer;

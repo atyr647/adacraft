@@ -412,7 +412,7 @@ procedure Test_Login_Server is
          Send_Packet (S, 0, Empty);
          --  Server must close with no reply and no hang: Read_Frame
          --  must fail (timeout or EOF), never return a packet.
-         Got := Read_Frame (S, Body, Last);
+         Got := Read_Frame (S, Frame_Body, Last);
          Check (not Got, "invalid-in-login closed, no reply, no hang");
       exception
          when others =>

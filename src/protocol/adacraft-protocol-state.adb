@@ -99,6 +99,11 @@ is
       return Current = Login_Awaiting_Ack and then Success_Sent;
    end Login_Ack_Allowed;
 
+   --  Is_Login_State is a pure expression function in the spec; no body
+   --  needed. LOGIN send-once sequencing lives in Adacraft.Network.
+   --  Send_Set_Compression guards on Is_Login_State (State = Login),
+   --  Threshold >= 0, and not already sent.
+
    function Transition
      (Current : Connection_State;
       Event   : Packet_Event) return Transition_Result

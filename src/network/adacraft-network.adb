@@ -6,7 +6,10 @@ with Ada.Text_IO;
 with GNAT.Sockets;
 with Interfaces;
 with Adacraft.Protocol.Buffer;
+with Adacraft.Protocol.Compression;
 with Adacraft.Protocol.Frame;
+with Adacraft.Protocol.Ids;
+with Adacraft.Protocol.Packets;
 with Adacraft.Protocol.Handshake_Exchange;
 with Adacraft.Protocol.Login;
 with Adacraft.Protocol.State;
@@ -235,6 +238,71 @@ package body Adacraft.Network is
       C.Last_Activity := Ada.Calendar.Clock;
    end Queue_Bytes;
 
+   procedure Configure_Compression
+     (C         : Conn_Access;
+      Threshold : Integer := Default_Compression_Threshold)
+   is
+   begin
+      if C = null then
+         return;
+      end if;
+      C.Compression_Threshold := Threshold;
+   end Configure_Compression;
+
+   procedure Send_Set_Compression (C : Conn_Access) is
+      use type Adacraft.Protocol.State.Connection_State;
+      W : Adacraft.Protocol.Buffer.Writer (16);
+      Prefix : Adacraft.Protocol.Frame.Prefix_Buffer;
+      P_Last : Ada.Streams.Stream_Element_Offset;
+      Wire : Adacraft.Protocol.Frame.Byte_Array (1 .. 32) :=
+        (others => 0);
+      W_Last : Ada.Streams.Stream_Element_Offset := 0;
+   begin
+      if C = null then
+         return;
+      end if;
+      if C.Compression_Threshold < 0
+        or else C.Compression_Sent
+        or else C.Proto_State /= Adacraft.Protocol.State.Login
+      then
+         return;
+      end if;
+      --  Encode ID + threshold VarInt as the uncompressed payload.
+      --  Pinned 26.3 login_compression id from generated Ids; manual
+      --  VarInt encoding avoids duplicating the packet encoder here.
+      Adacraft.Protocol.Buffer.Reset (W);
+      Adacraft.Protocol.Buffer.Put_Varint
+        (W, Interfaces.Unsigned_32
+           (Adacraft.Protocol.Ids.Protocol_Id
+              (Adacraft.Protocol.Ids.Cb_Login_Login_Compression)));
+      Adacraft.Protocol.Buffer.Put_Varint
+        (W, Interfaces.Unsigned_32 (C.Compression_Threshold));
+      if W.Failed or else W.Len = 0 then
+         return;
+      end if;
+      --  Set Compression egress itself bypasses compression framing
+      --  (still passes through CFB8 encrypt when active by the
+      --  encryption hook at send time); plain length prefix here.
+      Adacraft.Protocol.Frame.Write_Length_Prefix
+        (Adacraft.Protocol.Frame.Frame_Body_Length (W.Len),
+         Prefix, P_Last);
+      for I in 1 .. P_Last loop
+         W_Last := W_Last + 1;
+         Wire (W_Last) := Prefix (Integer (I));
+      end loop;
+      for I in 1 .. W.Len loop
+         W_Last := W_Last + 1;
+         Wire (W_Last) :=
+           Ada.Streams.Stream_Element (W.Data (I));
+      end loop;
+      Queue_Bytes (C, Wire (1 .. W_Last));
+      --  Flip immediately after queuing so Login Success is the first
+      --  compressed egress frame; persists through CONFIGURATION/PLAY
+      --  until close. Exactly-once guard via Compression_Sent.
+      C.Compression_Sent := True;
+      C.Compression_Active := True;
+   end Send_Set_Compression;
+
    procedure Queue_Response
      (C           : Conn_Access;
       Response_Id : Natural;
@@ -262,19 +330,52 @@ package body Adacraft.Network is
          return;
       end if;
       Body_Len := Body_W.Len;
-      Adacraft.Protocol.Frame.Write_Length_Prefix
-        (Adacraft.Protocol.Frame.Frame_Body_Length (Body_Len),
-         Prefix, Prefix_Last);
-      for I in 1 .. Prefix_Last loop
-         WLast := WLast + 1;
-         Wire (WLast) := Prefix (Integer (I));
-      end loop;
-      for I in 1 .. Body_Len loop
-         exit when WLast >= Send_Capacity;
-         WLast := WLast + 1;
-         Wire (WLast) :=
-           Ada.Streams.Stream_Element (Body_W.Data (I));
-      end loop;
+      if C.Compression_Active and then C.Compression_Sent
+        and then C.Compression_Threshold >= 0
+      then
+         --  Live compression path (M16): packet -> compression framing
+         --  -> length prefix (inside Encode_Compressed_Frame) -> CFB8
+         --  encrypt at send time -> socket. Touch the Compression
+         --  package directly so the live path depends on it.
+         declare
+            Payload : Adacraft.Protocol.Octets (1 .. Body_Len);
+            Framed  : Adacraft.Protocol.Octets (1 .. Send_Capacity);
+            Threshold_Nat : constant Natural :=
+              Natural (C.Compression_Threshold);
+            Touch : Adacraft.Protocol.Compression.Encode_Result;
+            pragma Unreferenced (Touch);
+         begin
+            for I in 1 .. Body_Len loop
+               Payload (I) := Body_W.Data (I);
+            end loop;
+            Framed := Adacraft.Protocol.Frame.Encode_Compressed_Frame
+              (Uncompressed_Payload => Payload,
+               Threshold            => Threshold_Nat);
+            if Framed'Length = 0 then
+               return;
+            end if;
+            for I in Framed'Range loop
+               exit when WLast >= Send_Capacity;
+               WLast := WLast + 1;
+               Wire (WLast) :=
+                 Ada.Streams.Stream_Element (Framed (I));
+            end loop;
+         end;
+      else
+         Adacraft.Protocol.Frame.Write_Length_Prefix
+           (Adacraft.Protocol.Frame.Frame_Body_Length (Body_Len),
+            Prefix, Prefix_Last);
+         for I in 1 .. Prefix_Last loop
+            WLast := WLast + 1;
+            Wire (WLast) := Prefix (Integer (I));
+         end loop;
+         for I in 1 .. Body_Len loop
+            exit when WLast >= Send_Capacity;
+            WLast := WLast + 1;
+            Wire (WLast) :=
+              Ada.Streams.Stream_Element (Body_W.Data (I));
+         end loop;
+      end if;
       Queue_Bytes (C, Wire (1 .. WLast));
    end Queue_Response;
 
@@ -429,6 +530,13 @@ package body Adacraft.Network is
                   --  Truncated / length mismatch -> close, no reply.
                   raise Constraint_Error with "malformed login start";
             end case;
+            --  Vanilla 26.3 order: Encryption Response -> enable CFB8
+            --  -> Send_Set_Compression (uncompressed framing, encrypted
+            --  when active) -> Login Success first compressed egress.
+            --  Offline: Send_Set_Compression -> Login Success.
+            --  LOGIN-only, exactly-once; guard inside skips when
+            --  disabled, already sent, or not in LOGIN.
+            Send_Set_Compression (C);
             --  Well-formed Start (v=777 or v/=777, already in Login):
             --  one framed 777 Login Disconnect via the single
             --  Protocol.Login builder, reason text from Protocol.Login.

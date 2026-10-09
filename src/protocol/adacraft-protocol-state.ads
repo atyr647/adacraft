@@ -62,6 +62,10 @@ is
      (Current      : Connection_State;
       Success_Sent : Boolean) return Boolean;
 
+   function Is_Login_State (S : Connection_State) return Boolean is
+     (S = Login);
+   --  Compression sequencing guard: Set Compression is sent only in LOGIN.
+
    Protocol_Number   : constant := 777;
    Minecraft_Version : constant String := "26.3";
    Report_Source     : constant String :=

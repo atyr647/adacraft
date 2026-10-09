@@ -14,6 +14,8 @@ package Adacraft.Network is
    Send_Capacity : constant := 40_000;
    Recv_Capacity : constant := 8_192;
 
+   Default_Compression_Threshold : constant Integer := 256;
+
    type Conn is record
       Sock          : GNAT.Sockets.Socket_Type;
       Has_Sock      : Boolean := False;
@@ -31,6 +33,9 @@ package Adacraft.Network is
       Send_Len      : Natural := 0;
       Closing       : Boolean := False;
       In_Use        : Boolean := False;
+      Compression_Threshold : Integer := Default_Compression_Threshold;
+      Compression_Active  : Boolean := False;
+      Compression_Sent    : Boolean := False;
    end record;
 
    type Conn_Access is access Conn;
@@ -51,6 +56,20 @@ package Adacraft.Network is
    procedure Close_Conn (Idx : Positive; Reason : String := "");
 
    procedure Parse_Port (Image : String; Port : out GNAT.Sockets.Port_Type);
+
+   procedure Configure_Compression
+     (C         : Conn_Access;
+      Threshold : Integer := Default_Compression_Threshold);
+   --  Single constructor/config parameter for compression (A1).
+   --  Negative disables compression. Per-connection only, no globals.
+
+   procedure Send_Set_Compression (C : Conn_Access);
+   --  LOGIN-only, exactly-once Set Compression send. Guard: skip when
+   --  Threshold < 0 or Compression_Sent or Proto_State /= LOGIN.
+   --  The Set Compression frame itself uses uncompressed framing
+   --  (still through CFB8 when active); on success flips
+   --  Compression_Active so the next egress (Login Success) is the
+   --  first compressed frame. Persists until close.
 
    procedure Serve (Port : GNAT.Sockets.Port_Type);
 end Adacraft.Network;

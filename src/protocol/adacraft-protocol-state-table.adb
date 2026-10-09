@@ -34,9 +34,14 @@ is
      Sb_Play_Names'Pos (Sb_Play_Names'Last)
      - Sb_Play_Names'Pos (Sb_Play_Names'First) + 1;
 
+   --  Sb_Login_Key (Encryption Response) is valid only in
+   --  Login_Awaiting_Encryption_Response: it is removed from the
+   --  generic Login + Login_Awaiting_Ack serverbound copies and
+   --  stored as a single dedicated row. Net row count is one less
+   --  than the naive generic total.
    Total : constant :=
      Packet_Name'Pos (Packet_Name'Last) + 1
-     + Sb_Login_Count + Sb_Configuration_Count + Sb_Play_Count;
+     + Sb_Login_Count + Sb_Configuration_Count + Sb_Play_Count - 1;
 
    type Row_Array is array (Positive range 1 .. Total) of Row;
 
@@ -121,6 +126,9 @@ is
                          or else (A.Direction = B.Direction
                                   and then A.Id < B.Id))));
 
+   Key_Id_Value : constant Packet_Id :=
+     Packet_Id (Ids.Protocol_Id (Ids.Sb_Login_Key));
+
    function Build_Rows return Row_Array is
       Result : Row_Array := (others => Blank);
       Count  : Natural := 0;
@@ -129,12 +137,24 @@ is
          declare
             S : constant Parent_State := State_Of (N);
             D : constant Packet_Direction := Direction_Of (N);
+            Id : constant Packet_Id :=
+              Packet_Id (Ids.Protocol_Id (N));
+            Is_Key : constant Boolean :=
+              (D = Serverbound and then Id = Key_Id_Value
+               and then S = Login);
          begin
-            Count := Count + 1;
-            Result (Count) := Make (S, D, N);
-            if D = Serverbound and then S in Login | Configuration | Play then
+            if Is_Key then
+               --  Dedicated single row for the Encryption Response.
                Count := Count + 1;
-               Result (Count) := Make (Pending_Of (S), D, N);
+               Result (Count) :=
+                 Make (Login_Awaiting_Encryption_Response, D, N);
+            else
+               Count := Count + 1;
+               Result (Count) := Make (S, D, N);
+               if D = Serverbound and then S in Login | Configuration | Play then
+                  Count := Count + 1;
+                  Result (Count) := Make (Pending_Of (S), D, N);
+               end if;
             end if;
          end;
       end loop;
@@ -222,6 +242,9 @@ is
    function Is_Login_Ack_Id (Id : Packet_Id) return Boolean is
      (Id = Packet_Id (Ids.Protocol_Id (Ids.Sb_Login_Login_Acknowledged)));
 
+   function Is_Login_Key_Id (Id : Packet_Id) return Boolean is
+     (Id = Packet_Id (Ids.Protocol_Id (Ids.Sb_Login_Key)));
+
    function Is_Serverbound_Login
      (State : Connection_State;
       Id    : Packet_Id) return Boolean
@@ -233,6 +256,10 @@ is
       Login_Query_Id   : constant Packet_Id :=
         Packet_Id (Ids.Protocol_Id (Ids.Sb_Login_Custom_Query_Answer));
    begin
+      if Id = Login_Key_Id then
+         return State = Login_Awaiting_Encryption_Response
+           and then Find (State, Serverbound, Id) /= 0;
+      end if;
       if State /= Login and then State /= Login_Awaiting_Ack then
          return False;
       end if;
@@ -241,7 +268,6 @@ is
       end if;
       return Is_Login_Start_Id (Id)
         or else Is_Login_Ack_Id (Id)
-        or else Id = Login_Key_Id
         or else Id = Login_Cookie_Id
         or else Id = Login_Query_Id;
    end Is_Serverbound_Login;

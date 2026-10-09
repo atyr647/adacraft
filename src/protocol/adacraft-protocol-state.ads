@@ -4,7 +4,7 @@ is
    type Connection_State is
      (Handshake, Status, Login, Configuration, Play,
       Login_Awaiting_Ack, Configuration_Awaiting_Ack,
-      Play_Awaiting_Config_Ack);
+      Play_Awaiting_Config_Ack, Login_Awaiting_Encryption_Response);
 
    subtype Parent_State is Connection_State range Handshake .. Play;
    subtype Pending_State is Connection_State range
@@ -48,10 +48,16 @@ is
 
    --  LOGIN dispatch hooks (protocol 777, pinned 26.3 report).
    --  Direction + state check: Start is routed only serverbound in
-   --  LOGIN, Acknowledged only serverbound in LOGIN_AWAITING_ACK.
-   --  Any LOGIN packet after the transition to CONFIGURATION rejects.
+   --  LOGIN, Acknowledged only serverbound in LOGIN_AWAITING_ACK,
+   --  Encryption Response (Sb_Login_Key) only serverbound in
+   --  LOGIN_AWAITING_ENCRYPTION_RESPONSE. Any LOGIN packet after
+   --  the transition to CONFIGURATION rejects, as does an Encryption
+   --  Response in any other state (including a second response after
+   --  encryption is enabled, and any STATUS / HANDSHAKE path).
    --  No STATUS / HANDSHAKE / CONFIGURATION behaviour changes.
-   type Login_Dispatch is (Dispatch_Reject, Dispatch_Start, Dispatch_Acknowledged);
+   type Login_Dispatch is
+     (Dispatch_Reject, Dispatch_Start, Dispatch_Acknowledged,
+      Dispatch_Encryption_Response);
 
    function Dispatch_Login
      (Current : Connection_State;

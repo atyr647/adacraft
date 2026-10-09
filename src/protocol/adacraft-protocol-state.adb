@@ -36,14 +36,15 @@ is
 
    function Parent_Of (S : Connection_State) return Parent_State is
      (case S is
-         when Login_Awaiting_Ack         => Login,
-         when Configuration_Awaiting_Ack => Configuration,
-         when Play_Awaiting_Config_Ack   => Play,
-         when Handshake                  => Handshake,
-         when Status                     => Status,
-         when Login                      => Login,
-         when Configuration              => Configuration,
-         when Play                       => Play);
+         when Login_Awaiting_Ack                   => Login,
+         when Configuration_Awaiting_Ack           => Configuration,
+         when Play_Awaiting_Config_Ack             => Play,
+         when Login_Awaiting_Encryption_Response   => Login,
+         when Handshake                            => Handshake,
+         when Status                               => Status,
+         when Login                                => Login,
+         when Configuration                        => Configuration,
+         when Play                                 => Play);
 
    function Reject
      (Current : Connection_State; R : Rejection_Reason)
@@ -54,6 +55,8 @@ is
      Packet_Id (Ids.Protocol_Id (Ids.Sb_Login_Hello));
    Login_Ack_Id : constant Packet_Id :=
      Packet_Id (Ids.Protocol_Id (Ids.Sb_Login_Login_Acknowledged));
+   Login_Key_Id : constant Packet_Id :=
+     Packet_Id (Ids.Protocol_Id (Ids.Sb_Login_Key));
 
    function Dispatch_Login
      (Current : Connection_State;
@@ -67,8 +70,18 @@ is
       end if;
       --  Route serverbound LOGIN ids to login handlers with a
       --  direction + state check: Start only in LOGIN, Ack only in
-      --  LOGIN_AWAITING_ACK.  Any LOGIN packet after the transition
-      --  to CONFIGURATION (or in any other state) rejects.
+      --  LOGIN_AWAITING_ACK, Encryption Response (Key) only in
+      --  LOGIN_AWAITING_ENCRYPTION_RESPONSE.  Any LOGIN packet after
+      --  the transition to CONFIGURATION (or in any other state)
+      --  rejects, including a second Key after encryption is enabled
+      --  and any Key on a STATUS / HANDSHAKE path.
+      if Id = Login_Key_Id then
+         if Current = Login_Awaiting_Encryption_Response then
+            return Dispatch_Encryption_Response;
+         else
+            return Dispatch_Reject;
+         end if;
+      end if;
       if Id = Login_Start_Id then
          if Current = Login then
             return Dispatch_Start;
@@ -83,7 +96,7 @@ is
             return Dispatch_Reject;
          end if;
       end if;
-      --  Other serverbound LOGIN ids (cookie response, key, custom
+      --  Other serverbound LOGIN ids (cookie response, custom
       --  query answer) reject; STATUS/HANDSHAKE/CONFIGURATION
       --  behaviour is unchanged. Any LOGIN packet after the
       --  transition to CONFIGURATION also rejects via the state

@@ -25,10 +25,12 @@ is
    --  Direction + state check per section 19: a LOGIN id is routed to
    --  the login handlers only when it is table-valid serverbound in
    --  its own LOGIN state (Login for Start, Login_Awaiting_Ack for
-   --  Acknowledged). No STATUS / HANDSHAKE / CONFIGURATION rows are
-   --  affected.
+   --  Acknowledged, Login_Awaiting_Encryption_Response for the
+   --  Encryption Response / Key). A Key in any other state rejects.
+   --  No STATUS / HANDSHAKE / CONFIGURATION rows are affected.
    function Is_Login_Start_Id (Id : Packet_Id) return Boolean;
    function Is_Login_Ack_Id (Id : Packet_Id) return Boolean;
+   function Is_Login_Key_Id (Id : Packet_Id) return Boolean;
    function Is_Serverbound_Login
      (State : Connection_State;
       Id    : Packet_Id) return Boolean;

@@ -3,5 +3,8 @@ project Adacraft is
    for Source_Dirs use ("src/**", "tests", "generated");
    for Object_Dir use "obj/adacraft";
    for Exec_Dir use "bin";
-   for Main use ("adacraft_server.adb", "test_handshake_exchange.adb", "test_status_exchange.adb", "test_bad_clients.adb");
+   package Compiler is
+      for Default_Switches ("Ada") use ("-gnat2022", "-gnata");
+   end Compiler;
+   for Main use ("adacraft_server.adb", "test_handshake_exchange.adb", "test_status_exchange.adb", "test_bad_clients.adb", "test_login_server.adb");
 end Adacraft;

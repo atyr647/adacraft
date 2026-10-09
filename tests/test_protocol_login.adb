@@ -1,13 +1,19 @@
+with Ada.Streams;
 with Ada.Text_IO;
+with Interfaces;
 with Adacraft.Auth;
 with Adacraft.Protocol;
 with Adacraft.Protocol.Buffer;
+with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Login;
+with Adacraft.Protocol.Varnum;
 
 procedure Test_Protocol_Login is
    package L renames Adacraft.Protocol.Login;
    package Auth renames Adacraft.Auth;
    package Protocol renames Adacraft.Protocol;
+   package Varnum renames Adacraft.Protocol.Varnum;
+   package Frame renames Adacraft.Protocol.Frame;
    use type L.Login_Start_Status;
    use type L.Start_Outcome;
    use type L.Ack_Outcome;
@@ -17,6 +23,10 @@ procedure Test_Protocol_Login is
    use type Auth.Digest;
    use type Protocol.Octet;
    use type Protocol.Octets;
+   use type Interfaces.Unsigned_8;
+   use type Interfaces.Unsigned_32;
+   use type Frame.Encode_Status;
+   use type Ada.Streams.Stream_Element_Offset;
 
    Failures : Natural := 0;
 
@@ -104,7 +114,7 @@ begin
    Check (not L.Is_Valid_Name ("has space"), "T-1 space fail");
    Check (not L.Is_Valid_Name ("ab" & Character'Val (1) & "cd"), "T-1 control fail");
    Check (not L.Is_Valid_Name ("ab" & Character'Val (16#7F#)), "T-1 DEL fail");
-   Check (not L.Is_Valid_Name ("ab" & Character'Val (16#80#)), "T-1 >=0x7F fail");
+   Check (not L.Is_Valid_Name ("ab" & Character'Val (128)), "T-1 >=0x7F fail");
    Check (L.Is_Valid_Name ("!~"), "T-1 21-7E pass");
 
    declare
@@ -176,8 +186,8 @@ begin
       Check (N1 /= S1, "T-2 distinct names distinct uuid");
       Check ((N1 (7) / 16) = 3, "T-2 version nibble 3 Notch");
       Check ((S1 (7) / 16) = 3, "T-2 version nibble 3 Steve");
-      Check (((N1 (9)) and 16#C0#) = 16#80#, "T-2 variant Notch");
-      Check (((S1 (9)) and 16#C0#) = 16#80#, "T-2 variant Steve");
+      Check (((N1 (9)) and 192) = 128, "T-2 variant Notch");
+      Check (((S1 (9)) and 192) = 128, "T-2 variant Steve");
    end;
 
    declare
@@ -297,6 +307,88 @@ begin
         (W, L.Online_Not_Yet_Supported_Reason);
       Check (not W.Failed and then W.Len > 0, "T-5 disconnect encodable");
       Check (W.Data (1) = 16#00#, "T-5 disconnect id 0");
+   end;
+
+   --  T-6: single Build_Login_Disconnect builder (VarInt id 0x00 S->C
+   --  plus VarInt string-len plus UTF-8 TextComponent JSON).
+   declare
+      use type Protocol.Status_Kind;
+      Built : constant Protocol.Octets :=
+        L.Build_Login_Disconnect;
+      Def   : constant Protocol.Octets :=
+        L.Build_Login_Disconnect (L.Default_Disconnect_Reason);
+      W     : Protocol.Buffer.Writer (512);
+      V     : Varnum.Varint_Result;
+      F     : Frame.Frame_Decode;
+      JSON  : constant String :=
+        "{""text"":""" & L.Default_Disconnect_Reason & """}";
+   begin
+      Check (Built'Length = Def'Length, "T-6 default reason");
+      Check (Built'Length > 2, "T-6 disconnect non-empty");
+      --  Packet-ID decodes via the one VarInt.
+      V := Varnum.Decode_Varint (Built, Built'First);
+      Check (V.Status = Protocol.Ok, "T-6 varint ok");
+      Check (V.Value = 0, "T-6 packet id 0");
+      --  Body matches the one Writer-based encoder, no ad-hoc copy.
+      L.Encode_Login_Disconnect (W, L.Default_Disconnect_Reason);
+      Check (not W.Failed, "T-6 encode no fail");
+      Check (W.Len = Built'Length, "T-6 builder matches encoder");
+      declare
+         Same : Boolean := W.Len = Built'Length;
+      begin
+         for I in 1 .. W.Len loop
+            if W.Data (I) /= Built (Built'First + I - 1) then
+               Same := False;
+            end if;
+         end loop;
+         Check (Same, "T-6 builder bytes match encoder");
+      end;
+      --  String-len + JSON text component decodes via Buffer.
+      declare
+         Dec : constant Protocol.Buffer.String_Decode :=
+           Protocol.Buffer.Decode_String (Built, V.Next, 32767);
+      begin
+         Check (Dec.Status = Protocol.Ok, "T-6 reason string ok");
+         Check (Dec.Length = JSON'Length, "T-6 reason len");
+         Check (Dec.Text (1 .. Dec.Length) = JSON, "T-6 reason json");
+      end;
+      --  Frame decoder agrees on the framed disconnect body.
+      declare
+         Payload : Ada.Streams.Stream_Element_Array
+           (Ada.Streams.Stream_Element_Offset (Built'First)
+            .. Ada.Streams.Stream_Element_Offset (Built'Last));
+         Out_Buf : Frame.Byte_Array (1 .. 1024);
+         Last    : Ada.Streams.Stream_Element_Offset;
+         Status  : Frame.Encode_Status;
+         Wire    : Protocol.Octets (1 .. 1024);
+         Wire_Len : Natural;
+      begin
+         for I in Built'Range loop
+            Payload (Ada.Streams.Stream_Element_Offset (I)) :=
+              Ada.Streams.Stream_Element (Built (I));
+         end loop;
+         Frame.Encode (Payload, Out_Buf, Last, Status);
+         Check (Status = Frame.Ok, "T-6 frame encode ok");
+         Wire_Len := Natural (Last - Out_Buf'First + 1);
+         for I in 1 .. Wire_Len loop
+            Wire (I) := Protocol.Octet (Out_Buf (Out_Buf'First
+              + Ada.Streams.Stream_Element_Offset (I) - 1));
+         end loop;
+         F := Frame.Decode_Frame (Wire (1 .. Wire_Len), 1);
+         Check (F.Status = Protocol.Ok, "T-6 frame decode ok");
+         Check (F.Packet_Id = 0, "T-6 frame packet id 0");
+      end;
+      --  Custom reason path uses the same single builder.
+      declare
+         Custom : constant Protocol.Octets :=
+           L.Build_Login_Disconnect ("invalid name");
+         Vc : Varnum.Varint_Result;
+      begin
+         Vc := Varnum.Decode_Varint (Custom, Custom'First);
+         Check (Vc.Status = Protocol.Ok and then Vc.Value = 0,
+           "T-6 custom id 0");
+         Check (Custom'Length > 2, "T-6 custom non-empty");
+      end;
    end;
 
    if Failures = 0 then

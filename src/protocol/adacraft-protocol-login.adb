@@ -234,4 +234,23 @@ package body Adacraft.Protocol.Login is
       Buffer.Put_String (W, JSON);
    end Encode_Login_Disconnect;
 
+   function Build_Login_Disconnect
+     (Reason : String := Default_Disconnect_Reason) return Octets
+   is
+      W : Buffer.Writer (512);
+   begin
+      Encode_Login_Disconnect (W, Reason);
+      if W.Failed or else W.Len = 0 then
+         return (1 .. 2 => 0);
+      end if;
+      declare
+         R : Octets (1 .. W.Len);
+      begin
+         for I in 1 .. W.Len loop
+            R (I) := W.Data (I);
+         end loop;
+         return R;
+      end;
+   end Build_Login_Disconnect;
+
 end Adacraft.Protocol.Login;

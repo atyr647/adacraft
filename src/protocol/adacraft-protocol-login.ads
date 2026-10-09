@@ -18,6 +18,7 @@ package Adacraft.Protocol.Login is
    Malformed_Start_Reason : constant String := "malformed login start";
    Online_Not_Yet_Supported_Reason : constant String :=
      "online mode not yet supported";
+   Default_Disconnect_Reason : constant String := "Login not yet supported";
 
    function Is_Valid_Name_Char (Ch : Character) return Boolean is
      (Character'Pos (Ch) in 16#21# .. 16#7E#);
@@ -90,5 +91,8 @@ package Adacraft.Protocol.Login is
 
    procedure Encode_Login_Disconnect
      (W : in out Buffer.Writer; Reason : String);
+
+   function Build_Login_Disconnect
+     (Reason : String := Default_Disconnect_Reason) return Octets;
 
 end Adacraft.Protocol.Login;

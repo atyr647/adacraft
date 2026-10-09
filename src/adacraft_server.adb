@@ -4,6 +4,8 @@ with GNAT.OS_Lib;
 with GNAT.Sockets;
 with Adacraft.Network;
 with Adacraft;
+--  Login is handled only in Adacraft.Network.Handle_Frame_Body; no
+--  second login handler here (cleanup pass forbids duplicate blocks).
 
 procedure Adacraft_Server is
    Port : GNAT.Sockets.Port_Type := 25565;
@@ -11,7 +13,13 @@ procedure Adacraft_Server is
 begin
    --  Event-driven server: Parse_Port -> Initialize_Listener ->
    --  Run_Event_Loop.  Per-connection dispatch (Handshake_Exchange /
-   --  Status_Exchange via Frame.Feed) lives in Adacraft.Network.
+   --  Status_Exchange / Login via Frame.Feed -> Varnum ->
+   --  State.Table -> Login -> Packet_Encoder) lives in Adacraft.Network.
+   --  Login branch (Handle_Frame_Body, Login state): well-formed Login
+   --  Start (v=777 or v/=777, already transitioned to Login) answers one
+   --  framed 777 Login Disconnect then clean-closes only that connection;
+   --  invalid-in-Login closes with no reply.  Packet_Decoder stays
+   --  test-only and is not on this path.
    --  Parse_Port lives in Adacraft.Network so unit tests can with it
    --  directly; the server and the tests call the same implementation.
    if Ada.Command_Line.Argument_Count >= 1 then

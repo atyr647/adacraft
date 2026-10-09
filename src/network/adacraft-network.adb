@@ -391,7 +391,6 @@ package body Adacraft.Network is
             F_Cnt  : Natural := 0;
             D_St   : Adacraft.Protocol.Packet_Decoder.Decode_Status :=
               Adacraft.Protocol.Packet_Decoder.Rejected;
-            Pay : Adacraft.Protocol.Octets (2 .. 1) := (others => <>);
             LS  : Adacraft.Protocol.Login.Login_Start;
             Reason : String (1 .. 256) := (others => ' ');
             Reason_Len : Natural := 0;
@@ -438,7 +437,6 @@ package body Adacraft.Network is
                raise Constraint_Error with "not login start";
             end if;
             if Pay_First <= Blen then
-               Pay := Oct (Pay_First .. Blen);
                LS := Adacraft.Protocol.Login.Decode_Login_Start
                  (Oct (Pay_First .. Blen));
             else

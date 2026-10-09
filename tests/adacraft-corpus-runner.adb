@@ -104,8 +104,16 @@ package body Adacraft.Corpus.Runner is
          return;
       end if;
       if Had_Error then
-         R.Category := To_Unbounded_String ("closed");
-         R.Detail := To_Unbounded_String ("dispatch closed connection");
+         --  Login-state rejects (duplicate Start, early Ack, unknown id
+         --  in Login) are login rejections, not generic closes, so the
+         --  rejection category matches the corpus "login" expectation.
+         if C.Proto_State = Adacraft.Protocol.State.Login then
+            R.Category := To_Unbounded_String ("login");
+            R.Detail := To_Unbounded_String ("login rejected");
+         else
+            R.Category := To_Unbounded_String ("closed");
+            R.Detail := To_Unbounded_String ("dispatch closed connection");
+         end if;
          return;
       end if;
       if Frames_Seen = 0 then
@@ -124,7 +132,13 @@ package body Adacraft.Corpus.Runner is
       --  Disconnect then clean-close (server #251 behavior): the case
       --  outcome is rejected-with-disconnect, not accepted. Report it
       --  as such so disconnect cases compare against the pending output.
-      if C.Closing and then R.Output.Length > 0 then
+      --  Status Pong also closes with output queued (Pong_Ready_Close);
+      --  that is a normal accepted response, not a disconnect, so the
+      --  conversion applies only in Login state.
+      if C.Proto_State = Adacraft.Protocol.State.Login
+        and then C.Closing
+        and then R.Output.Length > 0
+      then
          R.Actual := Rejected;
          R.Category := To_Unbounded_String ("disconnect");
          R.Detail := To_Unbounded_String ("login rejected with disconnect");

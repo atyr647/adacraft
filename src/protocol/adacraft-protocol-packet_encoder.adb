@@ -2,6 +2,7 @@ with Ada.Streams;
 with Ada.Unchecked_Conversion;
 with Interfaces;
 with Adacraft.Protocol.Frame;
+with Adacraft.Protocol.Ids;
 with Adacraft.Protocol.Varnum;
 
 package body Adacraft.Protocol.Packet_Encoder is
@@ -148,6 +149,7 @@ package body Adacraft.Protocol.Packet_Encoder is
       Prefix_Len : Ada.Streams.Stream_Element_Offset;
       Need       : Ada.Streams.Stream_Element_Offset;
    begin
+      Output := (others => 0);
       if E.Failed
         or else not E.Started
         or else E.Count > Adacraft.Protocol.Frame.Max_Frame_Body_Length
@@ -192,6 +194,7 @@ package body Adacraft.Protocol.Packet_Encoder is
    is
       N : constant Natural := Natural'Min (E.Count, Natural (Data'Length));
    begin
+      Data := (others => 0);
       if N = 0 then
          if Data'First > Ada.Streams.Stream_Element_Offset'First then
             Last := Data'First - 1;
@@ -206,6 +209,76 @@ package body Adacraft.Protocol.Packet_Encoder is
       end loop;
       Last := Data'First + Ada.Streams.Stream_Element_Offset (N) - 1;
    end Get_Body;
+
+   procedure Write_Varint_U32
+     (E : in out Encoder_Type; V : Interfaces.Unsigned_32)
+   is
+      Buf     : Adacraft.Protocol.Octets (1 .. 5) := (others => 0);
+      Written : Natural := 0;
+      Status  : Adacraft.Protocol.Varnum.Status_Type;
+   begin
+      Adacraft.Protocol.Varnum.Encode
+        (Interfaces.Integer_32 (V and 16#7FFF_FFFF#),
+         Buf, Buf'First, Written, Status);
+      --  Values used here (length prefixes, property count 0) are
+      --  non-negative, so the Unsigned_32 -> Integer_32 conversion
+      --  above cannot overflow.
+      if Status /= Adacraft.Protocol.Varnum.Ok then
+         E.Failed := True;
+         return;
+      end if;
+      for I in 1 .. Written loop
+         Append_Element (E, Byte (Buf (I)));
+      end loop;
+   end Write_Varint_U32;
+
+   procedure Write_Proto_String
+     (E : in out Encoder_Type; Value : String)
+   is
+   begin
+      Write_Varint_U32 (E, Interfaces.Unsigned_32 (Value'Length));
+      for Ch of Value loop
+         Append_Element (E, Byte (Character'Pos (Ch)));
+      end loop;
+   end Write_Proto_String;
+
+   procedure Encode_Login_Success
+     (E    : in out Encoder_Type;
+      Uuid : Adacraft.Protocol.Octets;
+      Name : String)
+   is
+   begin
+      Start_Packet (E, Ids.Protocol_Id (Ids.Cb_Login_Login_Finished));
+      if E.Failed then
+         return;
+      end if;
+      if Uuid'Length /= 16 then
+         E.Failed := True;
+         return;
+      end if;
+      if Name'Length < 1 or else Name'Length > 16 then
+         E.Failed := True;
+         return;
+      end if;
+      for I in 1 .. 16 loop
+         Append_Element (E, Byte (Uuid (Uuid'First + I - 1)));
+      end loop;
+      Write_Proto_String (E, Name);
+      Write_Varint_U32 (E, 0);
+   end Encode_Login_Success;
+
+   procedure Encode_Login_Disconnect
+     (E      : in out Encoder_Type;
+      Reason : String)
+   is
+      JSON : constant String := "{""text"":""" & Reason & """}";
+   begin
+      Start_Packet (E, Ids.Protocol_Id (Ids.Cb_Login_Login_Disconnect));
+      if E.Failed then
+         return;
+      end if;
+      Write_Proto_String (E, JSON);
+   end Encode_Login_Disconnect;
 
    function Has_Failed (E : Encoder_Type) return Boolean is
    begin

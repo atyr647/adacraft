@@ -115,4 +115,26 @@ package body Adacraft.Protocol.Packets is
       end loop;
       return Result;
    end Decode_Login_Hello;
+
+   function Decode_Login_Start (Payload : Octets) return Login_Start is
+      Hello  : constant Login_Hello := Decode_Login_Hello (Payload);
+      Result : Login_Start;
+   begin
+      Result.Status := Hello.Status;
+      Result.Name := Hello.Name;
+      Result.Name_Len := Hello.Name_Len;
+      Result.Uuid := Hello.Uuid;
+      return Result;
+   end Decode_Login_Start;
+
+   function Decode_Login_Acknowledged
+     (Payload : Octets) return Login_Acknowledged
+   is
+   begin
+      if Payload'Length = 0 then
+         return (Status => Ok);
+      else
+         return (Status => Rejected);
+      end if;
+   end Decode_Login_Acknowledged;
 end Adacraft.Protocol.Packets;

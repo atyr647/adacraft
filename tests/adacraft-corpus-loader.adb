@@ -150,6 +150,90 @@ package body Adacraft.Corpus.Loader is
       end loop;
    end Parse_Nat;
 
+   --  Per-scenario compression_threshold registry. Scenario itself lives
+   --  in the parent package (not changed here), so thresholds are kept
+   --  keyed by scenario id.
+   type Threshold_Entry is record
+      Id        : Unbounded_String;
+      Threshold : Integer := -1;
+   end record;
+
+   package Threshold_Vectors is new Ada.Containers.Vectors
+     (Positive, Threshold_Entry);
+
+   Thresholds : Threshold_Vectors.Vector;
+
+   function Compression_Threshold_For (Id : String) return Integer is
+   begin
+      for E of Thresholds loop
+         if To_String (E.Id) = Id then
+            return E.Threshold;
+         end if;
+      end loop;
+      return Compression_Threshold_Default;
+   end Compression_Threshold_For;
+
+   procedure Clear_Compression_Thresholds is
+   begin
+      Thresholds.Clear;
+   end Clear_Compression_Thresholds;
+
+   procedure Register_Threshold (Id : String; Threshold : Integer) is
+   begin
+      for E of Thresholds loop
+         if To_String (E.Id) = Id then
+            E.Threshold := Threshold;
+            return;
+         end if;
+      end loop;
+      Thresholds.Append
+        (Threshold_Entry'(Id        => To_Unbounded_String (Id),
+                          Threshold => Threshold));
+   end Register_Threshold;
+
+   function Parse_Threshold (Value : String; N : out Integer) return Boolean is
+      Neg   : Boolean := False;
+      Start : Positive := Value'First;
+      V     : Integer := 0;
+   begin
+      N := -1;
+      if Value'Length = 0 then
+         return False;
+      end if;
+      if Value (Value'First) = '-' then
+         Neg := True;
+         Start := Value'First + 1;
+         if Start > Value'Last then
+            return False;
+         end if;
+      elsif Value (Value'First) = '+' then
+         Start := Value'First + 1;
+         if Start > Value'Last then
+            return False;
+         end if;
+      end if;
+      if Value'Last - Start + 1 > 7 then
+         return False;
+      end if;
+      for I in Start .. Value'Last loop
+         if Value (I) not in '0' .. '9' then
+            return False;
+         end if;
+         V := V * 10 + (Character'Pos (Value (I)) - Character'Pos ('0'));
+         if V > 2_097_151 then
+            return False;
+         end if;
+      end loop;
+      if Neg then
+         V := -V;
+      end if;
+      if V < -1 or else V > 2_097_151 then
+         return False;
+      end if;
+      N := V;
+      return True;
+   end Parse_Threshold;
+
    function Format_Error (E : Error) return String is
    begin
       return To_String (E.Path) & ":"
@@ -174,6 +258,8 @@ package body Adacraft.Corpus.Loader is
       Prov_Ok    : Boolean := False;
       Step_Count : Natural := 0;
       Cur        : Step;
+      Threshold_Value : Integer := Compression_Threshold_Default;
+      Have_Threshold  : Boolean := False;
 
       procedure Err (Line : Natural; Reason : String) is
       begin
@@ -385,6 +471,19 @@ package body Adacraft.Corpus.Loader is
                S.Has_Reference := True;
                S.Reference := To_Unbounded_String (Value);
             end if;
+         elsif Key = "compression_threshold" then
+            declare
+               N  : Integer;
+               Ok : constant Boolean := Parse_Threshold (Value, N);
+            begin
+               if not Ok then
+                  Err (Line,
+                       "invalid compression_threshold """ & Value & """");
+               else
+                  Threshold_Value := N;
+                  Have_Threshold := True;
+               end if;
+            end;
          end if;
       end Scalar_Field;
 
@@ -520,6 +619,9 @@ package body Adacraft.Corpus.Loader is
       end if;
       if S.Steps.Length = 0 and then Step_Count = 0 then
          Err (1, "scenario has no steps");
+      end if;
+      if Have_Threshold and then Errors.Length = Start then
+         Register_Threshold (To_String (S.Id), Threshold_Value);
       end if;
       for I in 1 .. Natural (S.Steps.Length) loop
          if S.Steps (I).Expected /= Accepted

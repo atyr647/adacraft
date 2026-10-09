@@ -12,9 +12,17 @@ package Adacraft.Corpus.Runner is
    type Login_Ctx is record
       Has_Pending    : Boolean := False;
       Pending_Output : Byte_Vectors.Vector;
-      Closed         : Boolean := False;
-      Active         : Boolean := False;
-      Session        : Adacraft.Protocol.Login.Login_Session;
+      --  Second queued clientbound frame (Set Compression followed by
+      --  Login Success when compression is enabled for the scenario).
+      Has_Pending2    : Boolean := False;
+      Pending_Output2 : Byte_Vectors.Vector;
+      Closed          : Boolean := False;
+      Active          : Boolean := False;
+      Session         : Adacraft.Protocol.Login.Login_Session;
+      --  Per-scenario compression override. Negative = disabled.
+      Compression_Threshold : Integer := -1;
+      Compression_Sent      : Boolean := False;
+      Compression_Active    : Boolean := False;
    end record;
 
    type Filter is record

@@ -18,8 +18,7 @@ begin
    --  Login branch (Handle_Frame_Body, Login state): well-formed Login
    --  Start (v=777 or v/=777, already transitioned to Login) answers one
    --  framed 777 Login Disconnect then clean-closes only that connection;
-   --  invalid-in-Login closes with no reply.  Packet_Decoder stays
-   --  test-only and is not on this path.
+   --  invalid-in-Login closes with no reply.
    --  Parse_Port lives in Adacraft.Network so unit tests can with it
    --  directly; the server and the tests call the same implementation.
    if Ada.Command_Line.Argument_Count >= 1 then

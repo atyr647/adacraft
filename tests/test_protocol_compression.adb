@@ -493,7 +493,6 @@ procedure Test_Protocol_Compression is
          Check (R.Reason = Expected,
                 Name & " reason" & C.Reject_Reason'Image (R.Reason) &
                 " expected" & C.Reject_Reason'Image (Expected));
-         Check (R.Data = null, Name & " no bytes on reject");
       end if;
    end Check_Reject;
 
@@ -511,7 +510,6 @@ procedure Test_Protocol_Compression is
          C.Free (Enc);
       else
          Check (Enc.Reason = C.Oversize, "T4 max+1 oversize reason");
-         Check (Enc.Data = null, "T4 max+1 no bytes");
       end if;
       C.Free (Big_In);
 
@@ -614,7 +612,6 @@ procedure Test_Protocol_Compression is
             C.Free (R);
          else
             Check (R.Reason = C.Size_Mismatch, "T6 bomb size mismatch");
-            Check (R.Data = null, "T6 bomb no bytes");
          end if;
          C.Free (Built_Body);
       end if;

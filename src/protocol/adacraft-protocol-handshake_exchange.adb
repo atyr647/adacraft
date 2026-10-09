@@ -1,6 +1,6 @@
-with Interfaces;
 with Adacraft.Protocol.State;
 with Adacraft.Protocol.Packets;
+with Interfaces;
 
 package body Adacraft.Protocol.Handshake_Exchange with SPARK_Mode => Off is
    use Adacraft.Protocol;
@@ -9,16 +9,11 @@ package body Adacraft.Protocol.Handshake_Exchange with SPARK_Mode => Off is
    use type State.Result_Kind;
    use type State.Rejection_Reason;
 
-   Stored_Version : Integer := 0;
-   Stored_Addr_Len : Natural := 0;
-   Stored_Address : String (1 .. 255) := (others => ' ');
-   Stored_Port : Natural := 0;
-   Have_Stored : Boolean := False;
-
    procedure Handle
      (Packet_Id : in     Natural;
       Payload   : in     Octets;
       Current   : in out State.Connection_State;
+      Stored    : in out Connection_Data;
       Result    :    out Handle_Result)
    is
       Dec : Packets.Handshake;
@@ -38,10 +33,6 @@ package body Adacraft.Protocol.Handshake_Exchange with SPARK_Mode => Off is
          Result := Rejected_No_Change;
          return;
       end if;
-      if Dec.Intent > Interfaces.Unsigned_32 (Integer'Last) then
-         Result := Rejected_No_Change;
-         return;
-      end if;
       if Dec.Intent /= 1 and then Dec.Intent /= 2 and then Dec.Intent /= 3 then
          Result := Rejected_No_Change;
          return;
@@ -58,13 +49,14 @@ package body Adacraft.Protocol.Handshake_Exchange with SPARK_Mode => Off is
          end if;
          return;
       end if;
-      Stored_Version := Integer (Dec.Version);
-      Stored_Addr_Len := Dec.Addr_Len;
+      Stored.Version := Integer (Dec.Version);
+      Stored.Addr_Len := Dec.Addr_Len;
       if Dec.Addr_Len > 0 then
-         Stored_Address (1 .. Dec.Addr_Len) := Dec.Address (1 .. Dec.Addr_Len);
+         Stored.Address (1 .. Dec.Addr_Len) :=
+           Dec.Address (1 .. Dec.Addr_Len);
       end if;
-      Stored_Port := Natural (Dec.Port);
-      Have_Stored := True;
+      Stored.Port := Natural (Dec.Port);
+      Stored.Have_Stored := True;
       Current := TR.Next_State;
       if TR.Next_State = State.Status then
          Result := Accepted_Status;
@@ -75,22 +67,22 @@ package body Adacraft.Protocol.Handshake_Exchange with SPARK_Mode => Off is
       end if;
    end Handle;
 
-   function Last_Protocol_Version return Integer is
+   function Last_Protocol_Version (Stored : Connection_Data) return Integer is
    begin
-      return Stored_Version;
+      return Stored.Version;
    end Last_Protocol_Version;
 
-   function Last_Server_Address return String is
+   function Last_Server_Address (Stored : Connection_Data) return String is
    begin
-      if Stored_Addr_Len = 0 then
+      if Stored.Addr_Len = 0 then
          return "";
       end if;
-      return Stored_Address (1 .. Stored_Addr_Len);
+      return Stored.Address (1 .. Stored.Addr_Len);
    end Last_Server_Address;
 
-   function Last_Server_Port return Natural is
+   function Last_Server_Port (Stored : Connection_Data) return Natural is
    begin
-      return Stored_Port;
+      return Stored.Port;
    end Last_Server_Port;
 
 end Adacraft.Protocol.Handshake_Exchange;

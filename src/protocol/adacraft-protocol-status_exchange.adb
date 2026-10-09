@@ -5,8 +5,6 @@ package body Adacraft.Protocol.Status_Exchange with SPARK_Mode => Off is
    use Adacraft.Protocol;
    use type State.Connection_State;
 
-   Request_Seen : Boolean := False;
-
    function Build_JSON return String is
    begin
       return "{""version"":{""name"":""26.3"",""protocol"":777},"
@@ -14,15 +12,16 @@ package body Adacraft.Protocol.Status_Exchange with SPARK_Mode => Off is
         & """description"":{""text"":""AdaCraft""}}";
    end Build_JSON;
 
-   procedure Reset is
+   procedure Reset (S : in out Session) is
    begin
-      Request_Seen := False;
+      S.Request_Seen := False;
    end Reset;
 
    procedure Handle
      (Packet_Id        : in     Natural;
       Payload          : in     Octets;
       Current          : in out State.Connection_State;
+      Session_State    : in out Session;
       Result           :    out Handle_Result;
       Response_Id      :    out Natural;
       Response_Data    :    out Octets;
@@ -45,7 +44,7 @@ package body Adacraft.Protocol.Status_Exchange with SPARK_Mode => Off is
       end if;
 
       if Packet_Id = 16#00# then
-         if Payload'Length /= 0 or else Request_Seen then
+         if Payload'Length /= 0 or else Session_State.Request_Seen then
             Result := Rejected_Close;
             Close_Connection := True;
             return;
@@ -75,7 +74,7 @@ package body Adacraft.Protocol.Status_Exchange with SPARK_Mode => Off is
             end loop;
             Response_Id := 16#00#;
             Response_Len := W.Len;
-            Request_Seen := True;
+            Session_State.Request_Seen := True;
             Result := Responded;
             Close_Connection := False;
             return;

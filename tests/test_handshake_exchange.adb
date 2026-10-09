@@ -50,9 +50,10 @@ procedure Test_Handshake_Exchange is
    is
       P : constant Octets := Build (777, "localhost", 25565, Intent);
       Cur : S.Connection_State := S.Handshake;
+      Stored : HE.Connection_Data;
       Res : HE.Handle_Result;
    begin
-      HE.Handle (0, P, Cur, Res);
+      HE.Handle (0, P, Cur, Stored, Res);
       Check (Res = Expect, Name & " result");
       Check (Cur = Expect_State, Name & " state");
    end Case_Intent;
@@ -71,9 +72,10 @@ begin
         (16#80#, 16#80#, 16#80#, 16#80#, 16#80#, 16#01#,
          16#00#, 16#00#);
       Cur : S.Connection_State := S.Handshake;
+      Stored : HE.Connection_Data;
       Res : HE.Handle_Result;
    begin
-      HE.Handle (0, P, Cur, Res);
+      HE.Handle (0, P, Cur, Stored, Res);
       Check (Res = HE.Rejected_No_Change, "overlong varint result");
       Check (Cur = S.Handshake, "overlong varint state");
    end;
@@ -83,9 +85,10 @@ begin
       Long_Addr : String (1 .. 256) := (others => 'a');
       P : constant Octets := Build (777, Long_Addr, 25565, 1);
       Cur : S.Connection_State := S.Handshake;
+      Stored : HE.Connection_Data;
       Res : HE.Handle_Result;
    begin
-      HE.Handle (0, P, Cur, Res);
+      HE.Handle (0, P, Cur, Stored, Res);
       Check (Res = HE.Rejected_No_Change, "256-char address result");
       Check (Cur = S.Handshake, "256-char address state");
    end;
@@ -95,9 +98,10 @@ begin
       Full : constant Octets := Build (777, "localhost", 25565, 1);
       P : constant Octets := Full (Full'First .. Full'Last - 1);
       Cur : S.Connection_State := S.Handshake;
+      Stored : HE.Connection_Data;
       Res : HE.Handle_Result;
    begin
-      HE.Handle (0, P, Cur, Res);
+      HE.Handle (0, P, Cur, Stored, Res);
       Check (Res = HE.Rejected_No_Change, "truncated result");
       Check (Cur = S.Handshake, "truncated state");
    end;
@@ -107,13 +111,14 @@ begin
       Full : constant Octets := Build (777, "localhost", 25565, 1);
       P : Octets (1 .. Full'Length + 1);
       Cur : S.Connection_State := S.Handshake;
+      Stored : HE.Connection_Data;
       Res : HE.Handle_Result;
    begin
       for I in Full'Range loop
          P (I - Full'First + 1) := Full (I);
       end loop;
       P (P'Last) := 16#00#;
-      HE.Handle (0, P, Cur, Res);
+      HE.Handle (0, P, Cur, Stored, Res);
       Check (Res = HE.Rejected_No_Change, "trailing result");
       Check (Cur = S.Handshake, "trailing state");
    end;
@@ -122,9 +127,10 @@ begin
    declare
       P : constant Octets := Build (777, "mc.example.com", 25565, 1);
       Cur : S.Connection_State := S.Handshake;
+      Stored : HE.Connection_Data;
       Res : HE.Handle_Result;
    begin
-      HE.Handle (1, P, Cur, Res);
+      HE.Handle (1, P, Cur, Stored, Res);
       Check (Res = HE.Rejected_No_Change, "wrong id result");
       Check (Cur = S.Handshake, "wrong id state");
    end;
@@ -133,13 +139,22 @@ begin
    declare
       P : constant Octets := Build (777, "mc.example.com", 19132, 2);
       Cur : S.Connection_State := S.Handshake;
+      Stored : HE.Connection_Data;
+      Stored2 : HE.Connection_Data;
       Res : HE.Handle_Result;
+      Res2 : HE.Handle_Result;
+      Cur2 : S.Connection_State := S.Handshake;
+      P2 : constant Octets := Build (760, "other.example", 25566, 1);
    begin
-      HE.Handle (0, P, Cur, Res);
+      HE.Handle (0, P, Cur, Stored, Res);
       Check (Res = HE.Accepted_Login, "retention result");
-      Check (HE.Last_Protocol_Version = 777, "retention version");
-      Check (HE.Last_Server_Address = "mc.example.com", "retention address");
-      Check (HE.Last_Server_Port = 19132, "retention port");
+      Check (HE.Last_Protocol_Version (Stored) = 777, "retention version");
+      Check (HE.Last_Server_Address (Stored) = "mc.example.com", "retention address");
+      Check (HE.Last_Server_Port (Stored) = 19132, "retention port");
+      HE.Handle (0, P2, Cur2, Stored2, Res2);
+      Check (HE.Last_Protocol_Version (Stored2) = 760, "isolation version");
+      Check (HE.Last_Server_Address (Stored2) = "other.example", "isolation address");
+      Check (HE.Last_Protocol_Version (Stored) = 777, "isolation first kept");
    end;
 
    if Failures = 0 then

@@ -1,6 +1,7 @@
 with Ada.Calendar;
 with Ada.Exceptions;
 with Ada.Streams;
+with Ada.Unchecked_Deallocation;
 with Ada.Text_IO;
 with GNAT.Sockets;
 with Interfaces;
@@ -12,7 +13,10 @@ with Adacraft.Protocol.Status_Exchange;
 with Adacraft.Protocol.Varnum;
 
 package body Adacraft.Network is
+   use type Ada.Calendar.Time;
    use type Ada.Streams.Stream_Element_Offset;
+   use type Adacraft.Protocol.Frame.Feed_Status;
+   use type Adacraft.Protocol.Status_Exchange.Handle_Result;
    use type GNAT.Sockets.Selector_Status;
 
    function Fd_Of (S : GNAT.Sockets.Socket_Type) return Integer is
@@ -96,10 +100,11 @@ package body Adacraft.Network is
       begin
          --  Release per-connection resources (unconstrained deallocation).
          declare
-            procedure Free is new Ada.Unchecked_Deallocation (Conn, Conn_Access);
+            procedure Free_Conn is new Ada.Unchecked_Deallocation
+              (Conn, Conn_Access);
             Tmp : Conn_Access := C;
          begin
-            Free (Tmp);
+            Free_Conn (Tmp);
          end;
       exception
          when others => null;
@@ -413,7 +418,7 @@ package body Adacraft.Network is
                   end;
                end if;
                Close_Conn (Idx_Copy, "bad handshake");
-            end;
+            end if;
             return;
       end;
       --  If handler marked closing and everything flushed, close now;
@@ -504,7 +509,6 @@ package body Adacraft.Network is
          C.Has_Sock := True;
          C.Fd_Key := Fd_Of (Client);
          C.Recv_Len := 0;
-         C.Frame_State := (others => <>);
          C.Proto_State := Adacraft.Protocol.State.Initial_State;
          C.Stored := (others => <>);
          Adacraft.Protocol.Status_Exchange.Reset (C.Sess);

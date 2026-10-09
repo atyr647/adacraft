@@ -495,6 +495,98 @@ package body Adacraft.Network is
             C.Last_Activity := Ada.Calendar.Clock;
             return;
          end;
+      elsif C.Proto_State = Adacraft.Protocol.State.Login_Awaiting_Ack then
+         --  Login_Awaiting_Ack dispatch (in place, same dispatcher, no
+         --  second handler). Second Login Start (0x00) -> one framed
+         --  Login Disconnect, close. Login Acknowledged (0x03) with
+         --  empty payload -> Configuration, no reply. Non-empty Ack
+         --  -> one framed Login Disconnect, close, no state change.
+         --  Offline only; no Online_Authenticated flag exists or is set.
+         --  Explicit close path only (C.Closing), no raise.
+         declare
+            use type Adacraft.Protocol.State.Packet_Id;
+            Start_Id : constant Adacraft.Protocol.State.Packet_Id :=
+              Adacraft.Protocol.State.Packet_Id (0);
+            Ack_Id   : constant Adacraft.Protocol.State.Packet_Id :=
+              Adacraft.Protocol.State.Packet_Id (3);
+            Got_Id   : constant Adacraft.Protocol.State.Packet_Id :=
+              Adacraft.Protocol.State.Packet_Id (Pid);
+            Is_Start : constant Boolean :=
+              Adacraft.Protocol.State.Table.Is_Login_Start_Id (Got_Id)
+              or else Got_Id = Start_Id;
+            Is_Ack   : constant Boolean :=
+              Adacraft.Protocol.State.Table.Is_Login_Ack_Id (Got_Id)
+              or else Got_Id = Ack_Id;
+         begin
+            if Is_Start then
+               declare
+                  Disc : Adacraft.Protocol.Octets :=
+                    Adacraft.Protocol.Login.Build_Login_Disconnect
+                      (Adacraft.Protocol.Login.Default_Disconnect_Reason);
+                  Prefix : Adacraft.Protocol.Frame.Prefix_Buffer;
+                  P_Last : Ada.Streams.Stream_Element_Offset;
+                  Wire : Adacraft.Protocol.Frame.Byte_Array (1 .. 512) :=
+                    (others => 0);
+                  W_Last : Ada.Streams.Stream_Element_Offset := 0;
+               begin
+                  Adacraft.Protocol.Frame.Write_Length_Prefix
+                    (Adacraft.Protocol.Frame.Frame_Body_Length (Disc'Length),
+                     Prefix, P_Last);
+                  for I in 1 .. P_Last loop
+                     W_Last := W_Last + 1;
+                     Wire (W_Last) := Prefix (Integer (I));
+                  end loop;
+                  for I in Disc'Range loop
+                     W_Last := W_Last + 1;
+                     Wire (W_Last) :=
+                       Ada.Streams.Stream_Element (Disc (I));
+                  end loop;
+                  Queue_Bytes (C, Wire (1 .. W_Last));
+               end;
+               C.Closing := True;
+               C.Last_Activity := Ada.Calendar.Clock;
+               return;
+            elsif Is_Ack then
+               if Pay_First > Blen then
+                  C.Proto_State := Adacraft.Protocol.State.Configuration;
+                  C.Last_Activity := Ada.Calendar.Clock;
+                  return;
+               else
+                  declare
+                     Disc : Adacraft.Protocol.Octets :=
+                       Adacraft.Protocol.Login.Build_Login_Disconnect
+                         (Adacraft.Protocol.Login.Default_Disconnect_Reason);
+                     Prefix : Adacraft.Protocol.Frame.Prefix_Buffer;
+                     P_Last : Ada.Streams.Stream_Element_Offset;
+                     Wire : Adacraft.Protocol.Frame.Byte_Array (1 .. 512) :=
+                       (others => 0);
+                     W_Last : Ada.Streams.Stream_Element_Offset := 0;
+                  begin
+                     Adacraft.Protocol.Frame.Write_Length_Prefix
+                       (Adacraft.Protocol.Frame.Frame_Body_Length
+                          (Disc'Length),
+                        Prefix, P_Last);
+                     for I in 1 .. P_Last loop
+                        W_Last := W_Last + 1;
+                        Wire (W_Last) := Prefix (Integer (I));
+                     end loop;
+                     for I in Disc'Range loop
+                        W_Last := W_Last + 1;
+                        Wire (W_Last) :=
+                          Ada.Streams.Stream_Element (Disc (I));
+                     end loop;
+                     Queue_Bytes (C, Wire (1 .. W_Last));
+                  end;
+                  C.Closing := True;
+                  C.Last_Activity := Ada.Calendar.Clock;
+                  return;
+               end if;
+            else
+               C.Closing := True;
+               C.Last_Activity := Ada.Calendar.Clock;
+               return;
+            end if;
+         end;
       else
          --  Configuration onward: not implemented; plain close.
          raise Constraint_Error with "configuration not implemented";

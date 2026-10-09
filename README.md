@@ -19,6 +19,8 @@ This tree is the Milestone 0 pin plus the Phase 1 codec, status handling, offlin
 
 A 26.3 client can complete a server-list status ping and see protocol 777. Login checks the offline UUID derived from the player name and then disconnects. Play, chunks, encryption, and compression are not implemented. That is the constitution's order, not a temporary shortcut around it.
 
+The server survives bad clients: resets, garbage handshakes, half-packets, and idle connections each close only that connection while others still get status plus ping. Every read is governed by a single 30s read timeout (`Adacraft.Network.Read_Timeout`), covering fully-idle and stalled-mid-frame connections alike, as shown by `tests/test_bad_clients.adb` and the `tools/smoke_bad_clients.py` probe.
+
 ```text
 make test
 make

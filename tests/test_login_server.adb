@@ -9,6 +9,7 @@
 --  must stay green.
 
 with Ada.Command_Line;
+with Ada.Streams;
 with Ada.Text_IO;
 with Ada.Unchecked_Deallocation;
 with GNAT.OS_Lib;
@@ -26,6 +27,7 @@ with Adacraft.Protocol.Varnum;
 
 procedure Test_Login_Server is
    use Adacraft.Protocol;
+   use Ada.Streams;
    use GNAT.Sockets;
    package HE renames Adacraft.Protocol.Handshake_Exchange;
    package FR renames Adacraft.Protocol.Frame;
@@ -34,6 +36,15 @@ procedure Test_Login_Server is
    package ST renames Adacraft.Protocol.State;
    package STT renames Adacraft.Protocol.State.Table;
    package VN renames Adacraft.Protocol.Varnum;
+   use type Adacraft.Protocol.Varnum.Status_Type;
+   use type Adacraft.Protocol.Packet_Decoder.Decode_Status;
+   use type Adacraft.Protocol.Login.Login_Start_Status;
+   use type Interfaces.Integer_32;
+   use type Interfaces.Unsigned_8;
+   use type Ada.Streams.Stream_Element;
+   use type Ada.Streams.Stream_Element_Offset;
+   use type Ada.Streams.Stream_Element_Count;
+   use type GNAT.OS_Lib.Process_Id;
 
    Failures : Natural := 0;
    Dial_Timeout : constant Duration := 5.0;
@@ -187,11 +198,14 @@ procedure Test_Login_Server is
       Lay.Count := 0;
       PD.Decode (Payload, Lay, Pid, F, Cnt, Pst);
       Ignored_Valid := STT.Is_Serverbound_Login (ST.Login, ST.Packet_Id (Id));
-      Check (Vst = Vst, "touch varnum");
-      Check (D.Status = D.Status, "touch frame");
-      Check (Pst = Pst, "touch packet_decoder");
-      Check (LS.Status = LS.Status, "touch login");
-      Check (Ignored_Valid = Ignored_Valid, "touch state_table");
+      Check (True, "touch varnum");
+      Check (True, "touch frame");
+      Check (True, "touch packet_decoder");
+      Check (True, "touch login");
+      Check (True, "touch state_table");
+      Check (D.Packet_Id = D.Packet_Id, "touch frame id");
+      Check (Pid = Pid, "touch pid");
+      Check (Val = Val, "touch val");
    end Touch_Real_Units;
 
    procedure Send_Packet (S : Socket_Type; Id : Natural; Payload : Octets) is
@@ -204,9 +218,10 @@ procedure Test_Login_Server is
       Len_Tmp : Octets (1 .. 5) := (others => 0);
       LW     : Natural := 0;
       Lst    : VN.Status_Type := VN.Ok;
-      Total  : Natural;
-      Out_Buf : Stream_Element_Array (1 .. 2_097_151);
-      Pos    : Natural := 1;
+      Total  : Stream_Element_Count;
+      Out_Buf : Stream_Element_Array
+        (Stream_Element_Offset (1) .. Stream_Element_Offset (2_097_151));
+      Pos    : Stream_Element_Offset := 1;
    begin
       VN.Encode (Interfaces.Integer_32 (Id), Id_Tmp, 1, W, St);
       Id_Len := W;
@@ -215,7 +230,7 @@ procedure Test_Login_Server is
       end loop;
       Len := Id_Len + Payload'Length;
       VN.Encode (Interfaces.Integer_32 (Len), Len_Tmp, 1, LW, Lst);
-      Total := LW + Len;
+      Total := Stream_Element_Count (LW + Len);
       for I in 1 .. LW loop
          Out_Buf (Pos) := Stream_Element (Len_Tmp (I));
          Pos := Pos + 1;
@@ -228,7 +243,7 @@ procedure Test_Login_Server is
          Out_Buf (Pos) := Stream_Element (Payload (I));
          Pos := Pos + 1;
       end loop;
-      Send_All (S, Out_Buf (1 .. Stream_Element_Offset (Total)));
+      Send_All (S, Out_Buf (Out_Buf'First .. Out_Buf'First + Stream_Element_Offset (Total) - 1));
    end Send_Packet;
 
    --  Read one framed packet body (without length prefix), with timeout.
@@ -237,7 +252,8 @@ procedure Test_Login_Server is
      (S : Socket_Type; Frame_Data : in out Stream_Element_Array;
       Frame_Last : out Stream_Element_Offset) return Boolean
    is
-      Prefix : Stream_Element_Array (1 .. 5);
+      Prefix : Stream_Element_Array
+        (Stream_Element_Offset (1) .. Stream_Element_Offset (5));
       Got    : Stream_Element_Count := 0;
       Len_V  : Interfaces.Integer_32 := 0;
       Cons   : Natural := 0;
@@ -245,18 +261,20 @@ procedure Test_Login_Server is
       O      : Octets (1 .. 5) := (others => 0);
       Need   : Natural := 0;
       Fill   : Stream_Element_Offset := Frame_Data'First;
-      Piece  : Stream_Element_Array (1 .. 8_192);
+      Piece  : Stream_Element_Array
+        (Stream_Element_Offset (1) .. Stream_Element_Offset (8_192));
       N      : Stream_Element_Count := 0;
    begin
       Frame_Last := Frame_Data'First - 1;
       --  Read VarInt length prefix byte by byte.
       for I in 1 .. 5 loop
-         N := Recv_With_Timeout (S, Piece (1 .. 1), Io_Timeout);
+         N := Recv_With_Timeout
+           (S, Piece (Piece'First .. Piece'First), Io_Timeout);
          if N /= 1 then
             return False;
          end if;
-         Prefix (I) := Piece (1);
-         O (I) := Octet (Piece (1));
+         Prefix (Stream_Element_Offset (I)) := Piece (Piece'First);
+         O (I) := Octet (Piece (Piece'First));
          Got := Got + 1;
          VN.Decode (O (1 .. Natural (Got)), 1, Len_V, Cons, Vst);
          if Vst = VN.Ok then
@@ -279,12 +297,14 @@ procedure Test_Login_Server is
             Want : constant Stream_Element_Count :=
               Stream_Element_Count (Integer'Min (Need, Piece'Length));
          begin
-            N := Recv_With_Timeout (S, Piece (1 .. Want), Io_Timeout);
+            N := Recv_With_Timeout
+              (S, Piece (Piece'First .. Piece'First + Want - 1), Io_Timeout);
             if N <= 0 then
                return False;
             end if;
-            for I in 1 .. N loop
-               Frame_Data (Fill) := Piece (I);
+            for K in Stream_Element_Count range 1 .. N loop
+               Frame_Data (Fill) :=
+                 Piece (Piece'First + Stream_Element_Offset (K) - 1);
                Fill := Fill + 1;
             end loop;
             Need := Need - Natural (N);
@@ -297,7 +317,8 @@ procedure Test_Login_Server is
    function Expect_Disconnect
      (S : Socket_Type; Name : String) return Boolean
    is
-      Resp : Stream_Element_Array (1 .. 32_768);
+      Resp : Stream_Element_Array
+        (Stream_Element_Offset (1) .. Stream_Element_Offset (32_768));
       Last : Stream_Element_Offset := 0;
       Ok   : Boolean;
    begin
@@ -368,7 +389,8 @@ procedure Test_Login_Server is
             --  After Disconnect the server must close only this conn:
             --  a further read must hit EOF/close, not hang.
             declare
-               Piece : Stream_Element_Array (1 .. 1);
+               Piece : Stream_Element_Array
+                 (Stream_Element_Offset (1) .. Stream_Element_Offset (1));
                N     : Stream_Element_Count;
             begin
                N := Recv_With_Timeout (S, Piece, Io_Timeout);
@@ -390,8 +412,9 @@ procedure Test_Login_Server is
       S    : Socket_Type := No_Socket;
       Addr : Sock_Addr_Type;
       HS   : constant Octets := Build_Handshake (777, 2);
-      Empty : constant Octets (1 .. 0) := (others => 0);
-      Resp_Buf : Stream_Element_Array (1 .. 32_768);
+      Empty : constant Octets (2 .. 1) := (others => 0);
+      Resp_Buf : Stream_Element_Array
+        (Stream_Element_Offset (1) .. Stream_Element_Offset (32_768));
       Last : Stream_Element_Offset := 0;
       Got  : Boolean;
    begin
@@ -412,7 +435,7 @@ procedure Test_Login_Server is
          Send_Packet (S, 0, Empty);
          --  Server must close with no reply and no hang: Read_Frame
          --  must fail (timeout or EOF), never return a packet.
-         Got := Read_Frame (S, Frame_Body, Last);
+         Got := Read_Frame (S, Resp_Buf, Last);
          Check (not Got, "invalid-in-login closed, no reply, no hang");
       exception
          when others =>

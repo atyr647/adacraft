@@ -1,9 +1,11 @@
 with Ada.Command_Line;
+with Ada.Streams;
 with Ada.Text_IO;
 with GNAT.Sockets;
+with Interfaces;
 with Adacraft;
-with Adacraft.Network;
 with Adacraft.Protocol;
+with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.State;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Handshake_Exchange;
@@ -122,6 +124,177 @@ procedure Adacraft_Server is
       end if;
    end Dispatch_Raw_Buffer;
 
+   procedure Send_Response
+     (Sock        : in GNAT.Sockets.Socket_Type;
+      Response_Id : in Natural;
+      Response_Data : in Adacraft.Protocol.Octets;
+      Response_Len  : in Natural)
+   is
+      use type Ada.Streams.Stream_Element_Offset;
+      Body_W : Adacraft.Protocol.Buffer.Writer (33_000 + 8);
+      Wire   : Ada.Streams.Stream_Element_Array (1 .. 40_000);
+      Wire_Last : Ada.Streams.Stream_Element_Offset;
+      Sent   : Ada.Streams.Stream_Element_Offset;
+      Prefix : Adacraft.Protocol.Frame.Prefix_Buffer;
+      Prefix_Last : Ada.Streams.Stream_Element_Offset;
+      Body_Len : Natural;
+   begin
+      if Response_Len = 0 then
+         return;
+      end if;
+      Adacraft.Protocol.Buffer.Reset (Body_W);
+      Adacraft.Protocol.Buffer.Put_Varint
+        (Body_W, Interfaces.Unsigned_32 (Response_Id));
+      for I in 1 .. Response_Len loop
+         Adacraft.Protocol.Buffer.Put_Octet
+           (Body_W, Response_Data (Response_Data'First + I - 1));
+      end loop;
+      if Body_W.Failed then
+         return;
+      end if;
+      Body_Len := Body_W.Len;
+      Adacraft.Protocol.Frame.Write_Length_Prefix
+        (Adacraft.Protocol.Frame.Frame_Body_Length (Body_Len),
+         Prefix, Prefix_Last);
+      Wire_Last := 0;
+      for I in 1 .. Prefix_Last loop
+         Wire_Last := Wire_Last + 1;
+         Wire (Wire_Last) := Prefix (Integer (I));
+      end loop;
+      for I in 1 .. Body_Len loop
+         Wire_Last := Wire_Last + 1;
+         Wire (Wire_Last) :=
+           Ada.Streams.Stream_Element (Body_W.Data (I));
+      end loop;
+      GNAT.Sockets.Send_Socket
+        (Sock, Wire (Wire'First .. Wire_Last), Sent);
+   end Send_Response;
+
+   procedure Serve_Client (Client : in GNAT.Sockets.Socket_Type) is
+      use type Ada.Streams.Stream_Element_Offset;
+      Current : Adacraft.Protocol.State.Connection_State :=
+        Adacraft.Protocol.State.Initial_State;
+      Stored : Adacraft.Protocol.Handshake_Exchange.Connection_Data;
+      Sess   : Adacraft.Protocol.Status_Exchange.Session;
+      Cap    : constant := 8192;
+      Hold   : Adacraft.Protocol.Octets (1 .. Cap) := (others => 0);
+      Used   : Natural := 0;
+      Item   : Ada.Streams.Stream_Element_Array (1 .. 2048);
+      Last   : Ada.Streams.Stream_Element_Offset;
+      Resp_Buf : Adacraft.Protocol.Octets (1 .. 33_008) := (others => 0);
+   begin
+      Adacraft.Protocol.Status_Exchange.Reset (Sess);
+      loop
+         GNAT.Sockets.Receive_Socket (Client, Item, Last);
+         exit when Last < Item'First;
+         if Used + Natural (Last - Item'First + 1) > Cap then
+            exit;
+         end if;
+         for I in Item'First .. Last loop
+            Used := Used + 1;
+            Hold (Used) := Adacraft.Protocol.Octet (Item (I));
+         end loop;
+         --  Drain every complete frame in Hold in order.
+         declare
+            Pos : Positive := 1;
+            Done : Boolean := False;
+         begin
+            while not Done and then Pos <= Used loop
+               declare
+                  Response_Id : Natural := 0;
+                  Response_Len : Natural := 0;
+                  Close_Connection : Boolean := False;
+                  F : constant Adacraft.Protocol.Frame.Frame_Decode :=
+                    Adacraft.Protocol.Frame.Decode_Frame
+                      (Hold (1 .. Used), Pos);
+                  use type Adacraft.Protocol.Status_Kind;
+               begin
+                  if F.Status = Adacraft.Protocol.Need_More then
+                     Done := True;
+                  elsif F.Status /= Adacraft.Protocol.Ok then
+                     Dispatch_Raw_Buffer
+                       (Current, Hold (1 .. Used), Pos,
+                        Stored, Sess,
+                        Response_Id, Resp_Buf, Response_Len,
+                        Close_Connection);
+                     if Response_Len > 0 then
+                        Send_Response
+                          (Client, Response_Id, Resp_Buf, Response_Len);
+                     end if;
+                     exit;
+                  else
+                     Dispatch_Raw_Buffer
+                       (Current, Hold (1 .. Used), Pos,
+                        Stored, Sess,
+                        Response_Id, Resp_Buf, Response_Len,
+                        Close_Connection);
+                     if Response_Len > 0 then
+                        Send_Response
+                          (Client, Response_Id, Resp_Buf, Response_Len);
+                     end if;
+                     Pos := F.Next;
+                     if Pos > Used then
+                        Used := 0;
+                        Done := True;
+                     elsif Close_Connection then
+                        if Pos <= Used then
+                           Hold (1 .. Used - Pos + 1) :=
+                             Hold (Pos .. Used);
+                           Used := Used - Pos + 1;
+                        else
+                           Used := 0;
+                        end if;
+                        exit;
+                     end if;
+                     if Close_Connection then
+                        if Pos <= Used then
+                           Hold (1 .. Used - Pos + 1) :=
+                             Hold (Pos .. Used);
+                           Used := Used - Pos + 1;
+                        else
+                           Used := 0;
+                        end if;
+                        exit;
+                     end if;
+                     if Pos > Used then
+                        Used := 0;
+                        Done := True;
+                     end if;
+                  end if;
+               end;
+            end loop;
+            --  Compact any consumed prefix when no close happened.
+            if Pos > 1 and then Used > 0 and then Pos <= Used + 1 then
+               null;
+            end if;
+         end;
+         --  Check close flag via a zero-length probe: re-decode state?
+         --  Close is acted on inside the loop above; continue reading
+         --  unless the connection reached a terminal exchange.
+         null;
+      end loop;
+   end Serve_Client;
+
+   procedure Serve (Port : in GNAT.Sockets.Port_Type) is
+      use GNAT.Sockets;
+      Server : Socket_Type;
+      Client : Socket_Type;
+      Address : Sock_Addr_Type;
+      Peer : Sock_Addr_Type;
+   begin
+      Create_Socket (Server);
+      Set_Socket_Option (Server, Socket_Level, (Reuse_Address, True));
+      Address.Addr := Any_Inet_Addr;
+      Address.Port := Port;
+      Bind_Socket (Server, Address);
+      Listen_Socket (Server);
+      loop
+         Accept_Socket (Server, Client, Peer);
+         Serve_Client (Client);
+         Close_Socket (Client);
+      end loop;
+   end Serve;
+
 begin
    --  Ingress dispatch by current state: each received frame is decoded
    --  with Frame.Decode_Frame via Dispatch_Raw_Buffer, then dispatched
@@ -138,5 +311,5 @@ begin
      ("AdaCraft " & Adacraft.Minecraft_Version
       & " protocol" & Adacraft.Protocol_Version'Image
       & " listening on" & Port'Image);
-   Adacraft.Network.Serve (Port);
+   Serve (Port);
 end Adacraft_Server;

@@ -239,7 +239,6 @@ is
 
       for Step in 1 .. Max_Varlong_Bytes loop
          pragma Loop_Invariant (Pos in Buffer'Range);
-         pragma Loop_Invariant (Step in 1 .. Max_Varlong_Bytes);
          declare
             B    : constant Octet := Buffer (Pos);
             Bits : constant Interfaces.Unsigned_64 :=
@@ -287,6 +286,9 @@ is
       Decode (Buffer, From, V, C, S);
       case S is
          when Ok =>
+            if C > 1 and then Buffer (From + C - 1) = 0 then
+               return (Status => Rejected, Value => 0, Next => From);
+            end if;
             return
               (Status => Status_Kind'(Ok),
                Value  =>
@@ -303,25 +305,37 @@ is
    end Decode_Varint;
 
    function Decode_Varlong (Buffer : Octets; From : Positive) return Varlong_Result is
-      V : Interfaces.Integer_64;
-      C : Natural;
-      S : Status_Type;
+      Result : Interfaces.Unsigned_64 := 0;
+      Pos    : Natural                := From;
    begin
       if From > Buffer'Last then
          return (Status => Need_More, Value => 0, Next => From);
       end if;
 
-      Decode_Varlong (Buffer, From, V, C, S);
-      case S is
-         when Ok =>
-            return
-              (Status => Status_Kind'(Ok),
-               Value  => Interfaces.Unsigned_64 (V),
-               Next   => From + C);
-         when Truncated =>
-            return (Status => Need_More, Value => 0, Next => From);
-         when Overlong | Buffer_Too_Small =>
-            return (Status => Rejected, Value => 0, Next => From);
-      end case;
+      for Step in 1 .. Max_Varlong_Bytes loop
+         pragma Loop_Invariant (Pos in From .. Buffer'Last);
+         declare
+            B     : constant Octet := Buffer (Pos);
+            Bits  : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (B and 16#7F#);
+            Shift : constant Natural := (Step - 1) * 7;
+         begin
+            if Step = Max_Varlong_Bytes and then Bits > 1 then
+               return (Status => Rejected, Value => 0, Next => From);
+            end if;
+            Result := Result or Interfaces.Shift_Left (Bits, Shift);
+            Pos    := Pos + 1;
+            if (B and 16#80#) = 0 then
+               if Step > 1 and then Bits = 0 then
+                  return (Status => Rejected, Value => 0, Next => From);
+               end if;
+               return (Status => Status_Kind'(Ok), Value => Result, Next => Pos);
+            end if;
+            if Pos > Buffer'Last then
+               return (Status => Need_More, Value => 0, Next => From);
+            end if;
+         end;
+      end loop;
+      return (Status => Rejected, Value => 0, Next => From);
    end Decode_Varlong;
 end Adacraft.Protocol.Varnum;

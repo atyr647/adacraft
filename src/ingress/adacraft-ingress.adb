@@ -142,10 +142,10 @@ package body Adacraft.Ingress is
                            S.State := Protocol.Status;
                            S.Version := Hello.Version;
                         elsif Hello.Intent = 2 and then Hello.Version = Adacraft.Protocol_Version then
-                           S.State := Protocol.Login;
+                           S.State := Protocol.Login_Phase;
                            S.Version := Hello.Version;
                         elsif Hello.Intent = 2 then
-                           S.State := Protocol.Login;
+                           S.State := Protocol.Login_Phase;
                            S.Version := Hello.Version;
                            Disconnect (Outgoing, "This server is Minecraft 26.3, protocol 777", Close_Now);
                         else
@@ -188,7 +188,7 @@ package body Adacraft.Ingress is
                      Close_Now := True;
                   end if;
 
-               when Protocol.Login =>
+               when Protocol.Login_Phase =>
                   if Frame.Packet_Id /= Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Login_Hello) then
                      Close_Now := True;
                   else

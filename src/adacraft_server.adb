@@ -1,10 +1,113 @@
 with Ada.Command_Line;
 with Ada.Text_IO;
 with GNAT.Sockets;
+with Adacraft;
 with Adacraft.Network;
+with Adacraft.Protocol;
+with Adacraft.Protocol.State;
+with Adacraft.Protocol.Frame;
+with Adacraft.Protocol.Handshake_Exchange;
+with Adacraft.Protocol.Status_Exchange;
 
 procedure Adacraft_Server is
    Port : GNAT.Sockets.Port_Type := 25565;
+
+   procedure Dispatch_Decoded_Frame
+     (Current          : in out Adacraft.Protocol.State.Connection_State;
+      Packet_Id        : in     Natural;
+      Payload          : in     Adacraft.Protocol.Octets;
+      Response_Id      :    out Natural;
+      Response_Data    : in out Adacraft.Protocol.Octets;
+      Response_Len     :    out Natural;
+      Close_Connection :    out Boolean)
+   is
+      use type Adacraft.Protocol.State.Connection_State;
+   begin
+      case Current is
+         when Adacraft.Protocol.State.Handshake =>
+            declare
+               H_Res : Adacraft.Protocol.Handshake_Exchange.Handle_Result;
+            begin
+               Adacraft.Protocol.Handshake_Exchange.Handle
+                 (Packet_Id => Packet_Id,
+                  Payload   => Payload,
+                  Current   => Current,
+                  Result    => H_Res);
+               Response_Id := 0;
+               Response_Len := 0;
+               for I in Response_Data'Range loop
+                  Response_Data (I) := 0;
+               end loop;
+               Close_Connection := False;
+            end;
+         when Adacraft.Protocol.State.Status =>
+            declare
+               S_Res : Adacraft.Protocol.Status_Exchange.Handle_Result;
+            begin
+               Adacraft.Protocol.Status_Exchange.Handle
+                 (Packet_Id        => Packet_Id,
+                  Payload          => Payload,
+                  Current          => Current,
+                  Result           => S_Res,
+                  Response_Id      => Response_Id,
+                  Response_Data    => Response_Data,
+                  Response_Len     => Response_Len,
+                  Close_Connection => Close_Connection);
+            end;
+         when others =>
+            --  Login onward: not yet implemented; close without Login logic.
+            Response_Id := 0;
+            Response_Len := 0;
+            for I in Response_Data'Range loop
+               Response_Data (I) := 0;
+            end loop;
+            Close_Connection := True;
+      end case;
+   end Dispatch_Decoded_Frame;
+
+   procedure Dispatch_Raw_Buffer
+     (Current          : in out Adacraft.Protocol.State.Connection_State;
+      Buffer           : in     Adacraft.Protocol.Octets;
+      From             : in     Positive;
+      Response_Id      :    out Natural;
+      Response_Data    : in out Adacraft.Protocol.Octets;
+      Response_Len     :    out Natural;
+      Close_Connection :    out Boolean)
+   is
+      use type Adacraft.Protocol.State.Connection_State;
+      use type Adacraft.Protocol.Status_Kind;
+      F : constant Adacraft.Protocol.Frame.Frame_Decode :=
+        Adacraft.Protocol.Frame.Decode_Frame (Buffer, From);
+   begin
+      Response_Id := 0;
+      Response_Len := 0;
+      for I in Response_Data'Range loop
+         Response_Data (I) := 0;
+      end loop;
+      Close_Connection := False;
+      if F.Status /= Adacraft.Protocol.Ok then
+         if Current = Adacraft.Protocol.State.Status then
+            Close_Connection := True;
+         end if;
+         return;
+      end if;
+      if F.Payload_Last < F.Payload_First then
+         declare
+            Empty : constant Adacraft.Protocol.Octets (2 .. 1) :=
+              (others => <>);
+         begin
+            Dispatch_Decoded_Frame
+              (Current, F.Packet_Id, Empty,
+               Response_Id, Response_Data, Response_Len, Close_Connection);
+         end;
+      else
+         Dispatch_Decoded_Frame
+           (Current, F.Packet_Id,
+            Buffer (F.Payload_First .. F.Payload_Last),
+            Response_Id, Response_Data, Response_Len, Close_Connection);
+      end if;
+   end Dispatch_Raw_Buffer;
+
 begin
    if Ada.Command_Line.Argument_Count >= 1 then
       Port := GNAT.Sockets.Port_Type'Value (Ada.Command_Line.Argument (1));

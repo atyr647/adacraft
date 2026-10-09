@@ -198,6 +198,7 @@ procedure Adacraft_Server is
          declare
             Pos : Positive := 1;
             Done : Boolean := False;
+            Want_Close : Boolean := False;
          begin
             while not Done and then Pos <= Used loop
                declare
@@ -221,7 +222,8 @@ procedure Adacraft_Server is
                         Send_Response
                           (Client, Response_Id, Resp_Buf, Response_Len);
                      end if;
-                     exit;
+                     Want_Close := Close_Connection;
+                     Done := True;
                   else
                      Dispatch_Raw_Buffer
                        (Current, Hold (1 .. Used), Pos,
@@ -232,46 +234,26 @@ procedure Adacraft_Server is
                         Send_Response
                           (Client, Response_Id, Resp_Buf, Response_Len);
                      end if;
-                     Pos := F.Next;
-                     if Pos > Used then
-                        Used := 0;
-                        Done := True;
-                     elsif Close_Connection then
-                        if Pos <= Used then
-                           Hold (1 .. Used - Pos + 1) :=
-                             Hold (Pos .. Used);
-                           Used := Used - Pos + 1;
-                        else
-                           Used := 0;
-                        end if;
-                        exit;
-                     end if;
                      if Close_Connection then
-                        if Pos <= Used then
-                           Hold (1 .. Used - Pos + 1) :=
-                             Hold (Pos .. Used);
-                           Used := Used - Pos + 1;
-                        else
-                           Used := 0;
-                        end if;
-                        exit;
-                     end if;
-                     if Pos > Used then
+                        Used := 0;
+                        Want_Close := True;
+                        Done := True;
+                     elsif F.Next > Used then
                         Used := 0;
                         Done := True;
+                     else
+                        Hold (1 .. Used - F.Next + 1) :=
+                          Hold (F.Next .. Used);
+                        Used := Used - F.Next + 1;
+                        Pos := 1;
                      end if;
                   end if;
                end;
             end loop;
-            --  Compact any consumed prefix when no close happened.
-            if Pos > 1 and then Used > 0 and then Pos <= Used + 1 then
-               null;
+            if Want_Close then
+               exit;
             end if;
          end;
-         --  Check close flag via a zero-length probe: re-decode state?
-         --  Close is acted on inside the loop above; continue reading
-         --  unless the connection reached a terminal exchange.
-         null;
       end loop;
    end Serve_Client;
 

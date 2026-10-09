@@ -41,11 +41,12 @@ procedure Test_Status_Exchange is
 
    procedure Do_Handle
      (Id : Natural; Payload : Octets; Cur : in out S.Connection_State;
+      Sess : in out SE.Session;
       Res : out SE.Handle_Result; Rid : out Natural;
-      Rlen : out Natural; Rbuf : out Octets; Close_F : out Boolean)
+      Rbuf : out Octets; Rlen : out Natural; Close_F : out Boolean)
    is
    begin
-      SE.Handle (Id, Payload, Cur, Res, Rid, Rbuf, Rlen, Close_F);
+      SE.Handle (Id, Payload, Cur, Sess, Res, Rid, Rbuf, Rlen, Close_F);
    end Do_Handle;
 
    function To_Payload (V : Interfaces.Unsigned_64) return Octets is
@@ -66,14 +67,15 @@ begin
    --  Request -> Response JSON fields present.
    declare
       Cur : S.Connection_State := S.Status;
+      Sess : SE.Session;
       Res : SE.Handle_Result;
       Rid : Natural := 99;
       Rlen : Natural := 0;
       Rbuf : Octets (1 .. 33_000) := (others => 0);
       Close_F : Boolean := True;
    begin
-      SE.Reset;
-      SE.Handle (16#00#, Empty, Cur, Res, Rid, Rbuf, Rlen, Close_F);
+      SE.Reset (Sess);
+      SE.Handle (16#00#, Empty, Cur, Sess, Res, Rid, Rbuf, Rlen, Close_F);
       Check (Res = SE.Responded, "request result");
       Check (Rid = 16#00#, "request response id");
       Check (Close_F = False, "request no close");
@@ -118,14 +120,15 @@ begin
          declare
             P : constant Octets := To_Payload (Vals (K));
             Cur : S.Connection_State := S.Status;
+            Sess : SE.Session;
             Res : SE.Handle_Result;
             Rid : Natural := 99;
             Rlen : Natural := 0;
             Rbuf : Octets (1 .. 33_000) := (others => 0);
             Close_F : Boolean := False;
          begin
-            SE.Reset;
-            SE.Handle (16#01#, P, Cur, Res, Rid, Rbuf, Rlen, Close_F);
+            SE.Reset (Sess);
+            SE.Handle (16#01#, P, Cur, Sess, Res, Rid, Rbuf, Rlen, Close_F);
             Check (Res = SE.Pong_Ready_Close, "pong result" & K'Image);
             Check (Rid = 16#01#, "pong id" & K'Image);
             Check (Rlen = 8, "pong len" & K'Image);
@@ -143,16 +146,17 @@ begin
    --  Duplicate request rejected+close.
    declare
       Cur : S.Connection_State := S.Status;
+      Sess : SE.Session;
       Res : SE.Handle_Result;
       Rid : Natural := 0;
       Rlen : Natural := 0;
       Rbuf : Octets (1 .. 33_000) := (others => 0);
       Close_F : Boolean := False;
    begin
-      SE.Reset;
-      SE.Handle (16#00#, Empty, Cur, Res, Rid, Rbuf, Rlen, Close_F);
+      SE.Reset (Sess);
+      SE.Handle (16#00#, Empty, Cur, Sess, Res, Rid, Rbuf, Rlen, Close_F);
       Check (Res = SE.Responded, "dup first ok");
-      SE.Handle (16#00#, Empty, Cur, Res, Rid, Rbuf, Rlen, Close_F);
+      SE.Handle (16#00#, Empty, Cur, Sess, Res, Rid, Rbuf, Rlen, Close_F);
       Check (Res = SE.Rejected_Close, "dup second rejected");
       Check (Close_F = True, "dup close");
    end;
@@ -160,6 +164,7 @@ begin
    --  Non-empty request rejected+close.
    declare
       Cur : S.Connection_State := S.Status;
+      Sess : SE.Session;
       Res : SE.Handle_Result;
       Rid : Natural := 0;
       Rlen : Natural := 0;
@@ -167,8 +172,8 @@ begin
       Close_F : Boolean := False;
       P : constant Octets (1 .. 1) := (others => 16#00#);
    begin
-      SE.Reset;
-      SE.Handle (16#00#, P, Cur, Res, Rid, Rbuf, Rlen, Close_F);
+      SE.Reset (Sess);
+      SE.Handle (16#00#, P, Cur, Sess, Res, Rid, Rbuf, Rlen, Close_F);
       Check (Res = SE.Rejected_Close, "nonempty request rejected");
       Check (Close_F = True, "nonempty close");
    end;
@@ -182,19 +187,20 @@ begin
       for J in 0 .. 2 loop
          declare
             Cur : S.Connection_State := S.Status;
+            Sess : SE.Session;
             Res : SE.Handle_Result;
             Rid : Natural := 0;
             Rlen : Natural := 0;
             Rbuf : Octets (1 .. 33_000) := (others => 0);
             Close_F : Boolean := False;
          begin
-            SE.Reset;
+            SE.Reset (Sess);
             if J = 0 then
-               SE.Handle (16#01#, P0, Cur, Res, Rid, Rbuf, Rlen, Close_F);
+               SE.Handle (16#01#, P0, Cur, Sess, Res, Rid, Rbuf, Rlen, Close_F);
             elsif J = 1 then
-               SE.Handle (16#01#, P7, Cur, Res, Rid, Rbuf, Rlen, Close_F);
+               SE.Handle (16#01#, P7, Cur, Sess, Res, Rid, Rbuf, Rlen, Close_F);
             else
-               SE.Handle (16#01#, P9, Cur, Res, Rid, Rbuf, Rlen, Close_F);
+               SE.Handle (16#01#, P9, Cur, Sess, Res, Rid, Rbuf, Rlen, Close_F);
             end if;
             Check (Res = SE.Rejected_Close, "bad ping rejected" & J'Image);
             Check (Close_F = True, "bad ping close" & J'Image);
@@ -205,14 +211,15 @@ begin
    --  Unknown ID rejected+close.
    declare
       Cur : S.Connection_State := S.Status;
+      Sess : SE.Session;
       Res : SE.Handle_Result;
       Rid : Natural := 0;
       Rlen : Natural := 0;
       Rbuf : Octets (1 .. 33_000) := (others => 0);
       Close_F : Boolean := False;
    begin
-      SE.Reset;
-      SE.Handle (16#05#, Empty, Cur, Res, Rid, Rbuf, Rlen, Close_F);
+      SE.Reset (Sess);
+      SE.Handle (16#05#, Empty, Cur, Sess, Res, Rid, Rbuf, Rlen, Close_F);
       Check (Res = SE.Rejected_Close, "unknown id rejected");
       Check (Close_F = True, "unknown id close");
    end;
@@ -220,19 +227,20 @@ begin
    --  Wrong-state: Status 0x00 in Handshake, Login rejected.
    declare
       Cur : S.Connection_State := S.Handshake;
+      Sess : SE.Session;
       Res : SE.Handle_Result;
       Rid : Natural := 0;
       Rlen : Natural := 0;
       Rbuf : Octets (1 .. 33_000) := (others => 0);
       Close_F : Boolean := False;
    begin
-      SE.Reset;
-      SE.Handle (16#00#, Empty, Cur, Res, Rid, Rbuf, Rlen, Close_F);
+      SE.Reset (Sess);
+      SE.Handle (16#00#, Empty, Cur, Sess, Res, Rid, Rbuf, Rlen, Close_F);
       Check (Res = SE.Rejected_Close, "wrong-state handshake rejected");
       Check (Close_F = True, "wrong-state handshake close");
       Cur := S.Login;
-      SE.Reset;
-      SE.Handle (16#01#, To_Payload (0), Cur, Res, Rid, Rbuf, Rlen, Close_F);
+      SE.Reset (Sess);
+      SE.Handle (16#01#, To_Payload (0), Cur, Sess, Res, Rid, Rbuf, Rlen, Close_F);
       Check (Res = SE.Rejected_Close, "wrong-state login rejected");
       Check (Close_F = True, "wrong-state login close");
    end;

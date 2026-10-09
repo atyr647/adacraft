@@ -56,6 +56,10 @@ package Adacraft.Protocol.Packet_Encoder is
      (E      : in out Encoder_Type;
       Reason : String);
 
+   procedure Encode_Set_Compression
+     (E         : in out Encoder_Type;
+      Threshold : Natural);
+
    function Has_Failed (E : Encoder_Type) return Boolean;
 
    function Length (E : Encoder_Type) return Natural;

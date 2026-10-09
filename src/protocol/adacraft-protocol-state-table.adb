@@ -226,11 +226,23 @@ is
      (State : Connection_State;
       Id    : Packet_Id) return Boolean
    is
+      Login_Key_Id     : constant Packet_Id :=
+        Packet_Id (Ids.Protocol_Id (Ids.Sb_Login_Key));
+      Login_Cookie_Id  : constant Packet_Id :=
+        Packet_Id (Ids.Protocol_Id (Ids.Sb_Login_Cookie_Response));
+      Login_Query_Id   : constant Packet_Id :=
+        Packet_Id (Ids.Protocol_Id (Ids.Sb_Login_Custom_Query_Answer));
    begin
       if State /= Login and then State /= Login_Awaiting_Ack then
          return False;
       end if;
-      return Find (State, Serverbound, Id) /= 0
-        and then (Is_Login_Start_Id (Id) or else Is_Login_Ack_Id (Id));
+      if Find (State, Serverbound, Id) = 0 then
+         return False;
+      end if;
+      return Is_Login_Start_Id (Id)
+        or else Is_Login_Ack_Id (Id)
+        or else Id = Login_Key_Id
+        or else Id = Login_Cookie_Id
+        or else Id = Login_Query_Id;
    end Is_Serverbound_Login;
 end Adacraft.Protocol.State.Table;

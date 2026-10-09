@@ -280,6 +280,9 @@ package body Adacraft.Ingress is
 
                         when Protocol.State.Dispatch_Reject =>
                            Close_Now := True;
+
+                        when Protocol.State.Dispatch_Encryption_Response =>
+                           Close_Now := True;
                      end case;
                   end;
 

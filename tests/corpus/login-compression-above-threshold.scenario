@@ -1,0 +1,38 @@
+corpus_format: 1
+id: login-compression-above-threshold
+title: Login with compression above threshold
+description: Threshold 1 forces Login Success and Ack into compressed DataLen non-zero framing after Set Compression.
+category: login
+protocol: 777
+provenance: hand-authored
+initial_state: LOGIN
+final_state: CONFIGURATION
+compression_threshold: 1
+
+step:
+  direction: serverbound
+  input: 17 00 05 4E 6F 74 63 68 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10
+  outcome: accepted
+  packet_id: 0x00
+  state_after: LOGIN_AWAITING_ACK
+
+step:
+  direction: clientbound
+  input: 02 03 01
+  outcome: accepted
+  packet_id: 0x03
+  state_after: LOGIN_AWAITING_ACK
+
+step:
+  direction: clientbound
+  input: 24 18 78 9C 01 18 00 E7 FF 02 B5 0A D3 85 82 9D 31 41 A2 16 7E 7D 75 39 BA 7F 05 4E 6F 74 63 68 00 79 BD 09 46
+  outcome: accepted
+  packet_id: 0x02
+  state_after: LOGIN_AWAITING_ACK
+
+step:
+  direction: serverbound
+  input: 0D 01 78 9C 01 01 00 FE FF 03 00 04 00 04
+  outcome: accepted
+  packet_id: 0x03
+  state_after: CONFIGURATION

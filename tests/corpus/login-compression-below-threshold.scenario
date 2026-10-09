@@ -1,0 +1,38 @@
+corpus_format: 1
+id: login-compression-below-threshold
+title: Login with compression below threshold
+description: Threshold 256 keeps Login Success and Ack as DataLen 0 compressed framing after Set Compression.
+category: login
+protocol: 777
+provenance: hand-authored
+initial_state: LOGIN
+final_state: CONFIGURATION
+compression_threshold: 256
+
+step:
+  direction: serverbound
+  input: 17 00 05 4E 6F 74 63 68 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10
+  outcome: accepted
+  packet_id: 0x00
+  state_after: LOGIN_AWAITING_ACK
+
+step:
+  direction: clientbound
+  input: 03 03 80 02
+  outcome: accepted
+  packet_id: 0x03
+  state_after: LOGIN_AWAITING_ACK
+
+step:
+  direction: clientbound
+  input: 19 00 02 B5 0A D3 85 82 9D 31 41 A2 16 7E 7D 75 39 BA 7F 05 4E 6F 74 63 68 00
+  outcome: accepted
+  packet_id: 0x02
+  state_after: LOGIN_AWAITING_ACK
+
+step:
+  direction: serverbound
+  input: 02 00 03
+  outcome: accepted
+  packet_id: 0x03
+  state_after: CONFIGURATION

@@ -198,6 +198,10 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
    --  string values (e.g. unknown keys like "extra":"hello") validate.
    procedure Skip_String (S : String; P : in out Natural; Ok : out Boolean);
 
+   procedure Skip_Elements
+     (S : String; P : in out Natural; Close : Character; Is_Object : Boolean;
+      Ok : out Boolean);
+
    --  Skip one generic JSON value with structural validation.
    procedure Skip_Value (S : String; P : in out Natural; Ok : out Boolean) is
       SOk : Boolean;
@@ -214,73 +218,14 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
             return;
          when '{' =>
             P := P + 1;
-            loop
-               Skip_WS (S, P);
-               if P > S'Last then
-                  return;
-               end if;
-               if S (P) = '}' then
-                  P := P + 1;
-                  Ok := True;
-                  return;
-               end if;
-               if S (P) /= '"' then
-                  return;
-               end if;
-               Skip_String (S, P, SOk);
-               if not SOk then
-                  return;
-               end if;
-               Skip_WS (S, P);
-               if P > S'Last or else S (P) /= ':' then
-                  return;
-               end if;
-               P := P + 1;
-               Skip_Value (S, P, SOk);
-               if not SOk then
-                  return;
-               end if;
-               Skip_WS (S, P);
-               if P > S'Last then
-                  return;
-               end if;
-               if S (P) = ',' then
-                  P := P + 1;
-               elsif S (P) = '}' then
-                  P := P + 1;
-                  Ok := True;
-                  return;
-               else
-                  return;
-               end if;
-            end loop;
+            Skip_Elements (S, P, '}', True, SOk);
+            Ok := SOk;
+            return;
          when '[' =>
             P := P + 1;
-            Skip_WS (S, P);
-            if P <= S'Last and then S (P) = ']' then
-               P := P + 1;
-               Ok := True;
-               return;
-            end if;
-            loop
-               Skip_Value (S, P, SOk);
-               if not SOk then
-                  return;
-               end if;
-               Skip_WS (S, P);
-               if P > S'Last then
-                  return;
-               end if;
-               if S (P) = ',' then
-                  P := P + 1;
-               elsif S (P) = ']' then
-                  P := P + 1;
-                  Ok := True;
-                  return;
-               else
-                  return;
-               end if;
-            end loop;
+            Skip_Elements (S, P, ']', False, SOk);
+            Ok := SOk;
+            return;
          when 't' =>
             if P + 3 <= S'Last and then S (P .. P + 3) = "true" then
                P := P + 4;
@@ -345,6 +290,81 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
             return;
       end case;
    end Skip_Value;
+
+   procedure Skip_Elements
+     (S : String; P : in out Natural; Close : Character; Is_Object : Boolean;
+      Ok : out Boolean)
+   is
+      SOk   : Boolean;
+      First : Boolean := True;
+   begin
+      Ok := False;
+      loop
+         Skip_WS (S, P);
+         if P > S'Last then
+            return;
+         end if;
+         if not Is_Object and then First and then S (P) = Close then
+            P := P + 1;
+            Ok := True;
+            return;
+         end if;
+         if S (P) = Close and then not First then
+            --  Empty remainder only valid via separator path below;
+            --  a bare close here means trailing comma, reject.
+            return;
+         end if;
+         if S (P) = Close and then First and then Is_Object then
+            P := P + 1;
+            Ok := True;
+            return;
+         end if;
+         if not First then
+            if S (P) /= ',' then
+               return;
+            end if;
+            P := P + 1;
+            Skip_WS (S, P);
+            if P > S'Last then
+               return;
+            end if;
+            if S (P) = Close then
+               return; --  trailing comma invalid
+            end if;
+         end if;
+         First := False;
+         if Is_Object then
+            if S (P) /= '"' then
+               return;
+            end if;
+            Skip_String (S, P, SOk);
+            if not SOk then
+               return;
+            end if;
+            Skip_WS (S, P);
+            if P > S'Last or else S (P) /= ':' then
+               return;
+            end if;
+            P := P + 1;
+         end if;
+         Skip_Value (S, P, SOk);
+         if not SOk then
+            return;
+         end if;
+         Skip_WS (S, P);
+         if P > S'Last then
+            return;
+         end if;
+         if S (P) = Close then
+            P := P + 1;
+            Ok := True;
+            return;
+         elsif S (P) /= ',' then
+            return;
+         end if;
+         --  Comma consumed at top of next iteration.
+      end loop;
+   end Skip_Elements;
 
    --  Skip a string structurally (no content capture) for unknown keys.
    procedure Skip_String (S : String; P : in out Natural; Ok : out Boolean) is

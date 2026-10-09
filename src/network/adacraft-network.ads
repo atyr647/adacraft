@@ -50,5 +50,7 @@ package Adacraft.Network is
 
    procedure Close_Conn (Idx : Positive; Reason : String := "");
 
+   procedure Parse_Port (Image : String; Port : out GNAT.Sockets.Port_Type);
+
    procedure Serve (Port : GNAT.Sockets.Port_Type);
 end Adacraft.Network;

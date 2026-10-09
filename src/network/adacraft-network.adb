@@ -53,6 +53,28 @@ package body Adacraft.Network is
       return 0;
    end Find_Slot_For_Sock;
 
+   procedure Parse_Port (Image : String; Port : out GNAT.Sockets.Port_Type) is
+      use GNAT.Sockets;
+      V : Natural := 0;
+   begin
+      if Image'Length = 0 then
+         raise Constraint_Error with "empty port";
+      end if;
+      for I in Image'Range loop
+         if Image (I) < '0' or else Image (I) > '9' then
+            raise Constraint_Error with "non-digit port";
+         end if;
+         V := V * 10 + (Character'Pos (Image (I)) - Character'Pos ('0'));
+         if V > 65535 then
+            raise Constraint_Error with "port too large";
+         end if;
+      end loop;
+      if V < 1 or else V > 65535 then
+         raise Constraint_Error with "port out of range";
+      end if;
+      Port := Port_Type (V);
+   end Parse_Port;
+
    procedure Log_One_Line (Msg : String) is
    begin
       Ada.Text_IO.Put_Line (Ada.Text_IO.Standard_Error, Msg);

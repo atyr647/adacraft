@@ -2,6 +2,7 @@ with Ada.Command_Line;
 with Ada.Text_IO;
 with GNAT.Sockets;
 with Interfaces;
+with Adacraft.Network;
 with Adacraft.Protocol;
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Frame;
@@ -29,39 +30,16 @@ procedure Test_Bad_Clients is
       end if;
    end Check;
 
-   --  Local copy of Adacraft_Server.Parse_Port strict logic.
-   --  The server unit is a main procedure and cannot be withed;
-   --  this mirror asserts the same contract: empty, non-digit
+   --  Port contract is tested through Adacraft.Network.Parse_Port, the
+   --  same implementation the server calls: empty, non-digit
    --  (incl. "-N"), 0 and > 65535 raise Constraint_Error, valid
    --  ports 1 .. 65535 are accepted unchanged.
-   procedure Parse_Port (Image : String; Port : out GNAT.Sockets.Port_Type) is
-      use GNAT.Sockets;
-      Val : Natural := 0;
-   begin
-      if Image'Length = 0 then
-         raise Constraint_Error with "empty port";
-      end if;
-      for I in Image'Range loop
-         if Image (I) < '0' or else Image (I) > '9' then
-            raise Constraint_Error with "non-digit port";
-         end if;
-         Val := Val * 10 + (Character'Pos (Image (I)) - Character'Pos ('0'));
-         if Val > 65535 then
-            raise Constraint_Error with "port too large";
-         end if;
-      end loop;
-      if Val < 1 or else Val > 65535 then
-         raise Constraint_Error with "port out of range";
-      end if;
-      Port := Port_Type (Val);
-   end Parse_Port;
-
    procedure Expect_Bad_Port (Image : String; Name : String) is
       P     : GNAT.Sockets.Port_Type := 1;
       Raised : Boolean := False;
    begin
       begin
-         Parse_Port (Image, P);
+         Adacraft.Network.Parse_Port (Image, P);
       exception
          when Constraint_Error =>
             Raised := True;
@@ -77,7 +55,7 @@ procedure Test_Bad_Clients is
       Ok : Boolean := True;
    begin
       begin
-         Parse_Port (Image, P);
+         Adacraft.Network.Parse_Port (Image, P);
       exception
          when others =>
             Ok := False;

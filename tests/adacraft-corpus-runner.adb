@@ -39,14 +39,12 @@ package body Adacraft.Corpus.Runner is
    is
       Framed : P.Buffer.Writer (Capacity => WB.Len + 32 + 1);
       Result : Byte_Vectors.Vector;
-      Tmp    : P.Buffer.Writer (Capacity => WB.Len + 32 + 1);
    begin
       --  WB already holds the full packet body including its id
       --  (Encode_Login_Success / Encode_Login_Disconnect write it),
       --  so frame it directly without prepending Pid again.
       pragma Unreferenced (Pid);
-      Tmp := WB;
-      if P.Packets.Frame (Framed, Tmp) and then not Framed.Failed then
+      if P.Packets.Frame (Framed, WB) and then not Framed.Failed then
          for I in 1 .. Framed.Len loop
             Result.Append (Framed.Data (I));
          end loop;

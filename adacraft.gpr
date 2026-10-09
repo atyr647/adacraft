@@ -6,5 +6,5 @@ project Adacraft is
    package Compiler is
       for Default_Switches ("Ada") use ("-gnat2022", "-gnata");
    end Compiler;
-   for Main use ("adacraft_server.adb", "test_handshake_exchange.adb", "test_status_exchange.adb", "test_bad_clients.adb", "test_login_server.adb");
+   for Main use ("adacraft_server.adb", "test_handshake_exchange.adb", "test_status_exchange.adb", "test_protocol_packet_encoder.adb", "test_bad_clients.adb", "test_login_server.adb");
 end Adacraft;

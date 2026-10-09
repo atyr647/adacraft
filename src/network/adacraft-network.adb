@@ -279,6 +279,37 @@ package body Adacraft.Network is
       Queue_Bytes (C, Wire (1 .. WLast));
    end Queue_Response;
 
+   --  Single framing helper for login-state replies: length-prefix a
+   --  ready protocol body (Disconnect / Success, packet id included)
+   --  and queue it. Merges the previously duplicated prefix blocks.
+   procedure Queue_Framed
+     (C          : Conn_Access;
+      Proto_Body : Adacraft.Protocol.Octets)
+   is
+      Prefix : Adacraft.Protocol.Frame.Prefix_Buffer;
+      P_Last : Ada.Streams.Stream_Element_Offset;
+      Wire : Adacraft.Protocol.Frame.Byte_Array (1 .. 512) :=
+        (others => 0);
+      W_Last : Ada.Streams.Stream_Element_Offset := 0;
+   begin
+      if C = null or else Proto_Body'Length = 0 then
+         return;
+      end if;
+      Adacraft.Protocol.Frame.Write_Length_Prefix
+        (Adacraft.Protocol.Frame.Frame_Body_Length (Proto_Body'Length),
+         Prefix, P_Last);
+      for I in 1 .. P_Last loop
+         W_Last := W_Last + 1;
+         Wire (W_Last) := Prefix (Integer (I));
+      end loop;
+      for I in Proto_Body'Range loop
+         W_Last := W_Last + 1;
+         Wire (W_Last) :=
+           Ada.Streams.Stream_Element (Proto_Body (I));
+      end loop;
+      Queue_Bytes (C, Wire (1 .. W_Last));
+   end Queue_Framed;
+
    procedure Handle_Frame_Body (C : Conn_Access; Frame_Data : Adacraft.Protocol.Frame.Byte_Array) is
       use type Adacraft.Protocol.Status_Kind;
       Blen : Natural := Frame_Data'Length;
@@ -430,30 +461,9 @@ package body Adacraft.Network is
             if LS.Status = Adacraft.Protocol.Login.Invalid_Name then
                --  Decodable but invalid name: single Disconnect, close.
                --  No Success, no state change.
-               declare
-                  Disc : Adacraft.Protocol.Octets :=
-                    Adacraft.Protocol.Login.Build_Login_Disconnect
-                      (Adacraft.Protocol.Login.Invalid_Name_Reason);
-                  Prefix : Adacraft.Protocol.Frame.Prefix_Buffer;
-                  P_Last : Ada.Streams.Stream_Element_Offset;
-                  Wire : Adacraft.Protocol.Frame.Byte_Array (1 .. 512) :=
-                    (others => 0);
-                  W_Last : Ada.Streams.Stream_Element_Offset := 0;
-               begin
-                  Adacraft.Protocol.Frame.Write_Length_Prefix
-                    (Adacraft.Protocol.Frame.Frame_Body_Length (Disc'Length),
-                     Prefix, P_Last);
-                  for I in 1 .. P_Last loop
-                     W_Last := W_Last + 1;
-                     Wire (W_Last) := Prefix (Integer (I));
-                  end loop;
-                  for I in Disc'Range loop
-                     W_Last := W_Last + 1;
-                     Wire (W_Last) :=
-                       Ada.Streams.Stream_Element (Disc (I));
-                  end loop;
-                  Queue_Bytes (C, Wire (1 .. W_Last));
-               end;
+               Queue_Framed
+                 (C, Adacraft.Protocol.Login.Build_Login_Disconnect
+                   (Adacraft.Protocol.Login.Invalid_Name_Reason));
                C.Closing := True;
                C.Last_Activity := Ada.Calendar.Clock;
                return;
@@ -467,28 +477,18 @@ package body Adacraft.Network is
                Ident : constant Adacraft.Auth.Player_Identity :=
                  Adacraft.Protocol.Login.Offline_Identity (Name_Str);
                W : Adacraft.Protocol.Buffer.Writer (64);
-               Prefix : Adacraft.Protocol.Frame.Prefix_Buffer;
-               P_Last : Ada.Streams.Stream_Element_Offset;
-               Wire : Adacraft.Protocol.Frame.Byte_Array (1 .. 512) :=
-                 (others => 0);
-               W_Last : Ada.Streams.Stream_Element_Offset := 0;
             begin
                Adacraft.Protocol.Buffer.Reset (W);
                Adacraft.Protocol.Login.Encode_Login_Success (W, Ident);
                if not W.Failed and then W.Len > 0 then
-                  Adacraft.Protocol.Frame.Write_Length_Prefix
-                    (Adacraft.Protocol.Frame.Frame_Body_Length (W.Len),
-                     Prefix, P_Last);
-                  for I in 1 .. P_Last loop
-                     W_Last := W_Last + 1;
-                     Wire (W_Last) := Prefix (Integer (I));
-                  end loop;
-                  for I in 1 .. W.Len loop
-                     W_Last := W_Last + 1;
-                     Wire (W_Last) :=
-                       Ada.Streams.Stream_Element (W.Data (I));
-                  end loop;
-                  Queue_Bytes (C, Wire (1 .. W_Last));
+                  declare
+                     Succ_Body : Adacraft.Protocol.Octets (1 .. W.Len);
+                  begin
+                     for I in 1 .. W.Len loop
+                        Succ_Body (I) := W.Data (I);
+                     end loop;
+                     Queue_Framed (C, Succ_Body);
+                  end;
                end if;
             end;
             C.Proto_State := Adacraft.Protocol.State.Login_Awaiting_Ack;
@@ -504,45 +504,17 @@ package body Adacraft.Network is
          --  Offline only; no Online_Authenticated flag exists or is set.
          --  Explicit close path only (C.Closing), no raise.
          declare
-            use type Adacraft.Protocol.State.Packet_Id;
-            Start_Id : constant Adacraft.Protocol.State.Packet_Id :=
-              Adacraft.Protocol.State.Packet_Id (0);
-            Ack_Id   : constant Adacraft.Protocol.State.Packet_Id :=
-              Adacraft.Protocol.State.Packet_Id (3);
             Got_Id   : constant Adacraft.Protocol.State.Packet_Id :=
               Adacraft.Protocol.State.Packet_Id (Pid);
             Is_Start : constant Boolean :=
-              Adacraft.Protocol.State.Table.Is_Login_Start_Id (Got_Id)
-              or else Got_Id = Start_Id;
+              Adacraft.Protocol.State.Table.Is_Login_Start_Id (Got_Id);
             Is_Ack   : constant Boolean :=
-              Adacraft.Protocol.State.Table.Is_Login_Ack_Id (Got_Id)
-              or else Got_Id = Ack_Id;
+              Adacraft.Protocol.State.Table.Is_Login_Ack_Id (Got_Id);
          begin
             if Is_Start then
-               declare
-                  Disc : Adacraft.Protocol.Octets :=
-                    Adacraft.Protocol.Login.Build_Login_Disconnect
-                      (Adacraft.Protocol.Login.Default_Disconnect_Reason);
-                  Prefix : Adacraft.Protocol.Frame.Prefix_Buffer;
-                  P_Last : Ada.Streams.Stream_Element_Offset;
-                  Wire : Adacraft.Protocol.Frame.Byte_Array (1 .. 512) :=
-                    (others => 0);
-                  W_Last : Ada.Streams.Stream_Element_Offset := 0;
-               begin
-                  Adacraft.Protocol.Frame.Write_Length_Prefix
-                    (Adacraft.Protocol.Frame.Frame_Body_Length (Disc'Length),
-                     Prefix, P_Last);
-                  for I in 1 .. P_Last loop
-                     W_Last := W_Last + 1;
-                     Wire (W_Last) := Prefix (Integer (I));
-                  end loop;
-                  for I in Disc'Range loop
-                     W_Last := W_Last + 1;
-                     Wire (W_Last) :=
-                       Ada.Streams.Stream_Element (Disc (I));
-                  end loop;
-                  Queue_Bytes (C, Wire (1 .. W_Last));
-               end;
+               Queue_Framed
+                 (C, Adacraft.Protocol.Login.Build_Login_Disconnect
+                   (Adacraft.Protocol.Login.Default_Disconnect_Reason));
                C.Closing := True;
                C.Last_Activity := Ada.Calendar.Clock;
                return;
@@ -552,31 +524,9 @@ package body Adacraft.Network is
                   C.Last_Activity := Ada.Calendar.Clock;
                   return;
                else
-                  declare
-                     Disc : Adacraft.Protocol.Octets :=
-                       Adacraft.Protocol.Login.Build_Login_Disconnect
-                         (Adacraft.Protocol.Login.Default_Disconnect_Reason);
-                     Prefix : Adacraft.Protocol.Frame.Prefix_Buffer;
-                     P_Last : Ada.Streams.Stream_Element_Offset;
-                     Wire : Adacraft.Protocol.Frame.Byte_Array (1 .. 512) :=
-                       (others => 0);
-                     W_Last : Ada.Streams.Stream_Element_Offset := 0;
-                  begin
-                     Adacraft.Protocol.Frame.Write_Length_Prefix
-                       (Adacraft.Protocol.Frame.Frame_Body_Length
-                          (Disc'Length),
-                        Prefix, P_Last);
-                     for I in 1 .. P_Last loop
-                        W_Last := W_Last + 1;
-                        Wire (W_Last) := Prefix (Integer (I));
-                     end loop;
-                     for I in Disc'Range loop
-                        W_Last := W_Last + 1;
-                        Wire (W_Last) :=
-                          Ada.Streams.Stream_Element (Disc (I));
-                     end loop;
-                     Queue_Bytes (C, Wire (1 .. W_Last));
-                  end;
+                  Queue_Framed
+                    (C, Adacraft.Protocol.Login.Build_Login_Disconnect
+                      (Adacraft.Protocol.Login.Default_Disconnect_Reason));
                   C.Closing := True;
                   C.Last_Activity := Ada.Calendar.Clock;
                   return;

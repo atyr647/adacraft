@@ -461,9 +461,6 @@ procedure Test_Login_Server is
       Res : LG.Start_Result;
       Exp : constant Octets :=
         Expected_Disconnect (LG.Invalid_Name_Reason);
-      Got : constant Octets :=
-        Expected_Disconnect
-          (Res.Reason (1 .. Res.Reason_Len));
    begin
       Touch_Real_Units (Payload, 0);
       Res := LG.Handle_Start (Fresh_Session, Payload, Adacraft.Auth.Offline);
@@ -472,10 +469,13 @@ procedure Test_Login_Server is
       Check (not Res.Session.Success_Sent, "R3 no success sent");
       Check (Res.Reason (1 .. Res.Reason_Len) = LG.Invalid_Name_Reason,
              "R3 invalid-name reason");
-      Check (Octets_Equal (Got, Exp), "R3 disconnect bytes exact");
       declare
+         Got : constant Octets :=
+           Expected_Disconnect
+             (Res.Reason (1 .. Res.Reason_Len));
          Exp_S : constant Octets := Expected_Success ("Notch");
       begin
+         Check (Octets_Equal (Got, Exp), "R3 disconnect bytes exact");
          Check (not Octets_Equal (Got, Exp_S), "R3 no success bytes");
       end;
    exception

@@ -280,6 +280,18 @@ package body Adacraft.Protocol.Packet_Encoder is
       Write_Proto_String (E, JSON);
    end Encode_Login_Disconnect;
 
+   procedure Encode_Set_Compression
+     (E         : in out Encoder_Type;
+      Threshold : Natural)
+   is
+   begin
+      Start_Packet (E, Ids.Protocol_Id (Ids.Cb_Login_Login_Compression));
+      if E.Failed then
+         return;
+      end if;
+      Write_Varint_U32 (E, Interfaces.Unsigned_32 (Threshold));
+   end Encode_Set_Compression;
+
    function Has_Failed (E : Encoder_Type) return Boolean is
    begin
       return E.Failed;

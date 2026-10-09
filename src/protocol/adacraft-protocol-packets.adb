@@ -71,6 +71,16 @@ package body Adacraft.Protocol.Packets is
       Buffer.Put_String (W, JSON);
    end Encode_Login_Disconnect;
 
+   procedure Encode_Set_Compression
+     (W : in out Buffer.Writer; Threshold : Natural)
+   is
+   begin
+      Buffer.Put_Varint
+        (W, Interfaces.Unsigned_32
+           (Ids.Protocol_Id (Ids.Cb_Login_Login_Compression)));
+      Buffer.Put_Varint (W, Interfaces.Unsigned_32 (Threshold));
+   end Encode_Set_Compression;
+
    function Frame (W : in out Buffer.Writer; Payload : Buffer.Writer) return Boolean is
    begin
       if Payload.Failed or else Payload.Len = 0 then

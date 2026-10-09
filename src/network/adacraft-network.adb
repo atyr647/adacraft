@@ -282,14 +282,18 @@ package body Adacraft.Network is
    --  Single framing helper for login-state replies: length-prefix a
    --  ready protocol body (Disconnect / Success, packet id included)
    --  and queue it. Merges the previously duplicated prefix blocks.
+   --  Heap-allocated wire buffer sized to the actual prefix + body
+   --  length: no protocol-maximum buffer on the stack.
    procedure Queue_Framed
      (C          : Conn_Access;
       Proto_Body : Adacraft.Protocol.Octets)
    is
       Prefix : Adacraft.Protocol.Frame.Prefix_Buffer;
       P_Last : Ada.Streams.Stream_Element_Offset;
-      Wire : Adacraft.Protocol.Frame.Byte_Array (1 .. 512) :=
-        (others => 0);
+      type Wire_Acc is access Adacraft.Protocol.Frame.Byte_Array;
+      procedure Free_Wire is new Ada.Unchecked_Deallocation
+        (Adacraft.Protocol.Frame.Byte_Array, Wire_Acc);
+      Wire : Wire_Acc := null;
       W_Last : Ada.Streams.Stream_Element_Offset := 0;
    begin
       if C = null or else Proto_Body'Length = 0 then
@@ -298,6 +302,8 @@ package body Adacraft.Network is
       Adacraft.Protocol.Frame.Write_Length_Prefix
         (Adacraft.Protocol.Frame.Frame_Body_Length (Proto_Body'Length),
          Prefix, P_Last);
+      Wire := new Adacraft.Protocol.Frame.Byte_Array
+        (1 .. P_Last + Ada.Streams.Stream_Element_Offset (Proto_Body'Length));
       for I in 1 .. P_Last loop
          W_Last := W_Last + 1;
          Wire (W_Last) := Prefix (Integer (I));
@@ -308,6 +314,13 @@ package body Adacraft.Network is
            Ada.Streams.Stream_Element (Proto_Body (I));
       end loop;
       Queue_Bytes (C, Wire (1 .. W_Last));
+      Free_Wire (Wire);
+   exception
+      when others =>
+         if Wire /= null then
+            Free_Wire (Wire);
+         end if;
+         raise;
    end Queue_Framed;
 
    procedure Handle_Frame_Body (C : Conn_Access; Frame_Data : Adacraft.Protocol.Frame.Byte_Array) is
@@ -403,23 +416,30 @@ package body Adacraft.Network is
             end if;
          end;
       elsif C.Proto_State = Adacraft.Protocol.State.Login then
-         --  Handle_Login (single-shot): Frame body already fed by
-         --  Service_Readable via Frame.Feed.  Path:
-         --  Frame body -> Varnum packet id -> State.Table validity
-         --  -> Login.Decode_Login_Start -> Packet_Encoder Disconnect.
+         --  LOGIN-state inbound Login Start dispatch, gated order:
+         --  (1) state / packet-id check (Table validity + Start id),
+         --  (2) Login.Decode_Login_Start only (no ad-hoc parsing),
+         --  (3) well-formed check (Malformed / Invalid_Name),
+         --  (4) offline success path (base behaviour: well-formed
+         --  Start answers one framed Login Success).
+         --  Bit-for-bit preservation: no behaviour change on any
+         --  input; wrong-state, malformed, online-mode and non-Login
+         --  inputs behave exactly as before. No mode branch lives on
+         --  this path in the base (online refuse lives in
+         --  Login.Handle_Start, used by Ingress via Kernel.Online_Mode,
+         --  which this unit must not with per check_boundaries).
          declare
             LS  : Adacraft.Protocol.Login.Login_Start;
-            Reason : String (1 .. 256) := (others => ' ');
-            Reason_Len : Natural := 0;
             use type Adacraft.Protocol.State.Connection_State;
             use type Adacraft.Protocol.Login.Login_Start_Status;
          begin
-            --  Duplicate Start in same connection: a queued Disconnect
+            --  Gate 1: state / packet-id check.
+            --  Duplicate Start in same connection: a queued reply
             --  means Start was already seen -> close, no second reply.
             if C.Closing or else C.Send_Len > 0 then
                raise Constraint_Error with "duplicate login start";
             end if;
-            --  Per-state validity (§19): only serverbound Login rows pass.
+            --  Per-state validity: only serverbound Login rows pass.
             --  Status/Ping, Handshake, early Ack, unknown id, wrong
             --  direction -> close, no reply.
             if Adacraft.Protocol.State.Table.Find
@@ -434,7 +454,9 @@ package body Adacraft.Network is
             then
                raise Constraint_Error with "not login start";
             end if;
-            --  Decode Login Start on the bytes after the packet id.
+            --  Gate 2: decode Login Start only via the single decoder,
+            --  on the bytes after the packet id. No parallel decoder,
+            --  no ad-hoc length/name parsing.
             if Pay_First <= Blen then
                LS := Adacraft.Protocol.Login.Decode_Login_Start
                  (Oct (Pay_First .. Blen));
@@ -447,11 +469,8 @@ package body Adacraft.Network is
                     Adacraft.Protocol.Login.Decode_Login_Start (Empty);
                end;
             end if;
-            --  Login Start outcome in Login_State (in place, no second
-            --  handler). Malformed -> close, no reply. Decodable but
-            --  invalid name -> one Disconnect, close. Valid -> offline
-            --  UUID via existing policy, one Success, await Ack.
-            --  Invalid-state reject above (Ack before Start) untouched.
+            --  Gate 3: well-formed check. Malformed -> close, no reply.
+            --  Decodable but invalid name -> one Disconnect, close.
             if LS.Status = Adacraft.Protocol.Login.Malformed then
                --  Truncated / length mismatch -> close, no reply, no raise.
                C.Closing := True;
@@ -468,10 +487,12 @@ package body Adacraft.Network is
                C.Last_Activity := Ada.Calendar.Clock;
                return;
             end if;
-            --  Well-formed Start with valid name (LS.Status = Ok):
+            --  Gate 4: well-formed Start (LS.Status = Ok), offline
+            --  success path unchanged from base:
             --  offline-identified only; Online_Authenticated concept does
             --  not exist on this Conn (stays offline), one framed Login
             --  Success via Encode_Login_Success, then Login_Awaiting_Ack.
+            --  Exact-size stack temporaries only (W.Len-sized copy).
             declare
                Name_Str : constant String := LS.Name (1 .. LS.Name_Len);
                Ident : constant Adacraft.Auth.Player_Identity :=

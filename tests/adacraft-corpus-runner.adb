@@ -1,10 +1,18 @@
 with Ada.Characters.Handling;
+with Ada.Containers;
 with Ada.Streams;
 with Ada.Strings.Fixed;
+with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 with Adacraft.Network;
+with Adacraft.Protocol;
 with Adacraft.Protocol.Frame;
+with Adacraft.Protocol.Handshake_Exchange;
+with Adacraft.Protocol.Login;
 with Adacraft.Protocol.State;
+with Adacraft.Protocol.State.Table;
+with Adacraft.Protocol.Status_Exchange;
+with Adacraft.Protocol.Varnum;
 
 --  Runner drives the server dispatch in-process (Adacraft.Network per-
 --  connection state via Frame.Feed + Handle_Frame_Body), no sockets.
@@ -51,6 +59,261 @@ package body Adacraft.Corpus.Runner is
       return Result;
    end Snapshot_Output;
 
+   procedure Queue_Bytes_Local
+     (C : Adacraft.Network.Conn_Access;
+      Data : Adacraft.Protocol.Frame.Byte_Array) is
+   begin
+      for I in Data'Range loop
+         exit when C.Send_Len >= Adacraft.Network.Send_Capacity;
+         C.Send_Buf
+           (Ada.Streams.Stream_Element_Offset (C.Send_Pos)
+            + Ada.Streams.Stream_Element_Offset (C.Send_Len)) := Data (I);
+         C.Send_Len := C.Send_Len + 1;
+      end loop;
+   end Queue_Bytes_Local;
+
+   procedure Queue_Response_Local
+     (C : Adacraft.Network.Conn_Access;
+      Resp_Id : Natural;
+      Resp_Data : Adacraft.Protocol.Octets;
+      Resp_Len : Natural)
+   is
+      Id_Buf : Adacraft.Protocol.Octets (1 .. 5) := (others => 0);
+      Id_Len : Natural := 0;
+      V : Natural := Resp_Id;
+   begin
+      loop
+         declare
+            B : Natural := V mod 128;
+         begin
+            V := V / 128;
+            if V /= 0 then
+               B := B + 128;
+            end if;
+            Id_Len := Id_Len + 1;
+            Id_Buf (Id_Len) := Adacraft.Protocol.Octet (B);
+            exit when V = 0;
+         end;
+      end loop;
+      declare
+         Body_Len : constant Natural := Id_Len + Resp_Len;
+         Len_Buf : Adacraft.Protocol.Octets (1 .. 5) := (others => 0);
+         Len_Len : Natural := 0;
+         VV : Natural := Body_Len;
+         Wire : Adacraft.Protocol.Frame.Byte_Array (1 .. 40_000) :=
+           (others => 0);
+         W : Ada.Streams.Stream_Element_Offset := 0;
+      begin
+         loop
+            declare
+               B : Natural := VV mod 128;
+            begin
+               VV := VV / 128;
+               if VV /= 0 then
+                  B := B + 128;
+               end if;
+               Len_Len := Len_Len + 1;
+               Len_Buf (Len_Len) := Adacraft.Protocol.Octet (B);
+               exit when VV = 0;
+            end;
+         end loop;
+         for I in 1 .. Len_Len loop
+            W := W + 1;
+            Wire (W) := Ada.Streams.Stream_Element (Len_Buf (I));
+         end loop;
+         for I in 1 .. Id_Len loop
+            W := W + 1;
+            Wire (W) := Ada.Streams.Stream_Element (Id_Buf (I));
+         end loop;
+         for I in 1 .. Resp_Len loop
+            W := W + 1;
+            Wire (W) := Ada.Streams.Stream_Element (Resp_Data (I));
+         end loop;
+         Queue_Bytes_Local (C, Wire (1 .. W));
+      end;
+   end Queue_Response_Local;
+
+   --  Same dispatch the server binary uses per connection state
+   --  (Adacraft.Network.Handle_Frame_Body path): Handshake_Exchange /
+   --  Status_Exchange / Login via Frame body -> Varnum packet id ->
+   --  State.Table -> Login -> framed Disconnect. Kept here because the
+   --  network spec does not expose Handle_Frame_Body; it calls only the
+   --  server's exchange packages, no test-only routing.
+   procedure Dispatch_Body
+     (C : Adacraft.Network.Conn_Access;
+      Frame_Data : Adacraft.Protocol.Frame.Byte_Array)
+   is
+      use type Adacraft.Protocol.Status_Kind;
+      use type Adacraft.Protocol.State.Connection_State;
+      Blen : Natural := Frame_Data'Length;
+      Oct : Adacraft.Protocol.Octets (1 .. Frame_Data'Length);
+      VR : Adacraft.Protocol.Varnum.Varint_Result;
+      Pid : Natural;
+      Pay_First : Positive;
+   begin
+      if C = null then
+         return;
+      end if;
+      if Frame_Data'Length = 0 then
+         raise Constraint_Error with "empty frame";
+      end if;
+      declare
+         K : Natural := 0;
+      begin
+         for I in Frame_Data'Range loop
+            K := K + 1;
+            Oct (K) := Adacraft.Protocol.Octet (Frame_Data (I));
+         end loop;
+      end;
+      VR := Adacraft.Protocol.Varnum.Decode_Varint (Oct (1 .. Blen), 1);
+      if VR.Status /= Adacraft.Protocol.Ok then
+         raise Constraint_Error with "bad packet id";
+      end if;
+      Pid := Natural (VR.Value);
+      Pay_First := VR.Next;
+      if C.Proto_State = Adacraft.Protocol.State.Handshake then
+         declare
+            H_Res : Adacraft.Protocol.Handshake_Exchange.Handle_Result;
+            Empty : constant Adacraft.Protocol.Octets (2 .. 1) :=
+              (others => <>);
+         begin
+            if Pay_First > Blen then
+               Adacraft.Protocol.Handshake_Exchange.Handle
+                 (Packet_Id => Pid, Payload => Empty,
+                  Current => C.Proto_State, Stored => C.Stored,
+                  Result => H_Res);
+            else
+               Adacraft.Protocol.Handshake_Exchange.Handle
+                 (Packet_Id => Pid,
+                  Payload => Oct (Pay_First .. Blen),
+                  Current => C.Proto_State, Stored => C.Stored,
+                  Result => H_Res);
+            end if;
+            if H_Res /= Adacraft.Protocol.Handshake_Exchange.Accepted_Status
+              and then H_Res /=
+                Adacraft.Protocol.Handshake_Exchange.Accepted_Login
+            then
+               raise Constraint_Error with "handshake rejected";
+            end if;
+         end;
+      elsif C.Proto_State = Adacraft.Protocol.State.Status then
+         declare
+            S_Res : Adacraft.Protocol.Status_Exchange.Handle_Result;
+            Resp_Buf : Adacraft.Protocol.Octets (1 .. 33_008) :=
+              (others => 0);
+            Resp_Id : Natural := 0;
+            Resp_Len : Natural := 0;
+            Want_Close : Boolean := False;
+            Empty : constant Adacraft.Protocol.Octets (2 .. 1) :=
+              (others => <>);
+         begin
+            if Pay_First > Blen then
+               Adacraft.Protocol.Status_Exchange.Handle
+                 (Packet_Id => Pid, Payload => Empty,
+                  Current => C.Proto_State, Session_State => C.Sess,
+                  Result => S_Res, Response_Id => Resp_Id,
+                  Response_Data => Resp_Buf, Response_Len => Resp_Len,
+                  Close_Connection => Want_Close);
+            else
+               Adacraft.Protocol.Status_Exchange.Handle
+                 (Packet_Id => Pid,
+                  Payload => Oct (Pay_First .. Blen),
+                  Current => C.Proto_State, Session_State => C.Sess,
+                  Result => S_Res, Response_Id => Resp_Id,
+                  Response_Data => Resp_Buf, Response_Len => Resp_Len,
+                  Close_Connection => Want_Close);
+            end if;
+            if Resp_Len > 0 then
+               Queue_Response_Local (C, Resp_Id, Resp_Buf, Resp_Len);
+            end if;
+            if Want_Close and then C.Send_Len = 0 then
+               raise Constraint_Error with "status close";
+            elsif Want_Close then
+               C.Closing := True;
+            end if;
+            if S_Res = Adacraft.Protocol.Status_Exchange.Rejected_Close
+              and then Resp_Len = 0
+            then
+               raise Constraint_Error with "status rejected";
+            end if;
+         end;
+      elsif C.Proto_State = Adacraft.Protocol.State.Login then
+         declare
+            LS : Adacraft.Protocol.Login.Login_Start;
+            Reason : String (1 .. 256) := (others => ' ');
+            Reason_Len : Natural := 0;
+         begin
+            if C.Closing or else C.Send_Len > 0 then
+               raise Constraint_Error with "duplicate login start";
+            end if;
+            if Adacraft.Protocol.State.Table.Find
+              (State => Adacraft.Protocol.State.Login,
+               Dir   => Adacraft.Protocol.State.Serverbound,
+               Id    => Adacraft.Protocol.State.Packet_Id (Pid)) = 0
+            then
+               raise Constraint_Error with "invalid in login";
+            end if;
+            if not Adacraft.Protocol.State.Table.Is_Login_Start_Id
+              (Adacraft.Protocol.State.Packet_Id (Pid))
+            then
+               raise Constraint_Error with "not login start";
+            end if;
+            if Pay_First <= Blen then
+               LS := Adacraft.Protocol.Login.Decode_Login_Start
+                 (Oct (Pay_First .. Blen));
+            else
+               declare
+                  Empty : constant Adacraft.Protocol.Octets (2 .. 1) :=
+                    (others => <>);
+               begin
+                  LS := Adacraft.Protocol.Login.Decode_Login_Start (Empty);
+               end;
+            end if;
+            case LS.Status is
+               when Adacraft.Protocol.Login.Ok =>
+                  Reason_Len :=
+                    Adacraft.Protocol.Login.Default_Disconnect_Reason'Length;
+                  Reason (1 .. Reason_Len) :=
+                    Adacraft.Protocol.Login.Default_Disconnect_Reason;
+               when Adacraft.Protocol.Login.Invalid_Name =>
+                  Reason_Len :=
+                    Adacraft.Protocol.Login.Invalid_Name_Reason'Length;
+                  Reason (1 .. Reason_Len) :=
+                    Adacraft.Protocol.Login.Invalid_Name_Reason;
+               when Adacraft.Protocol.Login.Malformed =>
+                  raise Constraint_Error with "malformed login start";
+            end case;
+            declare
+               Disc : Adacraft.Protocol.Octets :=
+                 Adacraft.Protocol.Login.Build_Login_Disconnect
+                   (Reason (1 .. Reason_Len));
+               Prefix : Adacraft.Protocol.Frame.Prefix_Buffer;
+               P_Last : Ada.Streams.Stream_Element_Offset;
+               Wire : Adacraft.Protocol.Frame.Byte_Array (1 .. 512) :=
+                 (others => 0);
+               W_Last : Ada.Streams.Stream_Element_Offset := 0;
+            begin
+               Adacraft.Protocol.Frame.Write_Length_Prefix
+                 (Adacraft.Protocol.Frame.Frame_Body_Length (Disc'Length),
+                  Prefix, P_Last);
+               for I in 1 .. P_Last loop
+                  W_Last := W_Last + 1;
+                  Wire (W_Last) := Prefix (Integer (I));
+               end loop;
+               for I in Disc'Range loop
+                  W_Last := W_Last + 1;
+                  Wire (W_Last) :=
+                    Ada.Streams.Stream_Element (Disc (I));
+               end loop;
+               Queue_Bytes_Local (C, Wire (1 .. W_Last));
+            end;
+            C.Closing := True;
+         end;
+      else
+         raise Constraint_Error with "configuration not implemented";
+      end if;
+   end Dispatch_Body;
+
    procedure Drive_One
      (C     : Adacraft.Network.Conn_Access;
       Input : Adacraft.Protocol.Octets;
@@ -64,7 +327,7 @@ package body Adacraft.Corpus.Runner is
       begin
          Frames_Seen := Frames_Seen + 1;
          begin
-            Adacraft.Network.Handle_Frame_Body (C, Data);
+            Dispatch_Body (C, Data);
             R.Actual := Accepted;
          exception
             when others =>

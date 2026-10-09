@@ -11,7 +11,7 @@ package Adacraft.Protocol is
    Max_Varlong_Bytes : constant := 10;
    Max_Length_Bytes  : constant := 3;
 
-   --  NOTE: the LOGIN literal is named Login_Phase (not Login) so the
-   --  child unit Adacraft.Protocol.Login can coexist with this parent.
+   --  Login_Phase names the LOGIN protocol state; the child package
+   --  Adacraft.Protocol.Login contains its bounded-context handlers.
    type Protocol_State is (Handshake, Status, Login_Phase, Configuration, Play);
 end Adacraft.Protocol;

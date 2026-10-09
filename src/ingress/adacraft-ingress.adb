@@ -1,12 +1,20 @@
+with Ada.Streams;
 with Adacraft.Auth;
+with Adacraft.Kernel;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Ids;
+with Adacraft.Protocol.Login;
+with Adacraft.Protocol.Packet_Encoder;
 with Adacraft.Protocol.Packets;
+with Adacraft.Protocol.State;
 
 package body Adacraft.Ingress is
    use type Protocol.Status_Kind;
    use type Interfaces.Unsigned_32;
    use type Protocol.Octet;
+   use type Ada.Streams.Stream_Element_Offset;
+   use type Protocol.Login.Login_State;
+   use type Protocol.Login.Ack_Outcome;
 
    procedure Close_Connection (Connection : in out Connection_Type) is
    begin
@@ -97,6 +105,25 @@ package body Adacraft.Ingress is
       end if;
       Close_Now := True;
    end Disconnect;
+
+   procedure Append_Login_Packet
+     (W : in out Protocol.Buffer.Writer;
+      E : in out Protocol.Packet_Encoder.Encoder_Type)
+   is
+      Encoded : Ada.Streams.Stream_Element_Array (1 .. 1_024);
+      Last    : Ada.Streams.Stream_Element_Offset;
+      Bytes   : Protocol.Octets (1 .. 1_024) := (others => 0);
+   begin
+      Protocol.Packet_Encoder.Get_Framed (E, Encoded, Last);
+      if Protocol.Packet_Encoder.Has_Failed (E) or else Last < Encoded'First then
+         W.Failed := True;
+         return;
+      end if;
+      for I in 1 .. Natural (Last) loop
+         Bytes (I) := Protocol.Octet (Encoded (Ada.Streams.Stream_Element_Offset (I)));
+      end loop;
+      Protocol.Buffer.Put_Bytes (W, Bytes (1 .. Natural (Last)));
+   end Append_Login_Packet;
 
    procedure Ingest
      (S         : in out Session;
@@ -189,29 +216,72 @@ package body Adacraft.Ingress is
                   end if;
 
                when Protocol.Login_Phase =>
-                  if Frame.Packet_Id /= Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Login_Hello) then
-                     Close_Now := True;
-                  else
-                     declare
-                        Hello : constant Protocol.Packets.Login_Hello :=
-                          Protocol.Packets.Decode_Login_Hello (Payload);
-                        Expected : Auth.Digest;
-                     begin
-                        if Hello.Status /= Protocol.Ok then
-                           Disconnect (Outgoing, "Malformed login", Close_Now);
-                        else
-                           Expected := Auth.Offline_UUID (Hello.Name (1 .. Hello.Name_Len));
-                           if not Same_UUID (Hello.Uuid, Expected) then
-                              Disconnect (Outgoing, "Offline UUID does not match the player name", Close_Now);
-                           else
-                              Disconnect
-                                (Outgoing,
-                                 "AdaCraft accepted the offline identity; play is not in this build",
-                                 Close_Now);
-                           end if;
-                        end if;
-                     end;
-                  end if;
+                  declare
+                     Dispatch_State : constant Protocol.State.Connection_State :=
+                       (if S.Login_State.State = Protocol.Login.Success_Sent
+                        then Protocol.State.Login_Awaiting_Ack
+                        else Protocol.State.Login);
+                     Dispatch : constant Protocol.State.Login_Dispatch :=
+                       Protocol.State.Dispatch_Login
+                         (Dispatch_State, Protocol.State.Serverbound,
+                          Protocol.State.Packet_Id (Frame.Packet_Id));
+                  begin
+                     case Dispatch is
+                        when Protocol.State.Dispatch_Start =>
+                           declare
+                              Mode : constant Auth.Server_Auth_Mode :=
+                                (if Adacraft.Kernel.Online_Mode
+                                 then Auth.Online else Auth.Offline);
+                              Result : constant Protocol.Login.Start_Result :=
+                                Protocol.Login.Handle_Start
+                                  (S.Login_State, Payload, Mode);
+                              Encoder : Protocol.Packet_Encoder.Encoder_Type
+                                (Capacity => 512);
+                           begin
+                              case Result.Outcome is
+                                 when Protocol.Login.Ready_Success =>
+                                    S.Login_State := Result.Session;
+                                    Protocol.Packet_Encoder.Encode_Login_Success
+                                      (Encoder,
+                                       Protocol.Octets (Result.Identity.UUID),
+                                       Result.Identity.Name
+                                         (1 .. Result.Identity.Name_Length));
+                                    Append_Login_Packet (Outgoing, Encoder);
+                                 when Protocol.Login.Need_Disconnect_Close
+                                    | Protocol.Login.Refuse_Online =>
+                                    S.Login_State := Result.Session;
+                                    Protocol.Packet_Encoder.Encode_Login_Disconnect
+                                      (Encoder,
+                                       Result.Reason (1 .. Result.Reason_Len));
+                                    Append_Login_Packet (Outgoing, Encoder);
+                                    Close_Now := True;
+                                 when Protocol.Login.Protocol_Error_Close =>
+                                    S.Login_State := Result.Session;
+                                    Close_Now := True;
+                              end case;
+                           end;
+
+                        when Protocol.State.Dispatch_Acknowledged =>
+                           declare
+                              Result : constant Protocol.Login.Ack_Result :=
+                                Protocol.Login.Handle_Acknowledged
+                                  (S.Login_State, Payload);
+                           begin
+                              if Result.Outcome =
+                                Protocol.Login.To_Configuration
+                              then
+                                 S.Login_State := Result.Session;
+                                 S.State := Protocol.Configuration;
+                              else
+                                 S.Login_State := Result.Session;
+                                 Close_Now := True;
+                              end if;
+                           end;
+
+                        when Protocol.State.Dispatch_Reject =>
+                           Close_Now := True;
+                     end case;
+                  end;
 
                when Protocol.Configuration | Protocol.Play =>
                   Close_Now := True;

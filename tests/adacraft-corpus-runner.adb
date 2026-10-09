@@ -3,6 +3,7 @@ with Ada.Strings.Fixed;
 with Ada.Text_IO;
 with Interfaces;
 with Adacraft.Auth;
+with Adacraft.Kernel;
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Ids;
@@ -35,15 +36,13 @@ package body Adacraft.Corpus.Runner is
    Login_Disconnect_Pid : constant := 0;
 
    function Frame_Packet
-     (Pid : Natural; WB : P.Buffer.Writer) return Byte_Vectors.Vector
+     (WB : P.Buffer.Writer) return Byte_Vectors.Vector
    is
       Framed : P.Buffer.Writer (Capacity => WB.Len + 32 + 1);
       Result : Byte_Vectors.Vector;
    begin
-      --  WB already holds the full packet body including its id
-      --  (Encode_Login_Success / Encode_Login_Disconnect write it),
-      --  so frame it directly without prepending Pid again.
-      pragma Unreferenced (Pid);
+      --  WB already holds the full packet body including its id,
+      --  so frame it directly without prepending another id.
       if P.Packets.Frame (Framed, WB) and then not Framed.Failed then
          for I in 1 .. Framed.Len loop
             Result.Append (Framed.Data (I));
@@ -135,13 +134,6 @@ package body Adacraft.Corpus.Runner is
       --  held as pending output before close).
       if Dir = Serverbound
         and then (State = PS.Login or else State = PS.Login_Awaiting_Ack)
-        and then (F.Packet_Id = Login_Start_Pid
-                  or else F.Packet_Id = Login_Ack_Pid
-                  or else PS.Dispatch_Login
-                    (State,
-                     PS.Serverbound,
-                     PS.Packet_Id (F.Packet_Id)) = PS.Dispatch_Reject
-                  or else True)
       then
          declare
             Parent_Login : constant Boolean :=
@@ -164,7 +156,9 @@ package body Adacraft.Corpus.Runner is
                     Input (F.Payload_First .. F.Payload_Last);
                   Res : constant Prot_Login.Start_Result :=
                     Prot_Login.Handle_Start
-                      (Ctx.Session, Payload, Auth.Offline);
+                      (Ctx.Session, Payload,
+                       (if Adacraft.Kernel.Online_Mode
+                        then Auth.Online else Auth.Offline));
                   W : P.Buffer.Writer (Capacity => 512);
                begin
                   case Res.Outcome is
@@ -176,7 +170,7 @@ package body Adacraft.Corpus.Runner is
                         begin
                            Prot_Login.Encode_Login_Success (WB, Res.Identity);
                            Ctx.Pending_Output :=
-                             Frame_Packet (Login_Success_Pid, WB);
+                             Frame_Packet (WB);
                            Ctx.Has_Pending := True;
                         end;
                         State := PS.Login_Awaiting_Ack;
@@ -195,7 +189,7 @@ package body Adacraft.Corpus.Runner is
                              (WB,
                               Res.Reason (1 .. Res.Reason_Len));
                            Ctx.Pending_Output :=
-                             Frame_Packet (Login_Disconnect_Pid, WB);
+                             Frame_Packet (WB);
                            Ctx.Has_Pending := True;
                         end;
                         Ctx.Closed := True;
@@ -363,10 +357,7 @@ package body Adacraft.Corpus.Runner is
                      return;
                   end if;
                when Rejected | Incomplete =>
-                  if State /= Before
-                    and then not (Ctx.Closed
-                      and then State = Before)
-                  then
+                  if State /= Before then
                      Fail ("state unchanged", "state changed",
                            "state changed on terminal step");
                      return;

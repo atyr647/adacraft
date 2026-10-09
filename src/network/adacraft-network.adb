@@ -16,8 +16,15 @@ with Adacraft.Protocol.Status_Exchange;
 with Adacraft.Protocol.Varnum;
 
 package body Adacraft.Network is
+   --  Explicit server authentication-mode configuration for the
+   --  LOGIN-state dispatch (Gate 4). Default is offline, matching the
+   --  default configuration used by tests and corpus. Read by
+   --  Handle_Frame_Body; never hardcoded at the branch site.
+   Server_Mode : Adacraft.Auth.Server_Auth_Mode := Adacraft.Auth.Offline;
+
    use type Ada.Calendar.Time;
    use type Ada.Streams.Stream_Element_Offset;
+   use type Adacraft.Auth.Server_Auth_Mode;
    use type Adacraft.Protocol.Frame.Feed_Status;
    use type Adacraft.Protocol.Status_Exchange.Handle_Result;
    use type GNAT.Sockets.Selector_Status;
@@ -320,6 +327,7 @@ package body Adacraft.Network is
          if Wire /= null then
             Free_Wire (Wire);
          end if;
+         raise;
    end Queue_Framed;
 
    procedure Handle_Frame_Body (C : Conn_Access; Frame_Data : Adacraft.Protocol.Frame.Byte_Array) is
@@ -425,9 +433,6 @@ package body Adacraft.Network is
          --  online-mode and non-Login behaviour unchanged.
          declare
             LS  : Adacraft.Protocol.Login.Login_Start;
-            --  Explicit server configuration for offline vs. online.
-            --  Default configuration used by tests/corpus is offline.
-            Offline_Mode : constant Boolean := True;
             use type Adacraft.Protocol.State.Connection_State;
             use type Adacraft.Protocol.Login.Login_Start_Status;
          begin
@@ -486,9 +491,12 @@ package body Adacraft.Network is
                return;
             end if;
             --  Gate 4: offline vs. online from the explicit server
-            --  configuration. Online keeps its current handling
-            --  (single Disconnect, close, no Success, no state change).
-            if not Offline_Mode then
+            --  configuration (package-body Server_Mode, default
+            --  offline). Online keeps its current handling: the same
+            --  single Disconnect with Online_Not_Yet_Supported_Reason
+            --  that Login.Handle_Start returns for Refuse_Online
+            --  (close, no Success, no state change).
+            if Server_Mode = Adacraft.Auth.Online then
                Queue_Framed
                  (C, Adacraft.Protocol.Login.Build_Login_Disconnect
                    (Adacraft.Protocol.Login

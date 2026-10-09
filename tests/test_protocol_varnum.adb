@@ -381,6 +381,133 @@ begin
       end;
    end;
 
+   --  Helper call-site coverage: both Emit_Unsigned sites (Encode,
+   --  Encode_Varlong) and both Decode_Unsigned sites (Decode,
+   --  Decode_Varlong), plus strict wrappers. Single-byte, multi-byte
+   --  maximum, sign path, overlong-rejected, truncated-rejected.
+   declare
+      use type Interfaces.Integer_64;
+      use type Interfaces.Unsigned_32;
+      use type Interfaces.Unsigned_64;
+      subtype I64 is Interfaces.Integer_64;
+      Buf   : Octets (1 .. 12) := (others => 16#AA#);
+      W, C  : Natural;
+      S     : V.Status_Type;
+      D32   : Interfaces.Integer_32;
+      D64   : I64;
+   begin
+      --  VarInt-encode single-byte values (Encode site of Emit_Unsigned).
+      V.Encode (0, Buf, 1, W, S);
+      Check (S = V.Ok and then W = 1 and then Buf (1) = 16#00#,
+             "H varint enc single 0");
+      V.Encode (1, Buf, 1, W, S);
+      Check (S = V.Ok and then W = 1 and then Buf (1) = 16#01#,
+             "H varint enc single 1");
+      --  VarInt-encode multi-byte maximum and sign path.
+      V.Encode (Interfaces.Integer_32'Last, Buf, 1, W, S);
+      Check (S = V.Ok and then W = 5
+             and then Buf (1 .. 5)
+               = Octets'(16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#07#),
+             "H varint enc i32 last");
+      V.Encode (-1, Buf, 1, W, S);
+      Check (S = V.Ok and then W = 5
+             and then Buf (1 .. 5)
+               = Octets'(16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#0F#),
+             "H varint enc -1");
+      V.Encode (Interfaces.Integer_32'First, Buf, 1, W, S);
+      Check (S = V.Ok and then W = 5, "H varint enc i32 first");
+      --  VarLong-encode single-byte values (Encode_Varlong site).
+      V.Encode_Varlong (0, Buf, 1, W, S);
+      Check (S = V.Ok and then W = 1 and then Buf (1) = 16#00#,
+             "H varlong enc single 0");
+      V.Encode_Varlong (1, Buf, 1, W, S);
+      Check (S = V.Ok and then W = 1 and then Buf (1) = 16#01#,
+             "H varlong enc single 1");
+      --  VarLong-encode multi-byte maximum and sign path.
+      V.Encode_Varlong (I64'Last, Buf, 1, W, S);
+      Check (S = V.Ok and then W = 9
+             and then Buf (1 .. 9)
+               = (1 .. 8 => 16#FF#) & Octets'(1 => 16#7F#),
+             "H varlong enc i64 last");
+      V.Encode_Varlong (-1, Buf, 1, W, S);
+      Check (S = V.Ok and then W = 10, "H varlong enc -1");
+      V.Encode_Varlong (I64'First, Buf, 1, W, S);
+      Check (S = V.Ok and then W = 10, "H varlong enc i64 first");
+      --  VarInt-decode single-byte value (Decode site of Decode_Unsigned).
+      V.Decode (Octets'(1 => 16#00#), 1, D32, C, S);
+      Check (S = V.Ok and then D32 = 0 and then C = 1,
+             "H varint dec single 0");
+      V.Decode (Octets'(1 => 16#01#), 1, D32, C, S);
+      Check (S = V.Ok and then D32 = 1 and then C = 1,
+             "H varint dec single 1");
+      --  VarInt-decode multi-byte maximum and sign path.
+      V.Decode (Octets'(16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#07#), 1,
+                D32, C, S);
+      Check (S = V.Ok and then D32 = Interfaces.Integer_32'Last
+             and then C = 5, "H varint dec i32 last");
+      V.Decode (Octets'(16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#0F#), 1,
+                D32, C, S);
+      Check (S = V.Ok and then D32 = -1 and then C = 5,
+             "H varint dec -1");
+      --  VarInt-decode overlong rejected and truncated rejected.
+      V.Decode (Run (6), 1, D32, C, S);
+      Check (S = V.Overlong and then D32 = 0 and then C = 0,
+             "H varint dec overlong run6");
+      V.Decode (Octets'(1 => 16#80#), 1, D32, C, S);
+      Check (S = V.Truncated and then D32 = 0 and then C = 0,
+             "H varint dec trunc lone 80");
+      V.Decode (Octets'(16#FF#, 16#FF#), 1, D32, C, S);
+      Check (S = V.Truncated and then D32 = 0 and then C = 0,
+             "H varint dec trunc FF FF cutoff");
+      --  VarLong-decode single-byte value (Decode_Varlong site).
+      V.Decode_Varlong (Octets'(1 => 16#00#), 1, D64, C, S);
+      Check (S = V.Ok and then D64 = 0 and then C = 1,
+             "H varlong dec single 0");
+      V.Decode_Varlong (Octets'(1 => 16#01#), 1, D64, C, S);
+      Check (S = V.Ok and then D64 = 1 and then C = 1,
+             "H varlong dec single 1");
+      --  VarLong-decode multi-byte maximum and sign path.
+      V.Decode_Varlong ((1 .. 8 => 16#FF#) & Octets'(1 => 16#7F#), 1,
+                        D64, C, S);
+      Check (S = V.Ok and then D64 = I64'Last and then C = 9,
+             "H varlong dec i64 last");
+      V.Decode_Varlong ((1 .. 9 => 16#FF#) & Octets'(1 => 16#01#), 1,
+                        D64, C, S);
+      Check (S = V.Ok and then D64 = -1 and then C = 10,
+             "H varlong dec -1");
+      V.Decode_Varlong ((1 .. 9 => 16#80#) & Octets'(1 => 16#01#), 1,
+                        D64, C, S);
+      Check (S = V.Ok and then D64 = I64'First and then C = 10,
+             "H varlong dec i64 first");
+      --  VarLong-decode overlong rejected and truncated rejected.
+      V.Decode_Varlong ((1 .. 11 => 16#FF#), 1, D64, C, S);
+      Check (S = V.Overlong and then D64 = 0 and then C = 0,
+             "H varlong dec overlong run11");
+      V.Decode_Varlong (Octets'(1 => 16#80#), 1, D64, C, S);
+      Check (S = V.Truncated and then D64 = 0 and then C = 0,
+             "H varlong dec trunc lone 80");
+      V.Decode_Varlong (Octets'(16#FF#, 16#FF#), 1, D64, C, S);
+      Check (S = V.Truncated and then D64 = 0 and then C = 0,
+             "H varlong dec trunc FF FF cutoff");
+      --  Strict wrappers reject the non-minimal overlong 80 00 for 0
+      --  and report truncation for a lone 80.
+      declare
+         R32 : V.Varint_Result :=
+           V.Decode_Varint (Octets'(16#80#, 16#00#), 1);
+         R64 : V.Varlong_Result :=
+           V.Decode_Varlong (Octets'(16#80#, 16#00#), 1);
+         T32 : V.Varint_Result :=
+           V.Decode_Varint (Octets'(1 => 16#80#), 1);
+         T64 : V.Varlong_Result :=
+           V.Decode_Varlong (Octets'(1 => 16#80#), 1);
+      begin
+         Check (R32.Status = Rejected, "H strict varint 80 00 rejected");
+         Check (R64.Status = Rejected, "H strict varlong 80 00 rejected");
+         Check (T32.Status = Need_More, "H strict varint lone 80 needmore");
+         Check (T64.Status = Need_More, "H strict varlong lone 80 needmore");
+      end;
+   end;
+
    if Failures = 0 then
       Ada.Text_IO.Put_Line ("varnum tests passed");
    else

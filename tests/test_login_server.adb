@@ -13,6 +13,7 @@ with Ada.Unchecked_Deallocation;
 with GNAT.OS_Lib;
 with GNAT.Sockets;
 with Interfaces;
+with Adacraft.Auth;
 with Adacraft.Protocol;
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Frame;
@@ -32,6 +33,7 @@ procedure Test_Login_Server is
    package ST renames Adacraft.Protocol.State;
    package STT renames Adacraft.Protocol.State.Table;
    package VN renames Adacraft.Protocol.Varnum;
+   use type Adacraft.Protocol.State.Login_Dispatch;
    use type Adacraft.Protocol.Varnum.Status_Type;
    use type Adacraft.Protocol.Login.Login_Start_Status;
    use type Interfaces.Integer_32;
@@ -317,6 +319,245 @@ procedure Test_Login_Server is
       return Ok and then Resp_Buf (Resp_Buf'First) = 0;
    end Expect_Disconnect;
 
+   --  R1..R6 unit coverage driving the same Handle entries the live
+   --  server loop calls (Login.Handle_Start / Handle_Acknowledged),
+   --  using only existing encoders and shared helpers. No new binary,
+   --  no corpus change, empty payload is (1 .. 0).
+
+   function Build_Start_Payload (Name : String) return Octets is
+      W : Buffer.Writer (64);
+      Uuid : constant Octets (1 .. 16) := (others => 16#01#);
+   begin
+      Buffer.Put_String (W, Name);
+      Buffer.Put_Bytes (W, Uuid);
+      declare
+         R : Octets (1 .. W.Len);
+      begin
+         for I in 1 .. W.Len loop
+            R (I) := W.Data (I);
+         end loop;
+         return R;
+      end;
+   end Build_Start_Payload;
+
+   function Expected_Success (Name : String) return Octets is
+      Ident : constant Adacraft.Auth.Player_Identity :=
+        LG.Offline_Identity (Name);
+      W : Buffer.Writer (64);
+   begin
+      LG.Encode_Login_Success (W, Ident);
+      declare
+         R : Octets (1 .. W.Len);
+      begin
+         for I in 1 .. W.Len loop
+            R (I) := W.Data (I);
+         end loop;
+         return R;
+      end;
+   end Expected_Success;
+
+   function Expected_Disconnect (Reason : String) return Octets is
+   begin
+      return LG.Build_Login_Disconnect (Reason);
+   end Expected_Disconnect;
+
+   function Octets_Equal (A, B : Octets) return Boolean is
+   begin
+      if A'Length /= B'Length then
+         return False;
+      end if;
+      for I in 1 .. A'Length loop
+         if A (A'First + I - 1) /= B (B'First + I - 1) then
+            return False;
+         end if;
+      end loop;
+      return True;
+   end Octets_Equal;
+
+   function Fresh_Session return LG.Login_Session is
+      N : constant LG.Login_Session :=
+        (State => LG.Await_Start, Success_Sent => False,
+         Has_Identity => False,
+         Identity =>
+           (Kind => Adacraft.Auth.Offline, UUID => (others => 0),
+            Name_Length => 0, Name => (others => ' ')));
+   begin
+      return N;
+   end Fresh_Session;
+
+   procedure Test_R1_Success_Bytes_And_Awaiting_Ack is
+      use type LG.Start_Outcome;
+      use type LG.Login_State;
+      use type ST.Connection_State;
+      use type Adacraft.Auth.Digest;
+      use type Adacraft.Auth.Identity_Kind;
+      Name : constant String := "Notch";
+      Payload : constant Octets := Build_Start_Payload (Name);
+      Res : LG.Start_Result;
+      Exp : constant Octets := Expected_Success (Name);
+      Got : Octets (1 .. 64) := (others => 0);
+      Got_Len : Natural := 0;
+      Uuid : constant Adacraft.Auth.Digest :=
+        Adacraft.Auth.Offline_UUID (Name);
+      Awaiting : constant ST.Connection_State := ST.Login_Awaiting_Ack;
+   begin
+      Touch_Real_Units (Payload, 0);
+      Res := LG.Handle_Start (Fresh_Session, Payload, Adacraft.Auth.Offline);
+      Check (Res.Outcome = LG.Ready_Success, "R1 outcome Ready_Success");
+      Check (Res.Session.State = LG.Success_Sent, "R1 session Success_Sent");
+      Check (Res.Session.Success_Sent, "R1 Success_Sent flag");
+      Check (Awaiting = ST.Login_Awaiting_Ack, "R1 Login_Awaiting_Ack state");
+      Check (ST.Dispatch_Login
+               (Awaiting, ST.Serverbound, ST.Packet_Id (3)) =
+             ST.Dispatch_Acknowledged, "R1 ack routable in awaiting-ack");
+      Check (Res.Identity.UUID = Uuid, "R1 offline UUID deterministic");
+      declare
+         W : Buffer.Writer (64);
+      begin
+         LG.Encode_Login_Success (W, Res.Identity);
+         Got_Len := W.Len;
+         for I in 1 .. W.Len loop
+            Got (I) := W.Data (I);
+         end loop;
+      end;
+      Check (Got_Len = Exp'Length, "R1 success length exact");
+      Check (Octets_Equal (Got (1 .. Got_Len), Exp),
+             "R1 success bytes exact vs Encode_Login_Success");
+      Check (Res.Identity.Kind = Adacraft.Auth.Offline,
+             "R1 offline-identified only");
+   exception
+      when others =>
+         Check (False, "R1 no raise");
+   end Test_R1_Success_Bytes_And_Awaiting_Ack;
+
+   procedure Test_R2_Empty_Ack_To_Configuration is
+      use type LG.Start_Outcome;
+      use type LG.Ack_Outcome;
+      use type LG.Login_State;
+      use type ST.Connection_State;
+      Name : constant String := "Notch";
+      Payload : constant Octets := Build_Start_Payload (Name);
+      SRes : LG.Start_Result;
+      ARes : LG.Ack_Result;
+      Empty : constant Octets (1 .. 0) := (others => 0);
+      Cfg : constant ST.Connection_State := ST.Configuration;
+   begin
+      SRes := LG.Handle_Start (Fresh_Session, Payload, Adacraft.Auth.Offline);
+      Check (SRes.Outcome = LG.Ready_Success, "R2 setup success");
+      ARes := LG.Handle_Acknowledged (SRes.Session, Empty);
+      Check (ARes.Outcome = LG.To_Configuration, "R2 to configuration");
+      Check (ARes.Session.State = LG.Configuration, "R2 session config");
+      Check (Cfg = ST.Configuration, "R2 Configuration state");
+      Check (LG.Is_Login_Acknowledged (Empty), "R2 empty ack predicate");
+   exception
+      when others =>
+         Check (False, "R2 no raise");
+   end Test_R2_Empty_Ack_To_Configuration;
+
+   procedure Test_R3_Invalid_Name_Disconnect is
+      use type LG.Start_Outcome;
+      use type LG.Login_State;
+      Payload : constant Octets := Build_Start_Payload ("bad name");
+      Res : LG.Start_Result;
+      Exp : constant Octets :=
+        Expected_Disconnect (LG.Invalid_Name_Reason);
+      Got : constant Octets :=
+        Expected_Disconnect
+          (Res.Reason (1 .. Res.Reason_Len));
+   begin
+      Touch_Real_Units (Payload, 0);
+      Res := LG.Handle_Start (Fresh_Session, Payload, Adacraft.Auth.Offline);
+      Check (Res.Outcome = LG.Need_Disconnect_Close, "R3 disconnect close");
+      Check (Res.Session.State = LG.Closed, "R3 no awaiting-ack");
+      Check (not Res.Session.Success_Sent, "R3 no success sent");
+      Check (Res.Reason (1 .. Res.Reason_Len) = LG.Invalid_Name_Reason,
+             "R3 invalid-name reason");
+      Check (Octets_Equal (Got, Exp), "R3 disconnect bytes exact");
+      declare
+         Exp_S : constant Octets := Expected_Success ("Notch");
+      begin
+         Check (not Octets_Equal (Got, Exp_S), "R3 no success bytes");
+      end;
+   exception
+      when others =>
+         Check (False, "R3 no raise");
+   end Test_R3_Invalid_Name_Disconnect;
+
+   procedure Test_R4_Duplicate_Start_Disconnect is
+      use type LG.Start_Outcome;
+      use type LG.Login_State;
+      Payload : constant Octets := Build_Start_Payload ("Notch");
+      First : LG.Start_Result;
+      Second : LG.Start_Result;
+   begin
+      First := LG.Handle_Start (Fresh_Session, Payload, Adacraft.Auth.Offline);
+      Check (First.Outcome = LG.Ready_Success, "R4 setup success");
+      Second := LG.Handle_Start (First.Session, Payload, Adacraft.Auth.Offline);
+      Check (Second.Outcome = LG.Protocol_Error_Close, "R4 dup closed");
+      Check (Second.Session.State = LG.Closed, "R4 stays out of happy state");
+      Check (not Second.Session.Success_Sent, "R4 no second success");
+   exception
+      when others =>
+         Check (False, "R4 no raise");
+   end Test_R4_Duplicate_Start_Disconnect;
+
+   procedure Test_R5_Nonempty_Ack_Disconnect is
+      use type LG.Start_Outcome;
+      use type LG.Ack_Outcome;
+      use type LG.Login_State;
+      Payload : constant Octets := Build_Start_Payload ("Notch");
+      SRes : LG.Start_Result;
+      ARes : LG.Ack_Result;
+      Non_Empty : constant Octets (1 .. 1) := (others => 0);
+   begin
+      SRes := LG.Handle_Start (Fresh_Session, Payload, Adacraft.Auth.Offline);
+      Check (SRes.Outcome = LG.Ready_Success, "R5 setup success");
+      ARes := LG.Handle_Acknowledged (SRes.Session, Non_Empty);
+      Check (ARes.Outcome = LG.Protocol_Error_Close, "R5 disconnect close");
+      Check (ARes.Session.State = LG.Closed, "R5 not configuration");
+      Check (not LG.Is_Login_Acknowledged (Non_Empty), "R5 nonempty not ack");
+   exception
+      when others =>
+         Check (False, "R5 no raise");
+   end Test_R5_Nonempty_Ack_Disconnect;
+
+   procedure Test_R6_Malformed_No_Bytes_No_Escape is
+      use type LG.Start_Outcome;
+      use type LG.Login_Start_Status;
+      Trunc : constant Octets (1 .. 1) := (1 => 5);
+      Dec : LG.Login_Start;
+      Res : LG.Start_Result;
+      Raised : Boolean := False;
+   begin
+      begin
+         Dec := LG.Decode_Login_Start (Trunc);
+         Res := LG.Handle_Start (Fresh_Session, Trunc, Adacraft.Auth.Offline);
+      exception
+         when others =>
+            Raised := True;
+      end;
+      Check (not Raised, "R6 no exception escapes");
+      Check (Dec.Status = LG.Malformed, "R6 decoder reports malformed");
+      Check (Res.Outcome /= LG.Ready_Success, "R6 never success");
+      Check (not Res.Session.Success_Sent, "R6 zero success bytes");
+      declare
+         Bad : constant Octets (1 .. 2) := (1 => 16#FF#, 2 => 16#FF#);
+         D2 : constant LG.Login_Start := LG.Decode_Login_Start (Bad);
+      begin
+         Check (D2.Status = LG.Malformed, "R6 bad-length malformed");
+      end;
+   end Test_R6_Malformed_No_Bytes_No_Escape;
+
+   procedure Run_R1_R6_Unit is
+   begin
+      Test_R1_Success_Bytes_And_Awaiting_Ack;
+      Test_R2_Empty_Ack_To_Configuration;
+      Test_R3_Invalid_Name_Disconnect;
+      Test_R4_Duplicate_Start_Disconnect;
+      Test_R5_Nonempty_Ack_Disconnect;
+      Test_R6_Malformed_No_Bytes_No_Escape;
+   end Run_R1_R6_Unit;
+
    function Server_Ready (Port : Port_Type) return Boolean is
       S    : Socket_Type := No_Socket;
       Addr : Sock_Addr_Type;
@@ -353,6 +594,10 @@ procedure Test_Login_Server is
       Addr : Sock_Addr_Type;
       HS   : constant Octets := Build_Handshake (Version, 2);
       LS   : constant Octets := Build_Login_Start ("Notch");
+      Exp_Success : constant Octets := Expected_Success ("Notch");
+      Resp_Buf : Stream_Element_Array (1 .. 4096);
+      Last : Stream_Element_Offset := 0;
+      Got  : Boolean;
    begin
       Touch_Real_Units (HS, 0);
       Touch_Real_Units (LS, 0);
@@ -367,18 +612,54 @@ procedure Test_Login_Server is
             return;
       end;
       begin
+         --  Live R1: well-formed Start in Login state yields byte-exact
+         --  Login Success (id 0x02) and the connection stays open for Ack.
          Send_Packet (S, 0, HS);
          Send_Packet (S, 0, LS);
-         if Expect_Disconnect (S, Name) then
-            --  After Disconnect the server must close only this conn:
-            --  a further read must hit EOF/close, not hang.
+         Got := Read_Frame (S, Resp_Buf, Last);
+         Check (Got, Name & " got success frame");
+         if Got then
+            Check (Last >= Resp_Buf'First
+                   and then Resp_Buf (Resp_Buf'First) = 2,
+                   Name & " success packet id 2");
             declare
-               Piece : Stream_Element_Array
-                 (Stream_Element_Offset (1) .. Stream_Element_Offset (1));
-               N     : Stream_Element_Count;
+               Body_Len : Natural := Natural (Last - Resp_Buf'First + 1) - 1;
+               Got_Body : Octets (1 .. Body_Len + 1) := (others => 0);
             begin
-               N := Recv_With_Timeout (S, Piece, Io_Timeout);
-               Check (N <= 0, Name & " clean close after disconnect");
+               for I in 1 .. Body_Len loop
+                  Got_Body (I) :=
+                    Octet (Resp_Buf (Resp_Buf'First + Stream_Element_Offset (I)));
+               end loop;
+               --  Compare UUID+name tail against Encode_Login_Success
+               --  output tail (skip 1-byte packet id in both).
+               Check (Body_Len + 1 = Exp_Success'Length,
+                      Name & " success length exact");
+               if Body_Len + 1 = Exp_Success'Length then
+                  declare
+                     Match : Boolean := True;
+                  begin
+                     for I in 1 .. Exp_Success'Length - 1 loop
+                        if Got_Body (I) /=
+                          Exp_Success (Exp_Success'First + I)
+                        then
+                           Match := False;
+                        end if;
+                     end loop;
+                     Check (Match, Name & " success bytes exact");
+                  end;
+               end if;
+            end;
+            --  Live R2: empty Ack moves to Configuration with no extra
+            --  login bytes; server keeps connection open (no disconnect).
+            declare
+               Empty : constant Octets (1 .. 0) := (others => 0);
+               Buf2 : Stream_Element_Array (1 .. 4096);
+               Last2 : Stream_Element_Offset := 0;
+               Got2 : Boolean;
+            begin
+               Send_Packet (S, 3, Empty);
+               Got2 := Read_Frame (S, Buf2, Last2);
+               Check (not Got2, Name & " ack -> config, no extra login bytes");
             end;
          end if;
       exception
@@ -450,11 +731,12 @@ begin
       Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
       return;
    end if;
+   Run_R1_R6_Unit;
    if not Server_Ready (Port) then
       Check (False, "server ready on ephemeral port");
    else
-      Run_Case_Login (Port, 777, "v777 start->disconnect");
-      Run_Case_Login (Port, 760, "v!=777 start->disconnect");
+      Run_Case_Login (Port, 777, "v777 start->success");
+      Run_Case_Login (Port, 760, "v!=777 start->success");
       Run_Case_Invalid_In_Login (Port);
    end if;
    begin

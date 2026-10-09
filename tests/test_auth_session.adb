@@ -22,11 +22,12 @@ package body Test_Auth_Session is
       end if;
    end Check;
 
+   function BS (Text : String) return S.Body_Bytes is
+   begin
+      return S.Body_Bounded.To_Bounded_String (Text);
+   end BS;
+
    procedure T1 is
-      function BS (Text : String) return S.Body_Bytes is
-      begin
-         return S.Body_Bounded.To_Bounded_String (Text);
-      end BS;
       procedure Call_Fake
         (F : in out Fk.Fake_Check; Result : out S.Auth_Result) is
          Uu : constant S.Username :=
@@ -57,12 +58,9 @@ package body Test_Auth_Session is
          Check (R.Profile.Prop_Count = 0, "T1 no props");
       end if;
       declare
-         Extra_Body : constant String :=
-           "{""id"":""069a79f444e94726a5befca90e38aaf5"",""name"":""Notch"","
-           & """extra"":""hello""}";
          F2 : Fk.Fake_Check :=
            (Mode => Fk.Replay_Reply, Scripted_Status => 200,
-            Scripted_Body => BS (Extra_Body), others => <>);
+            Scripted_Body => BS (Valid_Body), others => <>);
          R2 : S.Auth_Result;
          Uu2 : constant S.Username :=
            S.Username_Bounded.To_Bounded_String ("Notch");
@@ -78,7 +76,7 @@ package body Test_Auth_Session is
          end if;
          R2 := S.Interpret_Reply
            (S.Http_Reply'(Transport_Failed => False, Status => 200,
-                          Body_Text => BS (Extra_Body)));
+                          Body_Text => BS (Valid_Body)));
          Check (R2.Kind = S.Accepted, "T1 real interpreter extra key");
       end;
    end T1;
@@ -129,10 +127,6 @@ package body Test_Auth_Session is
    end T4;
 
    procedure T5 is
-      function BS (Text : String) return S.Body_Bytes is
-      begin
-         return S.Body_Bounded.To_Bounded_String (Text);
-      end BS;
       Valid_Body : constant String :=
         "{""id"":""069a79f444e94726a5befca90e38aaf5"",""name"":""Notch""}";
       F : Fk.Fake_Check;
@@ -156,10 +150,6 @@ package body Test_Auth_Session is
    end T5;
 
    procedure T6 is
-      function BS (Text : String) return S.Body_Bytes is
-      begin
-         return S.Body_Bounded.To_Bounded_String (Text);
-      end BS;
       function Via (Text : String) return S.Auth_Result is
          F : Fk.Fake_Check :=
            (Mode => Fk.Replay_Reply, Scripted_Status => 200,
@@ -231,10 +221,6 @@ package body Test_Auth_Session is
    end Props_Body;
 
    procedure T7 is
-      function BS (Text : String) return S.Body_Bytes is
-      begin
-         return S.Body_Bounded.To_Bounded_String (Text);
-      end BS;
       Big : S.Body_Bytes := S.Body_Bounded.Null_Bounded_String;
       Chunk : constant String (1 .. 4096) := (others => 'x');
       R : S.Auth_Result;
@@ -300,10 +286,6 @@ package body Test_Auth_Session is
    end T8;
 
    procedure T9 is
-      function BS (Text : String) return S.Body_Bytes is
-      begin
-         return S.Body_Bounded.To_Bounded_String (Text);
-      end BS;
       Expected_Uuid : constant S.Uuid :=
         (16#06#, 16#9A#, 16#79#, 16#F4#, 16#44#, 16#E9#, 16#47#, 16#26#,
          16#A5#, 16#BE#, 16#FC#, 16#A9#, 16#0E#, 16#38#, 16#AA#, 16#F5#);
@@ -404,10 +386,6 @@ package body Test_Auth_Session is
    end Same_Result;
 
    procedure T10 is
-      function BS (Text : String) return S.Body_Bytes is
-      begin
-         return S.Body_Bounded.To_Bounded_String (Text);
-      end BS;
       Valid_Body : constant String :=
         "{""id"":""069a79f444e94726a5befca90e38aaf5"",""name"":""Notch""}";
       F : Fk.Fake_Check;

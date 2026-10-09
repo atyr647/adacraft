@@ -14,7 +14,7 @@ bin/test_protocol_state: tests/test_protocol_state.adb
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_protocol_state.adb -o $@
 
-bin/adacraft_tests: tests/adacraft_tests.adb
+bin/adacraft_tests: tests/adacraft_tests.adb tests/test_auth_session.adb tests/test_auth_session.ads src/auth/adacraft-auth-session.ads src/auth/adacraft-auth-session.adb src/auth/adacraft-auth-session_fake.ads src/auth/adacraft-auth-session_fake.adb
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/adacraft_tests.adb -o $@
 

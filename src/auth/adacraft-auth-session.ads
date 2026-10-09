@@ -5,7 +5,9 @@
 with Ada.Strings.Bounded;
 with Interfaces;
 
-package Adacraft.Auth.Session is
+package Adacraft.Auth.Session
+  with SPARK_Mode => On
+is
 
    Max_Body_Bytes : constant := 65_536;
    Max_Properties : constant := 16;

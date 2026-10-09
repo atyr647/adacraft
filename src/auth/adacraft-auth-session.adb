@@ -1,6 +1,6 @@
 with Interfaces;
 
-package body Adacraft.Auth.Session is
+package body Adacraft.Auth.Session with SPARK_Mode => On is
    use type Interfaces.Unsigned_8;
 
    function Is_Hex (C : Character) return Boolean is
@@ -9,6 +9,41 @@ package body Adacraft.Auth.Session is
         or else (C in 'a' .. 'f')
         or else (C in 'A' .. 'F');
    end Is_Hex;
+
+   function Is_Hex4 (S : String; P : Natural) return Boolean is
+   begin
+      if P + 3 > S'Last then
+         return False;
+      end if;
+      for K in P .. P + 3 loop
+         if not Is_Hex (S (K)) then
+            return False;
+         end if;
+      end loop;
+      return True;
+   end Is_Hex4;
+
+   function Is_Simple_Escape (E : Character) return Boolean is
+   begin
+      case E is
+         when '"' | '\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' =>
+            return True;
+         when others =>
+            return False;
+      end case;
+   end Is_Simple_Escape;
+
+   function Unescape (E : Character) return Character is
+   begin
+      case E is
+         when 'b'    => return ASCII.BS;
+         when 'f'    => return ASCII.FF;
+         when 'n'    => return ASCII.LF;
+         when 'r'    => return ASCII.CR;
+         when 't'    => return ASCII.HT;
+         when others => return E;
+      end case;
+   end Unescape;
 
    function Nibble (C : Character) return Interfaces.Unsigned_8 is
    begin
@@ -100,46 +135,28 @@ package body Adacraft.Auth.Session is
             end if;
             declare
                E : constant Character := S (P + 1);
-               C : Character;
             begin
-               case E is
-                  when '"'    => C := '"';
-                  when '\'    => C := '\';
-                  when '/'    => C := '/';
-                  when 'b'    => C := ASCII.BS;
-                  when 'f'    => C := ASCII.FF;
-                  when 'n'    => C := ASCII.LF;
-                  when 'r'    => C := ASCII.CR;
-                  when 't'    => C := ASCII.HT;
-                  when 'u'    =>
-                     --  Skip 4 hex digits; store placeholder.
-                     if P + 5 > S'Last then
-                        return;
-                     end if;
-                     for K in P + 2 .. P + 5 loop
-                        if not Is_Hex (S (K)) then
-                           return;
-                        end if;
-                     end loop;
-                     C := '?';
-                     if Out_Next > Cap then
-                        return;
-                     end if;
-                     Buf (Out_Next) := C;
-                     Out_Next := Out_Next + 1;
-                     P := P + 6;
-                     goto Continue_Loop;
-                  when others =>
+               if E = 'u' then
+                  --  Skip 4 hex digits; store placeholder.
+                  if not Is_Hex4 (S, P + 2) then
                      return;
-               end case;
-               if Out_Next > Cap then
+                  end if;
+                  if Out_Next > Cap then
+                     return;
+                  end if;
+                  Buf (Out_Next) := '?';
+                  Out_Next := Out_Next + 1;
+                  P := P + 6;
+               elsif Is_Simple_Escape (E) then
+                  if Out_Next > Cap then
+                     return;
+                  end if;
+                  Buf (Out_Next) := Unescape (E);
+                  Out_Next := Out_Next + 1;
+                  P := P + 2;
+               else
                   return;
                end if;
-               Buf (Out_Next) := C;
-               Out_Next := Out_Next + 1;
-               P := P + 2;
-               <<Continue_Loop>>
-               null;
             end;
          else
             if Out_Next > Cap then
@@ -320,22 +337,14 @@ package body Adacraft.Auth.Session is
                return;
             end if;
             if S (P + 1) = 'u' then
-               if P + 5 > S'Last then
+               if not Is_Hex4 (S, P + 2) then
                   return;
                end if;
-               for K in P + 2 .. P + 5 loop
-                  if not Is_Hex (S (K)) then
-                     return;
-                  end if;
-               end loop;
                P := P + 6;
+            elsif Is_Simple_Escape (S (P + 1)) then
+               P := P + 2;
             else
-               case S (P + 1) is
-                  when '"' | '\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' =>
-                     P := P + 2;
-                  when others =>
-                     return;
-               end case;
+               return;
             end if;
          elsif S (P) = '"' then
             P := P + 1;
@@ -608,29 +617,24 @@ package body Adacraft.Auth.Session is
       end loop;
    end Parse_Document;
 
-   function Map_No_Profile return Auth_Result is
+   function Map_Reject (Reason : Disconnect_Reason) return Auth_Result is
    begin
-      return (Kind => Rejected, Reason => Auth_Failed);
-   end Map_No_Profile;
-
-   function Map_Error return Auth_Result is
-   begin
-      return (Kind => Rejected, Reason => Auth_Service_Unavailable);
-   end Map_Error;
+      return (Kind => Rejected, Reason => Reason);
+   end Map_Reject;
 
    function Interpret_Reply (Reply : Http_Reply) return Auth_Result is
    begin
       if Reply.Transport_Failed then
-         return Map_Error;
+         return Map_Reject (Auth_Service_Unavailable);
       end if;
       if Reply.Status = 204 then
-         return Map_No_Profile;
+         return Map_Reject (Auth_Failed);
       end if;
       if Reply.Status /= 200 then
-         return Map_Error;
+         return Map_Reject (Auth_Service_Unavailable);
       end if;
       if Body_Bounded.Length (Reply.Body_Text) = 0 then
-         return Map_No_Profile;
+         return Map_Reject (Auth_Failed);
       end if;
       declare
          Text     : constant String := Body_Bounded.To_String (Reply.Body_Text);
@@ -644,13 +648,13 @@ package body Adacraft.Auth.Session is
          Parse_Document (Text, Id_Buf, Id_Len, Name_Buf, Name_Len,
                          Props, Count, Ok);
          if not Ok then
-            return Map_Error;
+            return Map_Reject (Auth_Service_Unavailable);
          end if;
          if Id_Len /= 32 or else not Is_32_Hex (Id_Buf (1 .. Id_Len)) then
-            return Map_Error;
+            return Map_Reject (Auth_Service_Unavailable);
          end if;
          if Name_Len = 0 or else Name_Len > Max_Name_Chars then
-            return Map_Error;
+            return Map_Reject (Auth_Service_Unavailable);
          end if;
          declare
             P : Auth_Profile;

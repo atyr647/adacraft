@@ -4,7 +4,7 @@ FLAGS := -gnat2022 -gnata -D obj
 
 .PHONY: all test server clean check check-packets-table
 
-all: bin/adacraft bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus bin/test_protocol_login
+all: bin/adacraft bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus bin/test_protocol_login bin/test_login_encryption
 
 bin/test_protocol_varnum: tests/test_protocol_varnum.adb
 	mkdir -p bin obj
@@ -17,6 +17,10 @@ bin/test_protocol_state: tests/test_protocol_state.adb
 bin/test_protocol_login: tests/test_protocol_login.adb
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_protocol_login.adb -o $@
+
+bin/test_login_encryption: tests/test_login_encryption.adb
+	mkdir -p bin obj
+	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_login_encryption.adb -o $@
 
 bin/adacraft_tests: tests/adacraft_tests.adb
 	mkdir -p bin obj
@@ -38,7 +42,7 @@ bin/adacraft: src/adacraft_server.adb
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) src/adacraft_server.adb -o $@
 
-test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus bin/test_protocol_login
+test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus bin/test_protocol_login bin/test_login_encryption
 	$(MAKE) --no-print-directory check-packets-table
 	$(MAKE) --no-print-directory check
 	./bin/adacraft_tests
@@ -46,6 +50,7 @@ test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/t
 	./bin/test_protocol_varnum
 	./bin/test_protocol_state
 	./bin/test_protocol_login
+	./bin/test_login_encryption
 	./bin/test_corpus_loader
 	./bin/test_golden_corpus
 

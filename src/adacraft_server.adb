@@ -16,12 +16,15 @@ procedure Adacraft_Server is
      (Current          : in out Adacraft.Protocol.State.Connection_State;
       Packet_Id        : in     Natural;
       Payload          : in     Adacraft.Protocol.Octets;
+      Stored           : in out Adacraft.Protocol.Handshake_Exchange.Connection_Data;
+      Sess             : in out Adacraft.Protocol.Status_Exchange.Session;
       Response_Id      :    out Natural;
       Response_Data    : in out Adacraft.Protocol.Octets;
       Response_Len     :    out Natural;
       Close_Connection :    out Boolean)
    is
       use type Adacraft.Protocol.State.Connection_State;
+      use type Adacraft.Protocol.Handshake_Exchange.Handle_Result;
    begin
       case Current is
          when Adacraft.Protocol.State.Handshake =>
@@ -32,13 +35,20 @@ procedure Adacraft_Server is
                  (Packet_Id => Packet_Id,
                   Payload   => Payload,
                   Current   => Current,
+                  Stored    => Stored,
                   Result    => H_Res);
                Response_Id := 0;
                Response_Len := 0;
                for I in Response_Data'Range loop
                   Response_Data (I) := 0;
                end loop;
-               Close_Connection := False;
+               if H_Res = Adacraft.Protocol.Handshake_Exchange.Accepted_Status
+                 or else H_Res = Adacraft.Protocol.Handshake_Exchange.Accepted_Login
+               then
+                  Close_Connection := False;
+               else
+                  Close_Connection := True;
+               end if;
             end;
          when Adacraft.Protocol.State.Status =>
             declare
@@ -48,6 +58,7 @@ procedure Adacraft_Server is
                  (Packet_Id        => Packet_Id,
                   Payload          => Payload,
                   Current          => Current,
+                  Session_State    => Sess,
                   Result           => S_Res,
                   Response_Id      => Response_Id,
                   Response_Data    => Response_Data,
@@ -69,6 +80,8 @@ procedure Adacraft_Server is
      (Current          : in out Adacraft.Protocol.State.Connection_State;
       Buffer           : in     Adacraft.Protocol.Octets;
       From             : in     Positive;
+      Stored           : in out Adacraft.Protocol.Handshake_Exchange.Connection_Data;
+      Sess             : in out Adacraft.Protocol.Status_Exchange.Session;
       Response_Id      :    out Natural;
       Response_Data    : in out Adacraft.Protocol.Octets;
       Response_Len     :    out Natural;
@@ -97,13 +110,14 @@ procedure Adacraft_Server is
               (others => <>);
          begin
             Dispatch_Decoded_Frame
-              (Current, F.Packet_Id, Empty,
+              (Current, F.Packet_Id, Empty, Stored, Sess,
                Response_Id, Response_Data, Response_Len, Close_Connection);
          end;
       else
          Dispatch_Decoded_Frame
            (Current, F.Packet_Id,
             Buffer (F.Payload_First .. F.Payload_Last),
+            Stored, Sess,
             Response_Id, Response_Data, Response_Len, Close_Connection);
       end if;
    end Dispatch_Raw_Buffer;

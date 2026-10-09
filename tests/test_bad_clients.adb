@@ -19,6 +19,7 @@ procedure Test_Bad_Clients is
    use type S.Connection_State;
    use type HE.Handle_Result;
    use type V.Status_Type;
+   use type Adacraft.Network.Conn_Access;
 
    Failures : Natural := 0;
 
@@ -315,6 +316,122 @@ begin
              "unknown-id conn closed only");
       Check (Res_B = HE.Accepted_Login and then Cur_B = S.Login,
              "good conn still logs in");
+   end;
+
+   --  Accept / slot / teardown paths in-process: proves Find_Free_Slot
+   --  and Accept_Ready keep accepting and free slots on close. With the
+   --  Find_Free_Slot mutant (never finds a free slot) every accept is
+   --  closed at once and these checks fail. Uses real loopback sockets
+   --  but drives Accept_Ready / Close_Conn directly, no event-loop task.
+   declare
+      use GNAT.Sockets;
+      function Used_Slots return Natural is
+         N : Natural := 0;
+      begin
+         for I in 1 .. Adacraft.Network.Max_Conns loop
+            if Adacraft.Network.Conn_Table (I) /= null then
+               N := N + 1;
+            end if;
+         end loop;
+         return N;
+      end Used_Slots;
+      function First_Used return Natural is
+      begin
+         for I in 1 .. Adacraft.Network.Max_Conns loop
+            if Adacraft.Network.Conn_Table (I) /= null then
+               return I;
+            end if;
+         end loop;
+         return 0;
+      end First_Used;
+      Listener : Socket_Type := No_Socket;
+      L_Addr   : Sock_Addr_Type;
+      L_Port   : Port_Type;
+      C1       : Socket_Type := No_Socket;
+      C2       : Socket_Type := No_Socket;
+      C3       : Socket_Type := No_Socket;
+      Raised   : Boolean := False;
+      N0, N1, N2, N3 : Natural := 0;
+      Slot_To_Free   : Natural := 0;
+   begin
+      begin
+         Adacraft.Network.Initialize_Listener (0, Listener);
+         L_Addr := Get_Socket_Name (Listener);
+         L_Port := L_Addr.Port;
+         Check (L_Port /= 0, "ephemeral listener bound");
+         N0 := Used_Slots;
+         Check (N0 = 0, "no conns before accept");
+         --  First client: connect then accept.
+         Create_Socket (C1);
+         L_Addr.Addr := Inet_Addr ("127.0.0.1");
+         L_Addr.Port := L_Port;
+         Connect_Socket (C1, L_Addr);
+         Adacraft.Network.Accept_Ready (Listener);
+         N1 := Used_Slots;
+         Check (N1 = N0 + 1, "first accept occupies a slot");
+         --  Garbage/second client still accepted while first is held.
+         Create_Socket (C2);
+         Connect_Socket (C2, L_Addr);
+         Adacraft.Network.Accept_Ready (Listener);
+         N2 := Used_Slots;
+         Check (N2 = N1 + 1, "second accept served while first held");
+         --  Teardown frees exactly one slot.
+         Slot_To_Free := First_Used;
+         Check (Slot_To_Free /= 0, "a slot is occupied to free");
+         if Slot_To_Free /= 0 then
+            Adacraft.Network.Close_Conn (Slot_To_Free, "test teardown");
+         end if;
+         N3 := Used_Slots;
+         Check (N3 + 1 = N2, "close frees only that conn");
+         --  After teardown a fresh client is still accepted.
+         Create_Socket (C3);
+         Connect_Socket (C3, L_Addr);
+         Adacraft.Network.Accept_Ready (Listener);
+         Check (Used_Slots = N3 + 1, "accept works after teardown");
+      exception
+         when others =>
+            Raised := True;
+      end;
+      Check (not Raised, "accept/slot/teardown no raise, no exit");
+      --  Cleanup: release everything this block allocated.
+      begin
+         for I in 1 .. Adacraft.Network.Max_Conns loop
+            if Adacraft.Network.Conn_Table (I) /= null then
+               Adacraft.Network.Close_Conn (I);
+            end if;
+         end loop;
+      exception
+         when others => null;
+      end;
+      begin
+         if C1 /= No_Socket then
+            Close_Socket (C1);
+         end if;
+      exception
+         when others => null;
+      end;
+      begin
+         if C2 /= No_Socket then
+            Close_Socket (C2);
+         end if;
+      exception
+         when others => null;
+      end;
+      begin
+         if C3 /= No_Socket then
+            Close_Socket (C3);
+         end if;
+      exception
+         when others => null;
+      end;
+      begin
+         if Listener /= No_Socket then
+            Close_Socket (Listener);
+         end if;
+      exception
+         when others => null;
+      end;
+      Check (Used_Slots = 0, "all slots freed after cleanup");
    end;
 
    if Failures = 0 then

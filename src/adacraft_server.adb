@@ -25,6 +25,8 @@ procedure Adacraft_Server is
    procedure Handle_Login (Frame_Body : Adacraft.Protocol.Octets) is
       use type Adacraft.Protocol.Packet_Decoder.Decode_Status;
       use type Adacraft.Protocol.State.Connection_State;
+      use type Interfaces.Integer_32;
+      use type Adacraft.Protocol.Login.Login_Start_Status;
       Lay    : Adacraft.Protocol.Packet_Decoder.Layout_Type;
       Dec_Id : Interfaces.Integer_32 := 0;
       Fields : Adacraft.Protocol.Packet_Decoder.Field_Array;

@@ -4,7 +4,7 @@ FLAGS := -gnat2022 -gnata -D obj
 
 .PHONY: all test server clean check check-packets-table
 
-all: bin/adacraft bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus bin/test_protocol_login bin/test_bad_clients
+all: bin/adacraft bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus bin/test_protocol_login bin/test_bad_clients bin/test_login_server
 
 bin/test_protocol_varnum: tests/test_protocol_varnum.adb
 	mkdir -p bin obj
@@ -42,7 +42,11 @@ bin/test_bad_clients: tests/test_bad_clients.adb
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_bad_clients.adb -o $@
 
-test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus bin/test_protocol_login bin/test_bad_clients
+bin/test_login_server: tests/test_login_server.adb bin/adacraft
+	mkdir -p bin obj
+	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_login_server.adb -o $@
+
+test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus bin/test_protocol_login bin/test_bad_clients bin/test_login_server
 	$(MAKE) --no-print-directory check-packets-table
 	$(MAKE) --no-print-directory check
 	./bin/adacraft_tests
@@ -53,6 +57,7 @@ test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/t
 	./bin/test_corpus_loader
 	./bin/test_golden_corpus
 	./bin/test_bad_clients
+	./bin/test_login_server
 
 # Regenerates Adacraft.Protocol.Ids from the committed packets.json, compares
 # it with the committed file, and checks the report SHA-256 recorded in the

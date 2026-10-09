@@ -37,16 +37,16 @@ package body Adacraft.Corpus.Runner is
    function Frame_Packet
      (Pid : Natural; WB : P.Buffer.Writer) return Byte_Vectors.Vector
    is
-      use type Interfaces.Unsigned_32;
-      Body_W : P.Buffer.Writer (Capacity => WB.Len + 16 + 1);
       Framed : P.Buffer.Writer (Capacity => WB.Len + 32 + 1);
       Result : Byte_Vectors.Vector;
+      Tmp    : P.Buffer.Writer (Capacity => WB.Len + 32 + 1);
    begin
-      P.Buffer.Put_Varint (Body_W, Interfaces.Unsigned_32 (Pid));
-      for I in 1 .. WB.Len loop
-         P.Buffer.Put_Octet (Body_W, WB.Data (I));
-      end loop;
-      if P.Packets.Frame (Framed, Body_W) and then not Framed.Failed then
+      --  WB already holds the full packet body including its id
+      --  (Encode_Login_Success / Encode_Login_Disconnect write it),
+      --  so frame it directly without prepending Pid again.
+      pragma Unreferenced (Pid);
+      Tmp := WB;
+      if P.Packets.Frame (Framed, Tmp) and then not Framed.Failed then
          for I in 1 .. Framed.Len loop
             Result.Append (Framed.Data (I));
          end loop;

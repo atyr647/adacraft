@@ -5,8 +5,6 @@
 --  Cases: v=777 Start -> Disconnect+close; v/=777 Start -> Disconnect
 --  (not silent close); invalid-in-Login (Status Request) -> close, no hang.
 --  Every socket wait uses Check_Selector timeouts so CI never hangs.
---  NOTE: expected to FAIL until the server Login branch lands; the build
---  must stay green.
 
 with Ada.Command_Line;
 with Ada.Streams;
@@ -413,9 +411,8 @@ procedure Test_Login_Server is
       S    : Socket_Type := No_Socket;
       Addr : Sock_Addr_Type;
       HS   : constant Octets := Build_Handshake (777, 2);
-      Empty : constant Octets (2 .. 1) := (others => 0);
-      Resp_Buf : Stream_Element_Array
-        (Stream_Element_Offset (1) .. Stream_Element_Offset (32_768));
+      Empty : constant Octets (1 .. 0) := (others => 0);
+      Resp_Buf : Stream_Element_Array (1 .. 4096);
       Last : Stream_Element_Offset := 0;
       Got  : Boolean;
    begin

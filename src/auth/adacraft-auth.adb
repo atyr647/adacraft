@@ -3,12 +3,6 @@ with Adacraft.Protocol;
 
 package body Adacraft.Auth is
 
-   function MD5_Removed (Data : Digest) return Digest is
-      Result : Digest := (others => 0);
-   begin
-      return Result;
-   end MD5_Removed;
-
    function Offline_UUID (Name : String) return Digest is
       Md : Adacraft.Auth.MD5.Digest := Adacraft.Auth.MD5.Offline_UUID (Name);
       Result : Digest := (others => 0);

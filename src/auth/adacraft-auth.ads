@@ -17,9 +17,6 @@ package Adacraft.Auth is
       Name        : String (1 .. 16) := (others => ' ');
    end record;
 
-   function MD5 (Data : Adacraft.Protocol.Octets) return Digest
-     with Pre => Data'Length <= 256;
-
    function Offline_UUID (Name : String) return Digest
      with Pre => Name'Length in 1 .. 16;
 end Adacraft.Auth;

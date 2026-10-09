@@ -88,8 +88,6 @@ is
       --  behaviour is unchanged. Any LOGIN packet after the
       --  transition to CONFIGURATION also rejects via the state
       --  checks above.
-      pragma Assert (not Table.Is_Serverbound_Login (Current, Id)
-                     or else True);
       return Dispatch_Reject;
    end Dispatch_Login;
 

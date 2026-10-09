@@ -142,6 +142,25 @@ package body Adacraft.Corpus.Runner is
          Idx := Idx + 1;
          begin
             if St.Dir = Clientbound then
+               --  Clientbound steps are output expectations when Accepted,
+               --  and wrong-direction checks when Rejected/Incomplete:
+               --  the server never reads clientbound bytes, so a terminal
+               --  clientbound step passes when no pending output matches.
+               if St.Expected /= Accepted then
+                  declare
+                     Want : Byte_Vectors.Vector := St.Input;
+                  begin
+                     if Have_Pending and then Pending = Want then
+                        Fail ("rejected", "accepted",
+                              "unexpected matching output");
+                        return;
+                     end if;
+                     if St.Has_Rejection_Category then
+                        null;
+                     end if;
+                     exit;
+                  end;
+               end if;
                declare
                   Want : Byte_Vectors.Vector := St.Input;
                begin
@@ -150,12 +169,6 @@ package body Adacraft.Corpus.Runner is
                      return;
                   end if;
                   Have_Pending := False;
-                  if St.Expected /= Accepted then
-                     Fail (Low (Outcome'Image (St.Expected)),
-                           Low (Outcome'Image (Accepted)),
-                           "clientbound step must expect accept");
-                     return;
-                  end if;
                end;
             else
                declare

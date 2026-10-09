@@ -44,6 +44,9 @@ package Adacraft.Network is
 
    procedure Accept_Ready (Listener : GNAT.Sockets.Socket_Type);
 
+   procedure Handle_Frame_Body
+     (C : Conn_Access; Frame_Data : Adacraft.Protocol.Frame.Byte_Array);
+
    procedure Service_Readable (Idx : Positive);
 
    procedure Service_Writable (Idx : Positive);

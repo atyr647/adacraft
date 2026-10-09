@@ -24,6 +24,8 @@ package body Adacraft.Corpus.Runner is
    use type Adacraft.Network.Conn_Access;
    use type Ada.Streams.Stream_Element_Offset;
    use type Adacraft.Protocol.State.Connection_State;
+   use type Adacraft.Protocol.Handshake_Exchange.Handle_Result;
+   use type Adacraft.Protocol.Status_Exchange.Handle_Result;
 
    function Img (N : Natural) return String is
      (Ada.Strings.Fixed.Trim (Natural'Image (N), Ada.Strings.Left));

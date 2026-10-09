@@ -1,10 +1,12 @@
 with Ada.Command_Line;
 with Ada.Text_IO;
+with Adacraft.Auth.Session;
 with Adacraft.Auth.Session_Fake;
 with Interfaces;
 
 package body Test_Auth_Session is
-   package S renames Adacraft.Auth.Session_Fake;
+   package S renames Adacraft.Auth.Session;
+   package Fk renames Adacraft.Auth.Session_Fake;
    use type S.Result_Kind;
    use type S.Disconnect_Reason;
    use type S.Uuid;
@@ -26,7 +28,7 @@ package body Test_Auth_Session is
          return S.Body_Bounded.To_Bounded_String (Text);
       end BS;
       procedure Call_Fake
-        (F : in out S.Fake_Check; Result : out S.Auth_Result) is
+        (F : in out Fk.Fake_Check; Result : out S.Auth_Result) is
          Uu : constant S.Username :=
            S.Username_Bounded.To_Bounded_String ("Notch");
          Hh : constant S.Server_Hash :=
@@ -36,14 +38,15 @@ package body Test_Auth_Session is
          Result := F.Has_Joined (Uu, Hh, Ip);
       end Call_Fake;
       Valid_Body : constant String :=
-        "{""id"":""069a79f444e94726a5befca90e38aaf5"",""name"":""Notch""}";
+        "{""id"":""069a79f444e94726a5befca90e38aaf5"",""name"":""Notch"","
+        & """extra"":""hello""}";
       Expected_Uuid : constant S.Uuid :=
         (16#06#, 16#9A#, 16#79#, 16#F4#, 16#44#, 16#E9#, 16#47#, 16#26#,
          16#A5#, 16#BE#, 16#FC#, 16#A9#, 16#0E#, 16#38#, 16#AA#, 16#F5#);
-      F : S.Fake_Check;
+      F : Fk.Fake_Check;
       R : S.Auth_Result;
    begin
-      F := (Mode => S.Replay_Reply, Scripted_Status => 200,
+      F := (Mode => Fk.Replay_Reply, Scripted_Status => 200,
             Scripted_Body => BS (Valid_Body), others => <>);
       Call_Fake (F, R);
       Check (R.Kind = S.Accepted, "T1 accept kind");
@@ -53,16 +56,41 @@ package body Test_Auth_Session is
                 "T1 name");
          Check (R.Profile.Prop_Count = 0, "T1 no props");
       end if;
+      declare
+         Extra_Body : constant String :=
+           "{""id"":""069a79f444e94726a5befca90e38aaf5"",""name"":""Notch"","
+           & """extra"":""hello""}";
+         F2 : Fk.Fake_Check :=
+           (Mode => Fk.Replay_Reply, Scripted_Status => 200,
+            Scripted_Body => BS (Extra_Body), others => <>);
+         R2 : S.Auth_Result;
+         Uu2 : constant S.Username :=
+           S.Username_Bounded.To_Bounded_String ("Notch");
+         Hh2 : constant S.Server_Hash :=
+           S.Hash_Bounded.To_Bounded_String ("hash1");
+      begin
+         R2 := F2.Has_Joined (Uu2, Hh2, (Present => False));
+         Check (R2.Kind = S.Accepted, "T1 extra string key accept");
+         if R2.Kind = S.Accepted then
+            Check (R2.Profile.Id = Expected_Uuid, "T1 extra uuid");
+            Check (S.Profile_Name_Bounded.To_String (R2.Profile.Name)
+                   = "Notch", "T1 extra name");
+         end if;
+         R2 := S.Interpret_Reply
+           (S.Http_Reply'(Transport_Failed => False, Status => 200,
+                          Body_Text => BS (Extra_Body)));
+         Check (R2.Kind = S.Accepted, "T1 real interpreter extra key");
+      end;
    end T1;
 
    procedure T2 is
-      F : S.Fake_Check;
+      F : Fk.Fake_Check;
       R : S.Auth_Result;
       Uu : constant S.Username := S.Username_Bounded.To_Bounded_String ("Notch");
       Hh : constant S.Server_Hash := S.Hash_Bounded.To_Bounded_String ("h");
       Ip : constant S.Optional_Ip := (Present => False);
    begin
-      F := (Mode => S.Replay_Reply, Scripted_Status => 204,
+      F := (Mode => Fk.Replay_Reply, Scripted_Status => 204,
             Scripted_Body => S.Body_Bounded.Null_Bounded_String, others => <>);
       R := F.Has_Joined (Uu, Hh, Ip);
       Check (R.Kind = S.Rejected and then R.Reason = S.Auth_Failed,
@@ -70,13 +98,13 @@ package body Test_Auth_Session is
    end T2;
 
    procedure T3 is
-      F : S.Fake_Check;
+      F : Fk.Fake_Check;
       R : S.Auth_Result;
       Uu : constant S.Username := S.Username_Bounded.To_Bounded_String ("Notch");
       Hh : constant S.Server_Hash := S.Hash_Bounded.To_Bounded_String ("h");
       Ip : constant S.Optional_Ip := (Present => False);
    begin
-      F := (Mode => S.Replay_Reply, Scripted_Status => 200,
+      F := (Mode => Fk.Replay_Reply, Scripted_Status => 200,
             Scripted_Body => S.Body_Bounded.Null_Bounded_String, others => <>);
       R := F.Has_Joined (Uu, Hh, Ip);
       Check (R.Kind = S.Rejected and then R.Reason = S.Auth_Failed,
@@ -84,13 +112,13 @@ package body Test_Auth_Session is
    end T3;
 
    procedure T4 is
-      F : S.Fake_Check;
+      F : Fk.Fake_Check;
       R, R2 : S.Auth_Result;
       Uu : constant S.Username := S.Username_Bounded.To_Bounded_String ("Notch");
       Hh : constant S.Server_Hash := S.Hash_Bounded.To_Bounded_String ("h");
       Ip : constant S.Optional_Ip := (Present => False);
    begin
-      F := (Mode => S.Fail_Transport, others => <>);
+      F := (Mode => Fk.Fail_Transport, others => <>);
       R := F.Has_Joined (Uu, Hh, Ip);
       Check (R.Kind = S.Rejected and then R.Reason = S.Auth_Service_Unavailable,
              "T4 transport unavailable");
@@ -107,19 +135,19 @@ package body Test_Auth_Session is
       end BS;
       Valid_Body : constant String :=
         "{""id"":""069a79f444e94726a5befca90e38aaf5"",""name"":""Notch""}";
-      F : S.Fake_Check;
+      F : Fk.Fake_Check;
       R, R2 : S.Auth_Result;
       Uu : constant S.Username := S.Username_Bounded.To_Bounded_String ("Notch");
       Hh : constant S.Server_Hash := S.Hash_Bounded.To_Bounded_String ("h");
       Ip : constant S.Optional_Ip := (Present => False);
    begin
-      F := (Mode => S.Replay_Reply, Scripted_Status => 500,
+      F := (Mode => Fk.Replay_Reply, Scripted_Status => 500,
             Scripted_Body => BS (Valid_Body), others => <>);
       R := F.Has_Joined (Uu, Hh, Ip);
       Check (R.Kind = S.Rejected
              and then R.Reason = S.Auth_Service_Unavailable,
              "T5 500 unavailable");
-      F := (Mode => S.Replay_Reply, Scripted_Status => 404,
+      F := (Mode => Fk.Replay_Reply, Scripted_Status => 404,
             Scripted_Body => BS (Valid_Body), others => <>);
       R2 := F.Has_Joined (Uu, Hh, Ip);
       Check (R2.Kind = S.Rejected
@@ -133,8 +161,8 @@ package body Test_Auth_Session is
          return S.Body_Bounded.To_Bounded_String (Text);
       end BS;
       function Via (Text : String) return S.Auth_Result is
-         F : S.Fake_Check :=
-           (Mode => S.Replay_Reply, Scripted_Status => 200,
+         F : Fk.Fake_Check :=
+           (Mode => Fk.Replay_Reply, Scripted_Status => 200,
             Scripted_Body => BS (Text), others => <>);
          Uu : constant S.Username :=
            S.Username_Bounded.To_Bounded_String ("Notch");
@@ -246,7 +274,7 @@ package body Test_Auth_Session is
    end T7;
 
    procedure T8 is
-      F8 : S.Fake_Check := (Mode => S.Return_Accepted, others => <>);
+      F8 : Fk.Fake_Check := (Mode => Fk.Return_Accepted, others => <>);
       Uu : constant S.Username :=
         S.Username_Bounded.To_Bounded_String ("Steve");
       Hh : constant S.Server_Hash :=
@@ -279,7 +307,7 @@ package body Test_Auth_Session is
       Expected_Uuid : constant S.Uuid :=
         (16#06#, 16#9A#, 16#79#, 16#F4#, 16#44#, 16#E9#, 16#47#, 16#26#,
          16#A5#, 16#BE#, 16#FC#, 16#A9#, 16#0E#, 16#38#, 16#AA#, 16#F5#);
-      F9 : S.Fake_Check;
+      F9 : Fk.Fake_Check;
       P : S.Auth_Profile;
       R : S.Auth_Result;
       Uu : constant S.Username :=
@@ -295,7 +323,7 @@ package body Test_Auth_Session is
         "{""id"":""069a79f444e94726a5befca90e38aaf5"",""name"":""Notch"","
         & """properties"":[{""name"":""n2"",""value"":""v2""}]}";
    begin
-      F9 := (Mode => S.Return_Accepted, others => <>);
+      F9 := (Mode => Fk.Return_Accepted, others => <>);
       P.Id := Expected_Uuid;
       P.Name := S.Profile_Name_Bounded.To_Bounded_String ("Notch");
       P.Prop_Count := 2;
@@ -321,7 +349,7 @@ package body Test_Auth_Session is
          Check (not R.Profile.Properties (2).Has_Sig,
                 "T9 no-sig preserved");
       end if;
-      F9 := (Mode => S.Replay_Reply, Scripted_Status => 200,
+      F9 := (Mode => Fk.Replay_Reply, Scripted_Status => 200,
              Scripted_Body => BS (Sig_Body), others => <>);
       R := F9.Has_Joined (Uu, Hh, Ip);
       Check (R.Kind = S.Accepted
@@ -330,7 +358,7 @@ package body Test_Auth_Session is
              and then S.Prop_Bounded.To_String
                (R.Profile.Properties (1).Signature) = "sss",
              "T9 parsed sig preserved");
-      F9 := (Mode => S.Replay_Reply, Scripted_Status => 200,
+      F9 := (Mode => Fk.Replay_Reply, Scripted_Status => 200,
              Scripted_Body => BS (No_Sig_Body), others => <>);
       R := F9.Has_Joined (Uu, Hh, Ip);
       Check (R.Kind = S.Accepted
@@ -382,7 +410,7 @@ package body Test_Auth_Session is
       end BS;
       Valid_Body : constant String :=
         "{""id"":""069a79f444e94726a5befca90e38aaf5"",""name"":""Notch""}";
-      F : S.Fake_Check;
+      F : Fk.Fake_Check;
       R, R2 : S.Auth_Result;
       Uu : constant S.Username :=
         S.Username_Bounded.To_Bounded_String ("Notch");
@@ -390,12 +418,12 @@ package body Test_Auth_Session is
         S.Hash_Bounded.To_Bounded_String ("h");
       Ip : constant S.Optional_Ip := (Present => False);
    begin
-      F := (Mode => S.Replay_Reply, Scripted_Status => 200,
+      F := (Mode => Fk.Replay_Reply, Scripted_Status => 200,
             Scripted_Body => BS (Valid_Body), others => <>);
       R := F.Has_Joined (Uu, Hh, Ip);
       R2 := F.Has_Joined (Uu, Hh, Ip);
       Check (Same_Result (R, R2), "T10 determinism accept");
-      F := (Mode => S.Replay_Reply, Scripted_Status => 500,
+      F := (Mode => Fk.Replay_Reply, Scripted_Status => 500,
             Scripted_Body => BS ("oops"), others => <>);
       R := F.Has_Joined (Uu, Hh, Ip);
       R2 := F.Has_Joined (Uu, Hh, Ip);

@@ -160,9 +160,7 @@ package body Adacraft.Auth.Session is
 
    --  Skip one generic JSON value with structural validation.
    procedure Skip_Value (S : String; P : in out Natural; Ok : out Boolean) is
-      Depth_O : Natural := 0;
-      Depth_A : Natural := 0;
-      SOk     : Boolean;
+      SOk : Boolean;
    begin
       Ok := False;
       Skip_WS (S, P);
@@ -186,42 +184,13 @@ package body Adacraft.Auth.Session is
                   Ok := True;
                   return;
                end if;
-               --  Use bounded structural walk: strings validated inline.
                if S (P) /= '"' then
                   return;
                end if;
-               --  skip key string structurally with escape validation
-               P := P + 1;
-               while P <= S'Last loop
-                  if S (P) = '\' then
-                     if P + 1 > S'Last then
-                        return;
-                     end if;
-                     if S (P + 1) = 'u' then
-                        if P + 5 > S'Last then
-                           return;
-                        end if;
-                        for K in P + 2 .. P + 5 loop
-                           if not Is_Hex (S (K)) then
-                              return;
-                           end if;
-                        end loop;
-                        P := P + 6;
-                     else
-                        case S (P + 1) is
-                           when '"' | '\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' =>
-                              P := P + 2;
-                           when others =>
-                              return;
-                        end case;
-                     end if;
-                  elsif S (P) = '"' then
-                     P := P + 1;
-                     exit;
-                  else
-                     P := P + 1;
-                  end if;
-               end loop;
+               Skip_String (S, P, SOk);
+               if not SOk then
+                  return;
+               end if;
                Skip_WS (S, P);
                if P > S'Last or else S (P) /= ':' then
                   return;
@@ -242,10 +211,6 @@ package body Adacraft.Auth.Session is
                   Ok := True;
                   return;
                else
-                  return;
-               end if;
-               Depth_O := Depth_O + 1;
-               if Depth_O > 64 then
                   return;
                end if;
             end loop;
@@ -273,10 +238,6 @@ package body Adacraft.Auth.Session is
                   Ok := True;
                   return;
                else
-                  return;
-               end if;
-               Depth_A := Depth_A + 1;
-               if Depth_A > 256 then
                   return;
                end if;
             end loop;
@@ -616,16 +577,7 @@ package body Adacraft.Auth.Session is
             else
                loop
                   if Count >= Max_Properties then
-                     --  Still must validate structure, then fail.
-                     --  Parse and discard one extra to confirm malformation
-                     --  vs over-bound: either way caller rejects.
-                     declare
-                        D1 : Property_Vector;
-                        DOk : Boolean;
-                     begin
-                        Parse_Property (S, P, D1, 0, DOk);
-                        return; --  over bound => Ok=False
-                     end;
+                     return; --  over bound => Ok=False
                   end if;
                   Parse_Property (S, P, Props, Count, SOk);
                   if not SOk then

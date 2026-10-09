@@ -150,6 +150,103 @@ package body Adacraft.Corpus.Loader is
       end loop;
    end Parse_Nat;
 
+   --  Injected-keys registry keyed by scenario id. Populated at the end
+   --  of each successful Parse; Load accumulates across files. Minimal:
+   --  hex text is kept as written (whitespace stripped, lowercased is
+   --  not required since Parse_Hex already accepts both cases).
+   package Injected_Store is
+      type Injected_Entry is record
+         Id       : Unbounded_String;
+         Secret   : Unbounded_String;
+         Has_Secret : Boolean := False;
+         Token    : Unbounded_String;
+         Has_Token : Boolean := False;
+         Pubkey   : Unbounded_String;
+         Has_Pubkey : Boolean := False;
+      end record;
+      package Vec is new Ada.Containers.Vectors (Positive, Injected_Entry);
+      Table : Vec.Vector;
+   end Injected_Store;
+
+   function Norm_Hex (Value : String) return String is
+      R : Unbounded_String;
+   begin
+      for C of Value loop
+         if C /= ' ' and then C /= ASCII.HT then
+            Append (R, To_Unbounded_String ((1 => C)));
+         end if;
+      end loop;
+      return To_String (R);
+   end Norm_Hex;
+
+   Max_Injected_Blob : constant Natural := 512;
+
+   function Hex_Ok (Value : String; Min_Bytes, Max_Bytes : Natural)
+     return Boolean is
+      Count : Natural := 0;
+   begin
+      for C of Value loop
+         if C /= ' ' and then C /= ASCII.HT then
+            if Digit (C) < 0 then
+               return False;
+            end if;
+            Count := Count + 1;
+         end if;
+      end loop;
+      return Count mod 2 = 0
+        and then Count / 2 >= Min_Bytes
+        and then Count / 2 <= Max_Bytes;
+   end Hex_Ok;
+
+   function Has_Injected (Id : String) return Boolean is
+      use type Unbounded_String;
+   begin
+      for E of Injected_Store.Table loop
+         if To_String (E.Id) = Id then
+            return E.Has_Secret or else E.Has_Token or else E.Has_Pubkey;
+         end if;
+      end loop;
+      return False;
+   end Has_Injected;
+
+   function Find_Entry (Id : String) return Natural is
+      use type Unbounded_String;
+   begin
+      for I in 1 .. Natural (Injected_Store.Table.Length) loop
+         if To_String (Injected_Store.Table (I).Id) = Id then
+            return I;
+         end if;
+      end loop;
+      return 0;
+   end Find_Entry;
+
+   function Injected_Shared_Secret (Id : String) return String is
+      I : constant Natural := Find_Entry (Id);
+   begin
+      if I = 0 or else not Injected_Store.Table (I).Has_Secret then
+         return "";
+      end if;
+      return To_String (Injected_Store.Table (I).Secret);
+   end Injected_Shared_Secret;
+
+   function Injected_Verify_Token (Id : String) return String is
+      I : constant Natural := Find_Entry (Id);
+   begin
+      if I = 0 or else not Injected_Store.Table (I).Has_Token then
+         return "";
+      end if;
+      return To_String (Injected_Store.Table (I).Token);
+   end Injected_Verify_Token;
+
+   function Injected_Public_Key (Id : String) return String is
+      I : constant Natural := Find_Entry (Id);
+   begin
+      if I = 0 or else not Injected_Store.Table (I).Has_Pubkey then
+         return "";
+      end if;
+      return To_String (Injected_Store.Table (I).Pubkey);
+   end Injected_Public_Key;
+
    function Format_Error (E : Error) return String is
    begin
       return To_String (E.Path) & ":"
@@ -307,10 +404,48 @@ package body Adacraft.Corpus.Loader is
          end if;
       end Step_Field;
 
+      --  Pending injected hex for the scenario currently being parsed.
+      --  Committed to Injected_Store once the scenario id is known at
+      --  the end of Parse (or on Load per file).
+      Pending_Secret : Unbounded_String;
+      Pending_Has_Secret : Boolean := False;
+      Pending_Token : Unbounded_String;
+      Pending_Has_Token : Boolean := False;
+      Pending_Pubkey : Unbounded_String;
+      Pending_Has_Pubkey : Boolean := False;
+
       procedure Scalar_Field (Key, Value : String; Line : Natural) is
          Ok : Boolean;
          N  : Natural;
       begin
+         --  Injected deterministic keys: validated hex, recorded, and
+         --  marked seen so duplicate detection still applies. Unknown
+         --  keys fall through to the ignored branch below.
+         if Key = "shared_secret" then
+            if not Hex_Ok (Value, 16, 16) then
+               Err (Line, "invalid shared_secret (16 bytes hex required)");
+            else
+               Pending_Secret := To_Unbounded_String (Norm_Hex (Value));
+               Pending_Has_Secret := True;
+            end if;
+            return;
+         elsif Key = "verify_token" then
+            if not Hex_Ok (Value, 1, Max_Injected_Blob) then
+               Err (Line, "invalid verify_token hex");
+            else
+               Pending_Token := To_Unbounded_String (Norm_Hex (Value));
+               Pending_Has_Token := True;
+            end if;
+            return;
+         elsif Key = "public_key" then
+            if not Hex_Ok (Value, 1, Max_Injected_Blob) then
+               Err (Line, "invalid public_key hex");
+            else
+               Pending_Pubkey := To_Unbounded_String (Norm_Hex (Value));
+               Pending_Has_Pubkey := True;
+            end if;
+            return;
+         end if;
          if Key = "id" then
             Ok := Value'Length > 0;
             for C of Value loop
@@ -420,6 +555,12 @@ package body Adacraft.Corpus.Loader is
             end if;
             if not Seen_First then
                Seen_First := True;
+               Pending_Secret := Null_Unbounded_String;
+               Pending_Has_Secret := False;
+               Pending_Token := Null_Unbounded_String;
+               Pending_Has_Token := False;
+               Pending_Pubkey := Null_Unbounded_String;
+               Pending_Has_Pubkey := False;
                if Key = "corpus_format" then
                   if Value /= "1" then
                      Err (Line_No, "unknown corpus_format """ & Value & """");
@@ -466,7 +607,15 @@ package body Adacraft.Corpus.Loader is
             else
                if Has (Seen_Top, Key) then
                   Err (Line_No, "duplicate key """ & Key & """");
+               elsif Key = "shared_secret"
+                 or else Key = "verify_token"
+                 or else Key = "public_key"
+               then
+                  Seen_Top := Seen_Top & " " & Key & " ";
+                  Scalar_Field (Key, Value, Line_No);
                else
+                  --  Unknown scenario-level keys stay ignored, but must
+                  --  still mark seen for duplicate detection.
                   Seen_Top := Seen_Top & " " & Key & " ";
                   Scalar_Field (Key, Value, Line_No);
                end if;
@@ -528,6 +677,41 @@ package body Adacraft.Corpus.Loader is
             Err (S.Steps (I).Line, "terminal step must be last");
          end if;
       end loop;
+      if Errors.Length = Start
+        and then (Pending_Has_Secret or else Pending_Has_Token
+                  or else Pending_Has_Pubkey)
+        and then Length (S.Id) > 0
+      then
+         declare
+            use type Unbounded_String;
+            Id_Str : constant String := To_String (S.Id);
+            At_Pos : Natural := Find_Entry (Id_Str);
+         begin
+            if At_Pos = 0 then
+               Injected_Store.Table.Append
+                 (Injected_Store.Injected_Entry'
+                    (Id => S.Id, Secret => Pending_Secret,
+                     Has_Secret => Pending_Has_Secret,
+                     Token => Pending_Token,
+                     Has_Token => Pending_Has_Token,
+                     Pubkey => Pending_Pubkey,
+                     Has_Pubkey => Pending_Has_Pubkey));
+            else
+               Injected_Store.Table (At_Pos).Secret := Pending_Secret;
+               Injected_Store.Table (At_Pos).Has_Secret := Pending_Has_Secret;
+               Injected_Store.Table (At_Pos).Token := Pending_Token;
+               Injected_Store.Table (At_Pos).Has_Token := Pending_Has_Token;
+               Injected_Store.Table (At_Pos).Pubkey := Pending_Pubkey;
+               Injected_Store.Table (At_Pos).Has_Pubkey := Pending_Has_Pubkey;
+            end if;
+         end;
+      end if;
+      Pending_Has_Secret := False;
+      Pending_Has_Token := False;
+      Pending_Has_Pubkey := False;
+      Pending_Secret := Null_Unbounded_String;
+      Pending_Token := Null_Unbounded_String;
+      Pending_Pubkey := Null_Unbounded_String;
       return Errors.Length = Start;
    exception
       when others =>

@@ -1,0 +1,17 @@
+corpus_format: 1
+id: login-encryption-bad-token
+title: Online login bad verify token disconnects
+description: Deterministic bad-token rejection through real pipeline with injected fixed RSA keypair verify-token and shared-secret; malformed Login Start disconnects with no Login Success and no further login processing.
+category: encryption
+protocol: 777
+provenance: hand-authored
+initial_state: LOGIN
+shared_secret: 00112233445566778899AABBCCDDEEFF
+verify_token: AABBCCDD
+public_key: AABBCCDD
+
+step:
+  direction: serverbound
+  input: 01 00
+  outcome: rejected
+  rejection_category: disconnect

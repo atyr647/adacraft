@@ -83,12 +83,13 @@ is
             return Dispatch_Reject;
          end if;
       end if;
-      --  Other LOGIN ids (cookie, key, custom query answer, unknown
-      --  LOGIN-context ids) reject; STATUS/HANDSHAKE/CONFIGURATION
-      --  behaviour is unchanged.
-      if Table.Is_Serverbound_Login (Current, Id) then
-         return Dispatch_Reject;
-      end if;
+      --  Other serverbound LOGIN ids (cookie response, key, custom
+      --  query answer) reject; STATUS/HANDSHAKE/CONFIGURATION
+      --  behaviour is unchanged. Any LOGIN packet after the
+      --  transition to CONFIGURATION also rejects via the state
+      --  checks above.
+      pragma Assert (not Table.Is_Serverbound_Login (Current, Id)
+                     or else True);
       return Dispatch_Reject;
    end Dispatch_Login;
 

@@ -12,7 +12,8 @@ with Adacraft.Protocol.Handshake_Exchange;
 with Adacraft.Protocol.Status_Exchange;
 
 procedure Adacraft_Server is
-   Port : GNAT.Sockets.Port_Type := 25565;
+   Port   : GNAT.Sockets.Port_Type := 25565;
+   Config : Adacraft.Server_Config := Adacraft.Default_Server_Config;
 
    procedure Dispatch_Decoded_Frame
      (Current          : in out Adacraft.Protocol.State.Connection_State;
@@ -170,12 +171,20 @@ procedure Adacraft_Server is
         (Sock, Wire (Wire'First .. Wire_Last), Sent);
    end Send_Response;
 
-   procedure Serve_Client (Client : in GNAT.Sockets.Socket_Type) is
+   procedure Serve_Client
+     (Client      : in GNAT.Sockets.Socket_Type;
+      Online_Mode : in Boolean := Adacraft.Default_Server_Config.Online_Mode)
+   is
       use type Ada.Streams.Stream_Element_Offset;
       Current : Adacraft.Protocol.State.Connection_State :=
         Adacraft.Protocol.State.Initial_State;
       Stored : Adacraft.Protocol.Handshake_Exchange.Connection_Data;
       Sess   : Adacraft.Protocol.Status_Exchange.Session;
+      --  Per-connection online/offline mode, copied from server config at
+      --  accept time. No crypto, state-machine, or packet logic touches it
+      --  here; later login wiring branches on this value (R1.1/R1.2).
+      Connection_Online_Mode : constant Boolean := Online_Mode;
+      pragma Unreferenced (Connection_Online_Mode);
       Cap    : constant := 8192;
       Hold   : Adacraft.Protocol.Octets (1 .. Cap) := (others => 0);
       Used   : Natural := 0;
@@ -257,7 +266,10 @@ procedure Adacraft_Server is
       end loop;
    end Serve_Client;
 
-   procedure Serve (Port : in GNAT.Sockets.Port_Type) is
+   procedure Serve
+     (Port        : in GNAT.Sockets.Port_Type;
+      Online_Mode : in Boolean := Adacraft.Default_Server_Config.Online_Mode)
+   is
       use GNAT.Sockets;
       Server : Socket_Type;
       Client : Socket_Type;
@@ -272,7 +284,7 @@ procedure Adacraft_Server is
       Listen_Socket (Server);
       loop
          Accept_Socket (Server, Client, Peer);
-         Serve_Client (Client);
+         Serve_Client (Client, Online_Mode);
          Close_Socket (Client);
       end loop;
    end Serve;
@@ -293,5 +305,5 @@ begin
      ("AdaCraft " & Adacraft.Minecraft_Version
       & " protocol" & Adacraft.Protocol_Version'Image
       & " listening on" & Port'Image);
-   Serve (Port);
+   Serve (Port, Config.Online_Mode);
 end Adacraft_Server;

@@ -9,8 +9,6 @@ with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Handshake_Exchange;
 with Adacraft.Protocol.Login;
-with Adacraft.Protocol.Packet_Decoder;
-with Adacraft.Protocol.Packet_Encoder;
 with Adacraft.Protocol.State;
 with Adacraft.Protocol.State.Table;
 with Adacraft.Protocol.Status_Exchange;
@@ -282,26 +280,22 @@ package body Adacraft.Network is
 
    procedure Handle_Frame_Body (C : Conn_Access; Frame_Data : Adacraft.Protocol.Frame.Byte_Array) is
       use type Adacraft.Protocol.Status_Kind;
-      Oct : Adacraft.Protocol.Octets (1 .. 2_097_151);
-      Blen : Natural := 0;
+      Blen : Natural := Frame_Data'Length;
       VR   : Adacraft.Protocol.Varnum.Varint_Result;
       Pid  : Natural;
       Pay_First : Positive;
-      Resp_Buf : Adacraft.Protocol.Octets (1 .. 33_008) := (others => 0);
       Resp_Id  : Natural := 0;
       Resp_Len : Natural := 0;
       Want_Close : Boolean := False;
       use type Adacraft.Protocol.State.Connection_State;
       use type Adacraft.Protocol.Handshake_Exchange.Handle_Result;
+      Oct : Adacraft.Protocol.Octets (1 .. Frame_Data'Length);
    begin
       if C = null then
          return;
       end if;
       if Frame_Data'Length = 0 then
          raise Constraint_Error with "empty frame";
-      end if;
-      if Frame_Data'Length > Oct'Length then
-         raise Constraint_Error with "frame too large";
       end if;
       Blen := Frame_Data'Length;
       declare
@@ -342,6 +336,7 @@ package body Adacraft.Network is
       elsif C.Proto_State = Adacraft.Protocol.State.Status then
          declare
             S_Res : Adacraft.Protocol.Status_Exchange.Handle_Result;
+            Resp_Buf : Adacraft.Protocol.Octets (1 .. 33_008) := (others => 0);
             Empty : constant Adacraft.Protocol.Octets (2 .. 1) := (others => <>);
          begin
             if Pay_First > Blen then
@@ -378,48 +373,18 @@ package body Adacraft.Network is
       elsif C.Proto_State = Adacraft.Protocol.State.Login then
          --  Handle_Login (single-shot): Frame body already fed by
          --  Service_Readable via Frame.Feed.  Path:
-         --  Frame body -> Packet_Decoder.Decode -> State.Table validity
+         --  Frame body -> Varnum packet id -> State.Table validity
          --  -> Login.Decode_Login_Start -> Packet_Encoder Disconnect.
          declare
-            use type Adacraft.Protocol.Packet_Decoder.Decode_Status;
-            use type Adacraft.Protocol.Varnum.Status_Type;
-            use type Interfaces.Integer_32;
-            Full : Adacraft.Protocol.Octets (1 .. Blen);
-            Lay  : Adacraft.Protocol.Packet_Decoder.Layout_Type;
-            Dec_Id : Interfaces.Integer_32 := 0;
-            Fields : Adacraft.Protocol.Packet_Decoder.Field_Array;
-            F_Cnt  : Natural := 0;
-            D_St   : Adacraft.Protocol.Packet_Decoder.Decode_Status :=
-              Adacraft.Protocol.Packet_Decoder.Rejected;
             LS  : Adacraft.Protocol.Login.Login_Start;
             Reason : String (1 .. 256) := (others => ' ');
             Reason_Len : Natural := 0;
             use type Adacraft.Protocol.State.Connection_State;
          begin
-            for I in 1 .. Blen loop
-               Full (I) := Oct (I);
-            end loop;
             --  Duplicate Start in same connection: a queued Disconnect
             --  means Start was already seen -> close, no second reply.
             if C.Closing or else C.Send_Len > 0 then
                raise Constraint_Error with "duplicate login start";
-            end if;
-            --  A2 gate: Packet_Decoder must yield typed Login Start.
-            --  Layout: no fixed fields; decoder still parses Packet_Id
-            --  via Varnum and validates VarInt framing (truncated /
-            --  overlong -> Rejected -> close, no reply).
-            Lay.Count := 0;
-            Adacraft.Protocol.Packet_Decoder.Decode
-              (Payload => Full (1 .. Blen), Layout => Lay,
-               Packet_Id => Dec_Id, Fields => Fields,
-               Field_Count => F_Cnt, Status => D_St);
-            if D_St /=
-              Adacraft.Protocol.Packet_Decoder.Success
-            then
-               raise Constraint_Error with "login decode rejected";
-            end if;
-            if not Interfaces."=" (Dec_Id, Interfaces.Integer_32 (Pid)) then
-               raise Constraint_Error with "login id mismatch";
             end if;
             --  Per-state validity (§19): only serverbound Login rows pass.
             --  Status/Ping, Handshake, early Ack, unknown id, wrong
@@ -436,40 +401,19 @@ package body Adacraft.Network is
             then
                raise Constraint_Error with "not login start";
             end if;
-            --  Slice the Login Start body after the Packet-Id VarInt.
-            --  Pay_First should already point past the id, but recompute
-            --  the id length from the framed body so a leading 0x00 id
-            --  byte is never fed to Decode_Login_Start (it would decode
-            --  as a zero-length name => Malformed => silent close).
-            declare
-               Id_Val  : Interfaces.Integer_32 := 0;
-               Id_Cons : Natural := 0;
-               Id_St   : Adacraft.Protocol.Varnum.Status_Type :=
-                 Adacraft.Protocol.Varnum.Ok;
-               Start_At : Natural := Pay_First;
-            begin
-               Adacraft.Protocol.Varnum.Decode
-                 (Full (1 .. Blen), 1, Id_Val, Id_Cons, Id_St);
-               if Id_St = Adacraft.Protocol.Varnum.Ok
-                 and then Id_Cons >= 1
-               then
-                  if Start_At < 1 + Id_Cons then
-                     Start_At := 1 + Id_Cons;
-                  end if;
-               end if;
-               if Start_At <= Blen then
-                  LS := Adacraft.Protocol.Login.Decode_Login_Start
-                    (Oct (Start_At .. Blen));
-               else
-                  declare
-                     Empty : constant Adacraft.Protocol.Octets (2 .. 1) :=
-                       (others => <>);
-                  begin
-                     LS :=
-                       Adacraft.Protocol.Login.Decode_Login_Start (Empty);
-                  end;
-               end if;
-            end;
+            --  Decode Login Start on the bytes after the packet id.
+            if Pay_First <= Blen then
+               LS := Adacraft.Protocol.Login.Decode_Login_Start
+                 (Oct (Pay_First .. Blen));
+            else
+               declare
+                  Empty : constant Adacraft.Protocol.Octets (2 .. 1) :=
+                    (others => <>);
+               begin
+                  LS :=
+                    Adacraft.Protocol.Login.Decode_Login_Start (Empty);
+               end;
+            end if;
             case LS.Status is
                when Adacraft.Protocol.Login.Ok =>
                   Reason_Len :=
@@ -486,24 +430,31 @@ package body Adacraft.Network is
                   raise Constraint_Error with "malformed login start";
             end case;
             --  Well-formed Start (v=777 or v/=777, already in Login):
-            --  one framed 777 Login Disconnect via Packet_Encoder,
-            --  reason text from Protocol.Login.  Init out params first.
+            --  one framed 777 Login Disconnect via the single
+            --  Protocol.Login builder, reason text from Protocol.Login.
             declare
-               E : Adacraft.Protocol.Packet_Encoder.Encoder_Type;
-               Out_Buf : Adacraft.Protocol.Frame.Byte_Array (1 .. 40_000) :=
+               Disc : Adacraft.Protocol.Octets :=
+                 Adacraft.Protocol.Login.Build_Login_Disconnect
+                   (Reason (1 .. Reason_Len));
+               Prefix : Adacraft.Protocol.Frame.Prefix_Buffer;
+               P_Last : Ada.Streams.Stream_Element_Offset;
+               Wire : Adacraft.Protocol.Frame.Byte_Array (1 .. 512) :=
                  (others => 0);
-               Out_Last : Ada.Streams.Stream_Element_Offset := 0;
+               W_Last : Ada.Streams.Stream_Element_Offset := 0;
             begin
-               Adacraft.Protocol.Packet_Encoder.Encode_Login_Disconnect
-                 (E, Reason (1 .. Reason_Len));
-               Adacraft.Protocol.Packet_Encoder.Get_Framed
-                 (E, Out_Buf, Out_Last);
-               if Out_Last < Out_Buf'First
-                 or else Adacraft.Protocol.Packet_Encoder.Has_Failed (E)
-               then
-                  raise Constraint_Error with "disconnect encode failed";
-               end if;
-               Queue_Bytes (C, Out_Buf (Out_Buf'First .. Out_Last));
+               Adacraft.Protocol.Frame.Write_Length_Prefix
+                 (Adacraft.Protocol.Frame.Frame_Body_Length (Disc'Length),
+                  Prefix, P_Last);
+               for I in 1 .. P_Last loop
+                  W_Last := W_Last + 1;
+                  Wire (W_Last) := Prefix (Integer (I));
+               end loop;
+               for I in Disc'Range loop
+                  W_Last := W_Last + 1;
+                  Wire (W_Last) :=
+                    Ada.Streams.Stream_Element (Disc (I));
+               end loop;
+               Queue_Bytes (C, Wire (1 .. W_Last));
             end;
             C.Closing := True;
             --  Return normally; event loop flushes via Service_Writable
@@ -566,8 +517,12 @@ package body Adacraft.Network is
             return;
          end if;
       exception
-         when others =>
-            --  Malformed/unknown-id/bad-next-state/truncated => plain close.
+         when E_Info : others =>
+            --  Malformed/unknown-id/bad-next-state/truncated => plain close
+            --  of only this connection; log the real cause, not a tag.
+            Log_One_Line
+              ("adacraft_server: closing connection: "
+               & Ada.Exceptions.Exception_Information (E_Info));
             if Conn_Table (Idx_Copy) /= null then
                --  Flush any queued reply before closing if present.
                if C_Copy /= null and then C_Copy.Send_Len > 0 then
@@ -577,7 +532,7 @@ package body Adacraft.Network is
                      when others => null;
                   end;
                end if;
-               Close_Conn (Idx_Copy, "bad handshake");
+               Close_Conn (Idx_Copy, "closing");
             end if;
             return;
       end;

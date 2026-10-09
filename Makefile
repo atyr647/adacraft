@@ -34,7 +34,7 @@ bin/test_golden_corpus: tests/test_golden_corpus.adb tests/adacraft-corpus.ads t
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) -Itests $(SRC) tests/test_golden_corpus.adb -o $@
 
-bin/adacraft: src/adacraft_server.adb
+bin/adacraft: src/adacraft_server.adb src/network/adacraft-network.adb src/network/adacraft-network.ads src/protocol/adacraft-protocol-login.adb src/protocol/adacraft-protocol-login.ads src/protocol/adacraft-protocol-frame.adb src/protocol/adacraft-protocol-frame.ads src/protocol/adacraft-protocol-varnum.adb src/protocol/adacraft-protocol-varnum.ads src/protocol/adacraft-protocol-handshake_exchange.adb src/protocol/adacraft-protocol-handshake_exchange.ads src/protocol/adacraft-protocol-state-table.adb src/protocol/adacraft-protocol-state-table.ads generated/adacraft-protocol-ids.ads
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) src/adacraft_server.adb -o $@
 

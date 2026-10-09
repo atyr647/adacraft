@@ -70,8 +70,7 @@ procedure Test_Protocol_Compression is
          Rc_End   : constant Interfaces.C.int := Z.Deflate_End (S);
       begin
          Check (Rc_End = Z.Z_Ok, Name & " deflate end");
-         Check ((Produced > 0) = (Input'Length > 0),
-                Name & " produced bytes");
+         Check (Produced > 0, Name & " produced bytes");
          Z.Init_Stream (S.all);
          Z.Set_Input (S.all, Out_Buf'Address,
                       Interfaces.C.unsigned (Produced));

@@ -277,37 +277,26 @@ is
    end Decode_Varint;
 
    function Decode_Varlong (Buffer : Octets; From : Positive) return Varlong_Result is
-      Result : Interfaces.Unsigned_64 := 0;
-      Pos    : Natural                := From;
+      Acc : Interfaces.Unsigned_64 := 0;
+      C   : Natural;
+      S   : Status_Type;
    begin
       if From > Buffer'Last then
          return (Status => Need_More, Value => 0, Next => From);
       end if;
 
-      for Step in 1 .. Max_Varlong_Bytes loop
-         pragma Loop_Invariant (Pos in From .. Buffer'Last);
-         declare
-            B     : constant Octet := Buffer (Pos);
-            Bits  : constant Interfaces.Unsigned_64 :=
-              Interfaces.Unsigned_64 (B and 16#7F#);
-            Shift : constant Natural := (Step - 1) * 7;
-         begin
-            if Step = Max_Varlong_Bytes and then Bits > 1 then
+      Decode_Unsigned
+        (Buffer, From, Max_Varlong_Bytes, 16#01#, Acc, C, S);
+      case S is
+         when Ok =>
+            if C > 1 and then Buffer (From + C - 1) = 0 then
                return (Status => Rejected, Value => 0, Next => From);
             end if;
-            Result := Result or Interfaces.Shift_Left (Bits, Shift);
-            Pos    := Pos + 1;
-            if (B and 16#80#) = 0 then
-               if Step > 1 and then Bits = 0 then
-                  return (Status => Rejected, Value => 0, Next => From);
-               end if;
-               return (Status => Status_Kind'(Ok), Value => Result, Next => Pos);
-            end if;
-            if Pos > Buffer'Last then
-               return (Status => Need_More, Value => 0, Next => From);
-            end if;
-         end;
-      end loop;
-      return (Status => Rejected, Value => 0, Next => From);
+            return (Status => Status_Kind'(Ok), Value => Acc, Next => From + C);
+         when Truncated =>
+            return (Status => Need_More, Value => 0, Next => From);
+         when Overlong | Buffer_Too_Small =>
+            return (Status => Rejected, Value => 0, Next => From);
+      end case;
    end Decode_Varlong;
 end Adacraft.Protocol.Varnum;

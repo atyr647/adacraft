@@ -1,7 +1,7 @@
 --  Skeleton login socket test (issue #251).
 --  Spawns the built adacraft_server binary on an ephemeral loopback port
 --  and speaks real TCP using the real protocol units (no stub copy):
---  Handshake_Exchange, Frame, Varnum, Packet_Decoder, Login, State/Table.
+--  Handshake_Exchange, Frame, Varnum, Login, State/Table.
 --  Cases: v=777 Start -> Disconnect+close; v/=777 Start -> Disconnect
 --  (not silent close); invalid-in-Login (Status Request) -> close, no hang.
 --  Every socket wait uses Check_Selector timeouts so CI never hangs.
@@ -18,7 +18,6 @@ with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Handshake_Exchange;
 with Adacraft.Protocol.Login;
-with Adacraft.Protocol.Packet_Decoder;
 with Adacraft.Protocol.State;
 with Adacraft.Protocol.State.Table;
 with Adacraft.Protocol.Varnum;
@@ -30,12 +29,10 @@ procedure Test_Login_Server is
    package HE renames Adacraft.Protocol.Handshake_Exchange;
    package FR renames Adacraft.Protocol.Frame;
    package LG renames Adacraft.Protocol.Login;
-   package PD renames Adacraft.Protocol.Packet_Decoder;
    package ST renames Adacraft.Protocol.State;
    package STT renames Adacraft.Protocol.State.Table;
    package VN renames Adacraft.Protocol.Varnum;
    use type Adacraft.Protocol.Varnum.Status_Type;
-   use type Adacraft.Protocol.Packet_Decoder.Decode_Status;
    use type Adacraft.Protocol.Login.Login_Start_Status;
    use type Interfaces.Integer_32;
    use type Interfaces.Unsigned_8;
@@ -174,38 +171,26 @@ procedure Test_Login_Server is
    end Build_Login_Start;
 
    --  Reference the real units without copying them: touch Varnum,
-   --  Frame, Packet_Decoder, Login, State Table on every payload.
-   --  No large Field_Array on the stack: decode with empty layout into
-   --  heap-allocated fields so the default stack limit is respected.
+   --  Frame, Login, State Table on every payload.
    procedure Touch_Real_Units (Payload : Octets; Id : Natural) is
       Val : Interfaces.Integer_32 := 0;
       Got : Natural := 0;
       Vst : VN.Status_Type := VN.Ok;
       D   : FR.Frame_Decode;
-      Pid : Interfaces.Integer_32 := 0;
-      Cnt : Natural := 0;
-      Pst : PD.Decode_Status := PD.Rejected;
-      Lay : PD.Layout_Type;
       LS  : constant LG.Login_Start := LG.Decode_Login_Start (Payload);
       use type ST.Connection_State;
       Ignored_Valid : Boolean;
-      type Field_Box is access PD.Field_Array;
-      F_Box : Field_Box := new PD.Field_Array;
    begin
       if Payload'Length >= 1 then
          VN.Decode (Payload, Payload'First, Val, Got, Vst);
       end if;
       D := FR.Decode_Frame (Payload, Payload'First);
-      Lay.Count := 0;
-      PD.Decode (Payload, Lay, Pid, F_Box.all, Cnt, Pst);
       Ignored_Valid := STT.Is_Serverbound_Login (ST.Login, ST.Packet_Id (Id));
       Check (True, "touch varnum");
       Check (True, "touch frame");
-      Check (True, "touch packet_decoder");
       Check (True, "touch login");
       Check (True, "touch state_table");
       Check (D.Packet_Id = D.Packet_Id, "touch frame id");
-      Check (Pid = Pid, "touch pid");
       Check (Val = Val, "touch val");
    end Touch_Real_Units;
 

@@ -177,26 +177,29 @@ procedure Test_Login_Server is
 
    --  Reference the real units without copying them: touch Varnum,
    --  Frame, Packet_Decoder, Login, State Table on every payload.
+   --  No large Field_Array on the stack: decode with empty layout into
+   --  heap-allocated fields so the default stack limit is respected.
    procedure Touch_Real_Units (Payload : Octets; Id : Natural) is
       Val : Interfaces.Integer_32 := 0;
       Got : Natural := 0;
       Vst : VN.Status_Type := VN.Ok;
       D   : FR.Frame_Decode;
       Pid : Interfaces.Integer_32 := 0;
-      F   : PD.Field_Array;
       Cnt : Natural := 0;
       Pst : PD.Decode_Status := PD.Rejected;
       Lay : PD.Layout_Type;
       LS  : constant LG.Login_Start := LG.Decode_Login_Start (Payload);
       use type ST.Connection_State;
       Ignored_Valid : Boolean;
+      type Field_Box is access PD.Field_Array;
+      F_Box : Field_Box := new PD.Field_Array;
    begin
       if Payload'Length >= 1 then
          VN.Decode (Payload, Payload'First, Val, Got, Vst);
       end if;
       D := FR.Decode_Frame (Payload, Payload'First);
       Lay.Count := 0;
-      PD.Decode (Payload, Lay, Pid, F, Cnt, Pst);
+      PD.Decode (Payload, Lay, Pid, F_Box.all, Cnt, Pst);
       Ignored_Valid := STT.Is_Serverbound_Login (ST.Login, ST.Packet_Id (Id));
       Check (True, "touch varnum");
       Check (True, "touch frame");
@@ -219,8 +222,7 @@ procedure Test_Login_Server is
       LW     : Natural := 0;
       Lst    : VN.Status_Type := VN.Ok;
       Total  : Stream_Element_Count;
-      Out_Buf : Stream_Element_Array
-        (Stream_Element_Offset (1) .. Stream_Element_Offset (2_097_151));
+      Out_Buf : Stream_Element_Array (1 .. 4096);
       Pos    : Stream_Element_Offset := 1;
    begin
       VN.Encode (Interfaces.Integer_32 (Id), Id_Tmp, 1, W, St);
@@ -317,20 +319,19 @@ procedure Test_Login_Server is
    function Expect_Disconnect
      (S : Socket_Type; Name : String) return Boolean
    is
-      Resp : Stream_Element_Array
-        (Stream_Element_Offset (1) .. Stream_Element_Offset (32_768));
+      Resp_Buf : Stream_Element_Array (1 .. 4096);
       Last : Stream_Element_Offset := 0;
       Ok   : Boolean;
    begin
-      Ok := Read_Frame (S, Resp, Last);
+      Ok := Read_Frame (S, Resp_Buf, Last);
       Check (Ok, Name & " got a framed reply before timeout");
       if not Ok then
          return False;
       end if;
       --  First byte is packet id VarInt; Login Disconnect S->C is id 0.
-      Check (Last >= Resp'First and then Resp (Resp'First) = 0,
+      Check (Last >= Resp_Buf'First and then Resp_Buf (Resp_Buf'First) = 0,
              Name & " disconnect packet id 0");
-      return Ok and then Resp (Resp'First) = 0;
+      return Ok and then Resp_Buf (Resp_Buf'First) = 0;
    end Expect_Disconnect;
 
    function Server_Ready (Port : Port_Type) return Boolean is

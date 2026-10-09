@@ -215,4 +215,34 @@ is
 
    function Name (I : Positive) return String is
      (Names_Text (Rows (I).Name_First .. Rows (I).Name_Last));
+
+   function Is_Login_Start_Id (Id : Packet_Id) return Boolean is
+     (Id = Packet_Id (Ids.Protocol_Id (Ids.Sb_Login_Hello)));
+
+   function Is_Login_Ack_Id (Id : Packet_Id) return Boolean is
+     (Id = Packet_Id (Ids.Protocol_Id (Ids.Sb_Login_Login_Acknowledged)));
+
+   function Is_Serverbound_Login
+     (State : Connection_State;
+      Id    : Packet_Id) return Boolean
+   is
+      Login_Key_Id     : constant Packet_Id :=
+        Packet_Id (Ids.Protocol_Id (Ids.Sb_Login_Key));
+      Login_Cookie_Id  : constant Packet_Id :=
+        Packet_Id (Ids.Protocol_Id (Ids.Sb_Login_Cookie_Response));
+      Login_Query_Id   : constant Packet_Id :=
+        Packet_Id (Ids.Protocol_Id (Ids.Sb_Login_Custom_Query_Answer));
+   begin
+      if State /= Login and then State /= Login_Awaiting_Ack then
+         return False;
+      end if;
+      if Find (State, Serverbound, Id) = 0 then
+         return False;
+      end if;
+      return Is_Login_Start_Id (Id)
+        or else Is_Login_Ack_Id (Id)
+        or else Id = Login_Key_Id
+        or else Id = Login_Cookie_Id
+        or else Id = Login_Query_Id;
+   end Is_Serverbound_Login;
 end Adacraft.Protocol.State.Table;

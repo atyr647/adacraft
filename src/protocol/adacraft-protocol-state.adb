@@ -50,6 +50,55 @@ is
       return Transition_Result
    is (Kind => Rejected, Next_State => Current, Reason => R);
 
+   Login_Start_Id : constant Packet_Id :=
+     Packet_Id (Ids.Protocol_Id (Ids.Sb_Login_Hello));
+   Login_Ack_Id : constant Packet_Id :=
+     Packet_Id (Ids.Protocol_Id (Ids.Sb_Login_Login_Acknowledged));
+
+   function Dispatch_Login
+     (Current : Connection_State;
+      Dir     : Packet_Direction;
+      Id      : Packet_Id) return Login_Dispatch
+   is
+   begin
+      --  Direction check first: LOGIN dispatch is serverbound only.
+      if Dir /= Serverbound then
+         return Dispatch_Reject;
+      end if;
+      --  Route serverbound LOGIN ids to login handlers with a
+      --  direction + state check: Start only in LOGIN, Ack only in
+      --  LOGIN_AWAITING_ACK.  Any LOGIN packet after the transition
+      --  to CONFIGURATION (or in any other state) rejects.
+      if Id = Login_Start_Id then
+         if Current = Login then
+            return Dispatch_Start;
+         else
+            return Dispatch_Reject;
+         end if;
+      end if;
+      if Id = Login_Ack_Id then
+         if Current = Login_Awaiting_Ack then
+            return Dispatch_Acknowledged;
+         else
+            return Dispatch_Reject;
+         end if;
+      end if;
+      --  Other serverbound LOGIN ids (cookie response, key, custom
+      --  query answer) reject; STATUS/HANDSHAKE/CONFIGURATION
+      --  behaviour is unchanged. Any LOGIN packet after the
+      --  transition to CONFIGURATION also rejects via the state
+      --  checks above.
+      return Dispatch_Reject;
+   end Dispatch_Login;
+
+   function Login_Ack_Allowed
+     (Current      : Connection_State;
+      Success_Sent : Boolean) return Boolean
+   is
+   begin
+      return Current = Login_Awaiting_Ack and then Success_Sent;
+   end Login_Ack_Allowed;
+
    function Transition
      (Current : Connection_State;
       Event   : Packet_Event) return Transition_Result

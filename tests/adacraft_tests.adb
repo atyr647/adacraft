@@ -5,6 +5,7 @@ with Ada.Unchecked_Deallocation;
 with Ada.Text_IO;
 with Interfaces;
 with Adacraft.Auth;
+with Adacraft.Auth.MD5;
 with Adacraft.Ingress;
 with Adacraft.Kernel;
 with Adacraft.Protocol.Buffer;
@@ -12,6 +13,7 @@ with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Ids;
 with Adacraft.Protocol.Packets;
 with Adacraft.Protocol.Varnum;
+with Test_Protocol_Login;
 with Test_Protocol_Packet_Encoder;
 
 procedure Adacraft_Tests is
@@ -188,8 +190,8 @@ begin
       ABC   : constant Protocol.Octets := Bytes ("abc");
       Notch : constant Auth.Digest := Auth.Offline_UUID ("Notch");
    begin
-      Check (Hex (Auth.MD5 (Empty)) = "d41d8cd98f00b204e9800998ecf8427e", "md5 empty");
-      Check (Hex (Auth.MD5 (ABC)) = "900150983cd24fb0d6963f7d28e17f72", "md5 abc");
+      Check (Hex (Auth.Digest (Adacraft.Auth.MD5.MD5 (Adacraft.Auth.MD5.Octets (Empty)))) = "d41d8cd98f00b204e9800998ecf8427e", "md5 empty");
+      Check (Hex (Auth.Digest (Adacraft.Auth.MD5.MD5 (Adacraft.Auth.MD5.Octets (ABC)))) = "900150983cd24fb0d6963f7d28e17f72", "md5 abc");
       Check (Hex (Notch) = "b50ad385829d3141a2167e7d7539ba7f", "offline notch");
    end;
 
@@ -739,6 +741,7 @@ begin
       Free_Dec (D);
    end;
 
+   Test_Protocol_Login;
    Test_Protocol_Packet_Encoder;
    if Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Handshake_Intention) /= 0
      or else Protocol.Ids.Protocol_Id (Protocol.Ids.Cb_Status_Status_Response) /= 0

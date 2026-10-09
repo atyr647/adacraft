@@ -3,6 +3,10 @@ with Interfaces;
 package Adacraft.Kernel
   with SPARK_Mode
 is
+   --  Explicit server auth-mode default. True matches vanilla (online);
+   --  tests/corpus select offline explicitly. LOGIN code branches on this.
+   Online_Mode : Boolean := True;
+
    type Attempt is (Rejected, Accepted);
 
    type Block_Pos is record

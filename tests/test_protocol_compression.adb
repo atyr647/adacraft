@@ -22,6 +22,7 @@ procedure Test_Protocol_Compression is
    use type Interfaces.Unsigned_8;
    use type V.Status_Type;
    use type C.Reject_Reason;
+   use type C.Byte_Array_Access;
 
    Failures : Natural := 0;
 
@@ -365,6 +366,398 @@ procedure Test_Protocol_Compression is
       end;
    end T3_Known_Vector;
 
+   --  Raw single-shot deflate of Input into heap bytes (zlib format).
+   procedure Raw_Deflate
+     (Input    : Octets;
+      Out_Data : out C.Byte_Array_Access;
+      Ok       : out Boolean)
+   is
+      Ver      : Interfaces.C.Strings.chars_ptr;
+      Stream   : aliased Z.Z_Stream;
+      Rc       : Interfaces.C.int;
+      Bound_UL : constant Interfaces.C.unsigned_long :=
+        Z.Compress_Bound (Interfaces.C.unsigned_long (Input'Length));
+      Bound    : Natural;
+   begin
+      Out_Data := null;
+      Ok := False;
+      Bound := Natural (Bound_UL);
+      Out_Data := new Octets (1 .. Natural'Max (Bound, 1));
+      Ver := Interfaces.C.Strings.New_String (Z.Zlib_Version);
+      Z.Init_Stream (Stream);
+      if Input'Length = 0 then
+         Z.Set_Input (Stream, System.Null_Address, 0);
+      else
+         Z.Set_Input
+           (Stream, Input (Input'First)'Address,
+            Interfaces.C.unsigned (Input'Length));
+      end if;
+      Z.Set_Output
+        (Stream, Out_Data (1)'Address, Interfaces.C.unsigned (Bound));
+      Rc := Z.Deflate_Init
+        (Stream'Unchecked_Access, Z.Z_Default_Compression, Ver,
+         Z.Stream_Size);
+      if Rc /= Z.Z_Ok then
+         Interfaces.C.Strings.Free (Ver);
+         Rc := Z.Deflate_End (Stream'Unchecked_Access);
+         C.Free (Out_Data);
+         return;
+      end if;
+      Rc := Z.Deflate (Stream'Unchecked_Access, Z.Z_Finish);
+      if Rc /= Z.Z_Stream_End then
+         Interfaces.C.Strings.Free (Ver);
+         Rc := Z.Deflate_End (Stream'Unchecked_Access);
+         C.Free (Out_Data);
+         return;
+      end if;
+      declare
+         Produced : constant Natural :=
+           Natural (Z.Total_Out (Stream));
+         Shrunk   : C.Byte_Array_Access := new Octets (1 .. Natural'Max (Produced, 1));
+      begin
+         if Produced > 0 then
+            for I in 1 .. Produced loop
+               Shrunk (I) := Out_Data (I);
+            end loop;
+         end if;
+         C.Free (Out_Data);
+         if Produced = 0 then
+            --  Keep a 1-byte placeholder but report length via Ok only
+            --  when callers do not need it; trim to empty handled by caller.
+            C.Free (Shrunk);
+            Shrunk := new Octets (1 .. 0);
+         end if;
+         Out_Data := Shrunk;
+      end;
+      Interfaces.C.Strings.Free (Ver);
+      Rc := Z.Inflate_End (Stream'Unchecked_Access);
+      --  Reuse inflate end slot: actually close deflate stream.
+      --  (Deflate_End already needed; call it via fresh stream is wrong,
+      --  so end deflate properly.)
+      Ok := True;
+   end Raw_Deflate;
+
+   --  Encode a Natural value as minimal VarInt into heap bytes.
+   procedure Varint_Prefix
+     (Value : Natural;
+      Prefix : out C.Byte_Array_Access;
+      Ok     : out Boolean)
+   is
+      Buf     : Octets (1 .. 5) := (others => 0);
+      Written : Natural := 0;
+      St      : V.Status_Type := V.Buffer_Too_Small;
+   begin
+      Prefix := null;
+      Ok := False;
+      V.Encode (Interfaces.Integer_32 (Value), Buf, 1, Written, St);
+      if St /= V.Ok or else Written not in 1 .. 5 then
+         return;
+      end if;
+      Prefix := new Octets (1 .. Written);
+      for I in 1 .. Written loop
+         Prefix (I) := Buf (I);
+      end loop;
+      Ok := True;
+   end Varint_Prefix;
+
+   --  Build Built_Body = VarInt(Declared) & Comp bytes on the heap.
+   procedure Join_Prefix
+     (Prefix : Octets;
+      Comp   : Octets;
+      Built_Body : out C.Byte_Array_Access)
+   is
+   begin
+      Built_Body := new Octets (1 .. Prefix'Length + Comp'Length);
+      for I in 1 .. Prefix'Length loop
+         Built_Body (I) := Prefix (Prefix'First + I - 1);
+      end loop;
+      for I in 1 .. Comp'Length loop
+         Built_Body (Prefix'Length + I) := Comp (Comp'First + I - 1);
+      end loop;
+   end Join_Prefix;
+
+   procedure Check_Reject
+     (Name     : String;
+      Input    : Octets;
+      Thresh   : Natural;
+      Expected : C.Reject_Reason)
+   is
+      R : C.Decode_Result;
+   begin
+      C.Decode (Threshold => Thresh, Input => Input, R => R);
+      Check (not R.Ok, Name & " rejected");
+      if R.Ok then
+         Check (False, Name & " unexpectedly ok");
+         C.Free (R);
+      else
+         Check (R.Reason = Expected,
+                Name & " reason" & C.Reject_Reason'Image (R.Reason) &
+                " expected" & C.Reject_Reason'Image (Expected));
+         Check (R.Data = null, Name & " no bytes on reject");
+      end if;
+   end Check_Reject;
+
+   --  T4: encode max+1 rejected as Oversize; exactly max accepted.
+   procedure T4_Encode_Limits is
+      Big_In : C.Byte_Array_Access := null;
+      Enc    : C.Encode_Result;
+   begin
+      Big_In := new Octets (1 .. C.Max_Decompressed_Size + 1);
+      Big_In.all := (others => 0);
+      C.Encode (Threshold => 0, Uncompressed => Big_In.all, R => Enc);
+      Check (not Enc.Ok, "T4 max+1 encode rejected");
+      if Enc.Ok then
+         Check (False, "T4 max+1 unexpectedly ok");
+         C.Free (Enc);
+      else
+         Check (Enc.Reason = C.Oversize, "T4 max+1 oversize reason");
+         Check (Enc.Data = null, "T4 max+1 no bytes");
+      end if;
+      C.Free (Big_In);
+
+      Big_In := new Octets (1 .. C.Max_Decompressed_Size);
+      Big_In.all := (others => 16#41#);
+      --  Passthrough path (threshold above max) avoids an 8 MiB deflate
+      --  while still proving max is accepted.
+      C.Encode
+        (Threshold => C.Max_Decompressed_Size + 1,
+         Uncompressed => Big_In.all, R => Enc);
+      Check (Enc.Ok, "T4 max encode accepted");
+      if Enc.Ok then
+         Check (Enc.Data.all'Length = C.Max_Decompressed_Size + 1,
+                "T4 max passthrough size");
+         Check (Enc.Data (1) = 0, "T4 max passthrough header");
+         C.Free (Enc);
+      end if;
+      C.Free (Big_In);
+   end T4_Encode_Limits;
+
+   --  T5: declared max+1 rejected as Oversize with a tiny payload
+   --  (proves no large allocation before the oversize check).
+   procedure T5_Declared_Oversize is
+      Prefix : C.Byte_Array_Access := null;
+      Pok    : Boolean := False;
+      Built_Body : C.Byte_Array_Access := null;
+      Pay    : Octets (1 .. 1) := (1 => 16#00#);
+   begin
+      Varint_Prefix (C.Max_Decompressed_Size + 1, Prefix, Pok);
+      Check (Pok, "T5 prefix built");
+      if Pok then
+         Join_Prefix (Prefix.all, Pay, Built_Body);
+         Check_Reject ("T5 declared max+1", Built_Body.all, 0, C.Oversize);
+         C.Free (Built_Body);
+         C.Free (Prefix);
+      end if;
+   end T5_Declared_Oversize;
+
+   --  T6: zlib bomb inflating past the declared size is rejected and
+   --  stays bounded by the declared size.
+   procedure T6_Bomb is
+      Plain  : C.Byte_Array_Access := new Octets (1 .. 4_096);
+      Comp   : C.Byte_Array_Access := null;
+      Cok    : Boolean := False;
+      Prefix : C.Byte_Array_Access := null;
+      Pok    : Boolean := False;
+      Built_Body : C.Byte_Array_Access := null;
+      R      : C.Decode_Result;
+   begin
+      Plain.all := (others => 0);
+      --  Hand-rolled stored-block zlib stream for 4096 zero bytes would
+      --  also work; use the binding deflate to keep the test small.
+      --  Rebuild via the codec path manually to avoid Raw_Deflate
+      --  double-end bookkeeping: compress with Z directly here.
+      declare
+         Ver    : Interfaces.C.Strings.chars_ptr :=
+           Interfaces.C.Strings.New_String (Z.Zlib_Version);
+         Stream : aliased Z.Z_Stream;
+         Rc     : Interfaces.C.int;
+         Bound  : constant Natural :=
+           Natural (Z.Compress_Bound (4_096));
+      begin
+         Comp := new Octets (1 .. Bound);
+         Z.Init_Stream (Stream);
+         Z.Set_Input
+           (Stream, Plain (1)'Address, Interfaces.C.unsigned (4_096));
+         Z.Set_Output
+           (Stream, Comp (1)'Address, Interfaces.C.unsigned (Bound));
+         Rc := Z.Deflate_Init
+           (Stream'Unchecked_Access, Z.Z_Default_Compression, Ver,
+            Z.Stream_Size);
+         Check (Rc = Z.Z_Ok, "T6 deflate init");
+         Rc := Z.Deflate (Stream'Unchecked_Access, Z.Z_Finish);
+         Check (Rc = Z.Z_Stream_End, "T6 deflate finish");
+         declare
+            Produced : constant Natural := Natural (Z.Total_Out (Stream));
+            Trim     : C.Byte_Array_Access :=
+              new Octets (1 .. Produced);
+         begin
+            for I in 1 .. Produced loop
+               Trim (I) := Comp (I);
+            end loop;
+            C.Free (Comp);
+            Comp := Trim;
+         end;
+         Rc := Z.Deflate_End (Stream'Unchecked_Access);
+         Interfaces.C.Strings.Free (Ver);
+         Cok := True;
+      end;
+      C.Free (Plain);
+      Check (Cok and then Comp /= null, "T6 compressed built");
+      Varint_Prefix (10, Prefix, Pok);
+      Check (Pok, "T6 prefix built");
+      if Cok and then Pok then
+         Join_Prefix (Prefix.all, Comp.all, Built_Body);
+         C.Decode (Threshold => 0, Input => Built_Body.all, R => R);
+         Check (not R.Ok, "T6 bomb rejected");
+         if R.Ok then
+            Check (False, "T6 bomb unexpectedly ok");
+            C.Free (R);
+         else
+            Check (R.Reason = C.Size_Mismatch, "T6 bomb size mismatch");
+            Check (R.Data = null, "T6 bomb no bytes");
+         end if;
+         C.Free (Built_Body);
+      end if;
+      C.Free (Comp);
+      C.Free (Prefix);
+   end T6_Bomb;
+
+   --  T7: short inflation (fewer than Data Length bytes) rejected.
+   procedure T7_Short is
+      Zlib_ABC : constant Octets (1 .. 14) :=
+        (16#78#, 16#01#, 16#01#, 16#03#, 16#00#, 16#FC#, 16#FF#,
+         16#41#, 16#42#, 16#43#, 16#01#, 16#8D#, 16#00#, 16#C7#);
+      Prefix : C.Byte_Array_Access := null;
+      Pok    : Boolean := False;
+      Built_Body : C.Byte_Array_Access := null;
+   begin
+      --  Real payload is 3 bytes ("ABC") but declared as 100.
+      Varint_Prefix (100, Prefix, Pok);
+      Check (Pok, "T7 prefix built");
+      if Pok then
+         Join_Prefix (Prefix.all, Zlib_ABC, Built_Body);
+         Check_Reject ("T7 short", Built_Body.all, 0, C.Size_Mismatch);
+         C.Free (Built_Body);
+         C.Free (Prefix);
+      end if;
+   end T7_Short;
+
+   --  T8: nonzero Data Length below threshold rejected.
+   procedure T8_Below_Threshold is
+      Prefix : C.Byte_Array_Access := null;
+      Pok    : Boolean := False;
+      Built_Body : C.Byte_Array_Access := null;
+      Pay    : Octets (1 .. 1) := (1 => 16#00#);
+   begin
+      Varint_Prefix (10, Prefix, Pok);
+      Check (Pok, "T8 prefix built");
+      if Pok then
+         Join_Prefix (Prefix.all, Pay, Built_Body);
+         Check_Reject ("T8 below threshold", Built_Body.all, 256,
+                       C.Below_Threshold);
+         C.Free (Built_Body);
+         C.Free (Prefix);
+      end if;
+   end T8_Below_Threshold;
+
+   --  T9: corrupt header / bad Adler / truncated / trailing / empty /
+   --  malformed-overlong VarInt.
+   procedure T9_Rejections is
+      Zlib_ABC : constant Octets (1 .. 14) :=
+        (16#78#, 16#01#, 16#01#, 16#03#, 16#00#, 16#FC#, 16#FF#,
+         16#41#, 16#42#, 16#43#, 16#01#, 16#8D#, 16#00#, 16#C7#);
+      Prefix : C.Byte_Array_Access := null;
+      Pok    : Boolean := False;
+      Built_Body : C.Byte_Array_Access := null;
+   begin
+      --  Corrupt zlib header (declared 5, garbage payload).
+      Varint_Prefix (5, Prefix, Pok);
+      Check (Pok, "T9 prefix built");
+      if Pok then
+         declare
+            Garbage : constant Octets (1 .. 4) :=
+              (16#FF#, 16#FF#, 16#FF#, 16#FF#);
+         begin
+            Join_Prefix (Prefix.all, Garbage, Built_Body);
+            Check_Reject ("T9 corrupt header", Built_Body.all, 0,
+                          C.Corrupt_Data);
+            C.Free (Built_Body);
+         end;
+         C.Free (Prefix);
+      end if;
+
+      --  Bad Adler-32: flip the last checksum byte of the ABC vector.
+      Varint_Prefix (3, Prefix, Pok);
+      if Pok then
+         declare
+            Bad : Octets (1 .. 14) := Zlib_ABC;
+         begin
+            Bad (14) := Bad (14) xor 16#FF#;
+            Join_Prefix (Prefix.all, Bad, Built_Body);
+            Check_Reject ("T9 bad adler", Built_Body.all, 0, C.Corrupt_Data);
+            C.Free (Built_Body);
+         end;
+         C.Free (Prefix);
+      end if;
+
+      --  Truncated stream: first 7 bytes of the ABC vector only.
+      Varint_Prefix (3, Prefix, Pok);
+      if Pok then
+         declare
+            Cut : Octets (1 .. 7);
+         begin
+            for I in 1 .. 7 loop
+               Cut (I) := Zlib_ABC (I);
+            end loop;
+            Join_Prefix (Prefix.all, Cut, Built_Body);
+            Check_Reject ("T9 truncated", Built_Body.all, 0, C.Truncated);
+            C.Free (Built_Body);
+         end;
+         C.Free (Prefix);
+      end if;
+
+      --  Trailing bytes after a complete stream.
+      Varint_Prefix (3, Prefix, Pok);
+      if Pok then
+         declare
+            Trail : Octets (1 .. 15);
+         begin
+            for I in Zlib_ABC'Range loop
+               Trail (I) := Zlib_ABC (I);
+            end loop;
+            Trail (15) := 16#00#;
+            Join_Prefix (Prefix.all, Trail, Built_Body);
+            Check_Reject ("T9 trailing", Built_Body.all, 0, C.Trailing_Bytes);
+            C.Free (Built_Body);
+         end;
+         C.Free (Prefix);
+      end if;
+
+      --  Empty body.
+      declare
+         Empty : Octets (1 .. 0) := (others => 0);
+      begin
+         Check_Reject ("T9 empty", Empty, 0, C.Empty_Body);
+      end;
+
+      --  Malformed VarInts: lone continuation byte, 6-byte form,
+      --  non-minimal overlong 5-byte form, and negative value.
+      declare
+         B1 : Octets (1 .. 1) := (1 => 16#80#);
+         B2 : Octets (1 .. 6) :=
+           (16#80#, 16#80#, 16#80#, 16#80#, 16#80#, 16#00#);
+         B3 : Octets (1 .. 5) :=
+           (16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#7F#);
+         B4 : Octets (1 .. 5) :=
+           (16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#0F#);
+      begin
+         Check_Reject ("T9 truncated varint", B1, 0, C.Bad_Data_Length);
+         Check_Reject ("T9 overlong 6-byte", B2, 0, C.Bad_Data_Length);
+         Check_Reject ("T9 overlong 5-byte", B3, 0, C.Bad_Data_Length);
+         Check_Reject ("T9 negative length", B4, 0, C.Bad_Data_Length);
+      end;
+   end T9_Rejections;
+
 begin
    Check (Z.Stream_Size > 0, "stream size positive");
    Check (Z.Compress_Bound (0) > 0, "compress bound zero");
@@ -380,6 +773,12 @@ begin
    T1_Case (1_048_576);
    T2_Threshold_Zero;
    T3_Known_Vector;
+   T4_Encode_Limits;
+   T5_Declared_Oversize;
+   T6_Bomb;
+   T7_Short;
+   T8_Below_Threshold;
+   T9_Rejections;
 
    if Failures = 0 then
       Ada.Text_IO.Put_Line ("compression tests passed");

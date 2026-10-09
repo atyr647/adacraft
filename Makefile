@@ -14,9 +14,9 @@ bin/test_protocol_state: tests/test_protocol_state.adb
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_protocol_state.adb -o $@
 
-bin/adacraft_tests: tests/adacraft_tests.adb tests/test_auth_session.adb tests/test_auth_session.ads src/auth/adacraft-auth-session.ads src/auth/adacraft-auth-session.adb src/auth/adacraft-auth-session_fake.ads src/auth/adacraft-auth-session_fake.adb
+bin/adacraft_tests: tests/adacraft_tests.adb tests/test_auth_session.adb tests/test_auth_session.ads tests/test_protocol_packet_encoder.adb src/auth/adacraft-auth-session.ads src/auth/adacraft-auth-session.adb src/auth/adacraft-auth-session_fake.ads src/auth/adacraft-auth-session_fake.adb
 	mkdir -p bin obj
-	$(GNATMAKE) $(FLAGS) $(SRC) tests/adacraft_tests.adb -o $@
+	$(GNATMAKE) $(FLAGS) -Itests $(SRC) tests/adacraft_tests.adb -o $@
 
 bin/test_ingress_framing: tests/test_ingress_framing.adb
 	mkdir -p bin obj

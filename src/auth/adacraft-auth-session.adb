@@ -92,6 +92,43 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
 
    --  All routines are total: they return Ok=False instead of raising.
 
+   --  Single shared escape consumer: merges the Parse_String/Skip_String
+   --  copies. Expects S(P) = '\'; on success advances P past the escape
+   --  and returns the decoded character (unicode escapes as '?').
+   procedure Consume_Escape
+     (S : String; P : in out Natural; C : out Character; Ok : out Boolean)
+   is
+   begin
+      C := '?';
+      Ok := False;
+      if P > S'Last or else S (P) /= '\' then
+         return;
+      end if;
+      if P + 1 > S'Last then
+         return;
+      end if;
+      declare
+         E : constant Character := S (P + 1);
+      begin
+         if E = 'u' then
+            if not Is_Hex4 (S, P + 2) then
+               return;
+            end if;
+            C := '?';
+            P := P + 6;
+            Ok := True;
+            return;
+         elsif Is_Simple_Escape (E) then
+            C := Unescape (E);
+            P := P + 2;
+            Ok := True;
+            return;
+         else
+            return;
+         end if;
+      end;
+   end Consume_Escape;
+
    procedure Skip_WS (S : String; P : in out Natural) is
    begin
       while P <= S'Last
@@ -130,33 +167,19 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
             Ok := True;
             return;
          elsif S (P) = '\' then
-            if P + 1 > S'Last then
-               return;
-            end if;
             declare
-               E : constant Character := S (P + 1);
+               C   : Character := '?';
+               EOk : Boolean := False;
             begin
-               if E = 'u' then
-                  --  Skip 4 hex digits; store placeholder.
-                  if not Is_Hex4 (S, P + 2) then
-                     return;
-                  end if;
-                  if Out_Next > Cap then
-                     return;
-                  end if;
-                  Buf (Out_Next) := '?';
-                  Out_Next := Out_Next + 1;
-                  P := P + 6;
-               elsif Is_Simple_Escape (E) then
-                  if Out_Next > Cap then
-                     return;
-                  end if;
-                  Buf (Out_Next) := Unescape (E);
-                  Out_Next := Out_Next + 1;
-                  P := P + 2;
-               else
+               Consume_Escape (S, P, C, EOk);
+               if not EOk then
                   return;
                end if;
+               if Out_Next > Cap then
+                  return;
+               end if;
+               Buf (Out_Next) := C;
+               Out_Next := Out_Next + 1;
             end;
          else
             if Out_Next > Cap then
@@ -333,19 +356,15 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       P := P + 1;
       while P <= S'Last loop
          if S (P) = '\' then
-            if P + 1 > S'Last then
-               return;
-            end if;
-            if S (P + 1) = 'u' then
-               if not Is_Hex4 (S, P + 2) then
+            declare
+               C   : Character := '?';
+               EOk : Boolean := False;
+            begin
+               Consume_Escape (S, P, C, EOk);
+               if not EOk then
                   return;
                end if;
-               P := P + 6;
-            elsif Is_Simple_Escape (S (P + 1)) then
-               P := P + 2;
-            else
-               return;
-            end if;
+            end;
          elsif S (P) = '"' then
             P := P + 1;
             Ok := True;

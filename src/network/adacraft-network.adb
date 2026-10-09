@@ -436,17 +436,40 @@ package body Adacraft.Network is
             then
                raise Constraint_Error with "not login start";
             end if;
-            if Pay_First <= Blen then
-               LS := Adacraft.Protocol.Login.Decode_Login_Start
-                 (Oct (Pay_First .. Blen));
-            else
-               declare
-                  Empty : constant Adacraft.Protocol.Octets (2 .. 1) :=
-                    (others => <>);
-               begin
-                  LS := Adacraft.Protocol.Login.Decode_Login_Start (Empty);
-               end;
-            end if;
+            --  Slice the Login Start body after the Packet-Id VarInt.
+            --  Pay_First should already point past the id, but recompute
+            --  the id length from the framed body so a leading 0x00 id
+            --  byte is never fed to Decode_Login_Start (it would decode
+            --  as a zero-length name => Malformed => silent close).
+            declare
+               Id_Val  : Interfaces.Integer_32 := 0;
+               Id_Cons : Natural := 0;
+               Id_St   : Adacraft.Protocol.Varnum.Status_Type :=
+                 Adacraft.Protocol.Varnum.Ok;
+               Start_At : Natural := Pay_First;
+            begin
+               Adacraft.Protocol.Varnum.Decode
+                 (Full (1 .. Blen), 1, Id_Val, Id_Cons, Id_St);
+               if Id_St = Adacraft.Protocol.Varnum.Ok
+                 and then Id_Cons >= 1
+               then
+                  if Start_At < 1 + Id_Cons then
+                     Start_At := 1 + Id_Cons;
+                  end if;
+               end if;
+               if Start_At <= Blen then
+                  LS := Adacraft.Protocol.Login.Decode_Login_Start
+                    (Oct (Start_At .. Blen));
+               else
+                  declare
+                     Empty : constant Adacraft.Protocol.Octets (2 .. 1) :=
+                       (others => <>);
+                  begin
+                     LS :=
+                       Adacraft.Protocol.Login.Decode_Login_Start (Empty);
+                  end;
+               end if;
+            end;
             case LS.Status is
                when Adacraft.Protocol.Login.Ok =>
                   Reason_Len :=

@@ -107,7 +107,11 @@ package body Adacraft.Corpus.Runner is
          --  Login-state rejects (duplicate Start, early Ack, unknown id
          --  in Login) are login rejections, not generic closes, so the
          --  rejection category matches the corpus "login" expectation.
-         if C.Proto_State = Adacraft.Protocol.State.Login then
+         --  Duplicate Start arrives when already in Login_Awaiting_Ack,
+         --  so both Login states map to "login" here.
+         if C.Proto_State = Adacraft.Protocol.State.Login
+           or else C.Proto_State = Adacraft.Protocol.State.Login_Awaiting_Ack
+         then
             R.Category := To_Unbounded_String ("login");
             R.Detail := To_Unbounded_String ("login rejected");
          else
@@ -130,11 +134,7 @@ package body Adacraft.Corpus.Runner is
       R.Output := Snapshot_Output (C);
       --  A well-formed Login Start is answered with one framed Login
       --  Disconnect then clean-close (server #251 behavior): the case
-      --  outcome is rejected-with-disconnect, not accepted. Report it
-      --  as such so disconnect cases compare against the pending output.
-      --  Status Pong also closes with output queued (Pong_Ready_Close);
-      --  that is a normal accepted response, not a disconnect, so the
-      --  conversion applies only in Login state.
+      --  outcome is rejected-with-disconnect, not accepted.
       if C.Proto_State = Adacraft.Protocol.State.Login
         and then C.Closing
         and then R.Output.Length > 0

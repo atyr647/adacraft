@@ -1,10 +1,8 @@
-with Adacraft.Protocol;
+with Interfaces;
 
 package Adacraft.Auth.MD5 is
-   pragma Pure;
-
-   subtype Octet is Adacraft.Protocol.Octet;
-   subtype Octets is Adacraft.Protocol.Octets;
+   subtype Octet is Interfaces.Unsigned_8;
+   type Octets is array (Positive range <>) of Octet;
 
    type Digest is array (1 .. 16) of Octet;
 

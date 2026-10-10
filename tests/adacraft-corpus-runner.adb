@@ -52,6 +52,22 @@ package body Adacraft.Corpus.Runner is
    function Server_Auth_Mode return Auth.Server_Auth_Mode is
      (if Adacraft.Kernel.Online_Mode then Auth.Online else Auth.Offline);
 
+   type Feed_Result is record
+      Actual    : Outcome := Rejected;
+      Pid       : Natural := 0;
+      Category  : Unbounded_String;
+      Detail    : Unbounded_String;
+      Reencoded : Byte_Vectors.Vector;
+   end record;
+
+   procedure Set_Reencoded (R : in out Feed_Result; Input : P.Octets) is
+   begin
+      R.Reencoded.Clear;
+      for I in Input'Range loop
+         R.Reencoded.Append (Input (I));
+      end loop;
+   end Set_Reencoded;
+
    --  Frame a ready server packet body (id included) with the server's
    --  own framing entry (Packets.Frame). No runner-side id/length
    --  codec here; this only collects the bytes the server package
@@ -116,14 +132,6 @@ package body Adacraft.Corpus.Runner is
          Response_Data => Resp_Buf, Response_Len => Resp_Len,
          Close_Connection => Want_Close);
    end Handle_Empty_Status;
-
-   type Feed_Result is record
-      Actual    : Outcome := Rejected;
-      Pid       : Natural := 0;
-      Category  : Unbounded_String;
-      Detail    : Unbounded_String;
-      Reencoded : Byte_Vectors.Vector;
-   end record;
 
    procedure Feed
      (D     : in out Dispatch_Session;
@@ -219,6 +227,7 @@ package body Adacraft.Corpus.Runner is
                R.Pid := F.Packet_Id;
                R.Category := To_Unbounded_String ("handshake");
                R.Detail := To_Unbounded_String ("handshake accepted");
+               Set_Reencoded (R, Input);
                return;
             else
                R.Category := To_Unbounded_String ("handshake");
@@ -292,6 +301,7 @@ package body Adacraft.Corpus.Runner is
                R.Pid := F.Packet_Id;
                R.Category := To_Unbounded_String ("status");
                R.Detail := To_Unbounded_String ("status accepted");
+               Set_Reencoded (R, Input);
                if S_Res = SE.Rejected_Close then
                   Ctx.Closed := True;
                end if;
@@ -387,6 +397,7 @@ package body Adacraft.Corpus.Runner is
                         R.Pid := F.Packet_Id;
                         R.Category := To_Unbounded_String ("login");
                         R.Detail := To_Unbounded_String ("login start ok");
+                        Set_Reencoded (R, Input);
                         return;
                      when Prot_Login.Need_Disconnect_Close
                         | Prot_Login.Refuse_Online =>
@@ -438,6 +449,7 @@ package body Adacraft.Corpus.Runner is
                      R.Pid := F.Packet_Id;
                      R.Category := To_Unbounded_String ("login");
                      R.Detail := To_Unbounded_String ("ack ok");
+                     Set_Reencoded (R, Input);
                      return;
                   else
                      Ctx.Closed := True;
@@ -657,7 +669,12 @@ package body Adacraft.Corpus.Runner is
       Summary   : out Run_Summary)
    is
       Failure : Unbounded_String;
+      Saved_Online_Mode : constant Boolean := Adacraft.Kernel.Online_Mode;
    begin
+      --  Corpus login scenarios exercise the offline flow explicitly.
+      --  The runner's LOGIN dispatch still reads the configured mode
+      --  via Server_Auth_Mode.
+      Adacraft.Kernel.Online_Mode := False;
       Summary := (others => <>);
       for S of Scenarios loop
          if (not F.Has_Id or else S.Id = F.Id)
@@ -688,6 +705,7 @@ package body Adacraft.Corpus.Runner is
          end loop;
          Ada.Text_IO.Put_Line (To_String (Line));
       end;
+      Adacraft.Kernel.Online_Mode := Saved_Online_Mode;
    end Run_All;
 
 end Adacraft.Corpus.Runner;

@@ -78,7 +78,7 @@ is
                and then Written = 0
                and then Buffer = Buffer'Old);
 
-   procedure Decode_Varlong
+   procedure Decode_VarLong
      (Buffer      : in     Octets;
       Start_Index : in     Integer;
       Value       :    out Interfaces.Integer_64;
@@ -110,27 +110,26 @@ is
       Next   : Natural                := 0;
    end record;
 
-   function Decode_Varint (Buffer : Octets; From : Positive) return Varint_Result
+   function Decode_VarInt (Buffer : Octets; From : Positive) return Varint_Result
      with
        Global => null,
        Pre    => Buffer'Last < Positive'Last
                  and then From <= Buffer'Last + 1,
        Post   =>
-         (if Decode_Varint'Result.Status = Status_Kind'(Ok)
-          then Decode_Varint'Result.Next in From + 1 .. From + Max_Varint_Bytes
-               and then Decode_Varint'Result.Next - 1 <= Buffer'Last)
-         and then (if Decode_Varint'Result.Status /= Status_Kind'(Ok)
-                   then Decode_Varint'Result.Next = From);
+         (if Decode_VarInt'Result.Status = Status_Kind'(Ok)
+          then Decode_VarInt'Result.Next in From + 1 .. From + Max_Varint_Bytes
+               and then Decode_VarInt'Result.Next - 1 <= Buffer'Last)
+         and then (if Decode_VarInt'Result.Status /= Status_Kind'(Ok)
+                   then Decode_VarInt'Result.Next = From);
 
-   --  Unchanged by the VarInt rework; VarLong is reworked separately.
-   function Decode_Varlong (Buffer : Octets; From : Positive) return Varlong_Result
+   function Decode_VarLong (Buffer : Octets; From : Positive) return Varlong_Result
      with
        Pre  => Buffer'Last < Positive'Last
                and then From <= Buffer'Last + 1,
        Post =>
-         (if Decode_Varlong'Result.Status = Status_Kind'(Ok)
-          then Decode_Varlong'Result.Next in From + 1 .. From + Max_Varlong_Bytes
-               and then Decode_Varlong'Result.Next - 1 <= Buffer'Last)
-         and then (if Decode_Varlong'Result.Status /= Status_Kind'(Ok)
-                   then Decode_Varlong'Result.Next = From);
+         (if Decode_VarLong'Result.Status = Status_Kind'(Ok)
+          then Decode_VarLong'Result.Next in From + 1 .. From + Max_Varlong_Bytes
+               and then Decode_VarLong'Result.Next - 1 <= Buffer'Last)
+         and then (if Decode_VarLong'Result.Status /= Status_Kind'(Ok)
+                   then Decode_VarLong'Result.Next = From);
 end Adacraft.Protocol.Varnum;

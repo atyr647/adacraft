@@ -148,7 +148,7 @@ is
       Status := Overlong;
    end Decode;
 
-   function Encoded_Length_Varlong (Value : Interfaces.Integer_64) return Natural is
+   function Encoded_Length_VarLong (Value : Interfaces.Integer_64) return Natural is
      (if Value < 0 then 10
       elsif Value < 2 ** 7 then 1
       elsif Value < 2 ** 14 then 2
@@ -160,14 +160,14 @@ is
       elsif Value < 2 ** 56 then 8
       else 9);
 
-   procedure Encode_Varlong
+   procedure Encode_VarLong
      (Value       : in     Interfaces.Integer_64;
       Buffer      : in out Octets;
       Start_Index : in     Integer;
       Written     :    out Natural;
       Status      :    out Status_Type)
    is
-      Len : constant Natural := Encoded_Length_Varlong (Value);
+      Len : constant Natural := Encoded_Length_VarLong (Value);
       U   : Interfaces.Unsigned_64;
    begin
       if Value < 0 then
@@ -179,7 +179,7 @@ is
       Encode_Unsigned (U, Len, Buffer, Start_Index, Written, Status);
    end Encode_Varlong;
 
-   procedure Decode_Varlong
+   procedure Decode_VarLong
      (Buffer      : in     Octets;
       Start_Index : in     Integer;
       Value       :    out Interfaces.Integer_64;
@@ -239,7 +239,7 @@ is
       Status := Overlong;
    end Decode_Varlong;
 
-   function Decode_Varint (Buffer : Octets; From : Positive) return Varint_Result is
+   function Decode_VarInt (Buffer : Octets; From : Positive) return Varint_Result is
       V : Interfaces.Integer_32;
       C : Natural;
       S : Status_Type;
@@ -269,38 +269,34 @@ is
       end case;
    end Decode_Varint;
 
-   function Decode_Varlong (Buffer : Octets; From : Positive) return Varlong_Result is
-      Result : Interfaces.Unsigned_64 := 0;
-      Pos    : Natural                := From;
+   function Decode_VarLong (Buffer : Octets; From : Positive) return Varlong_Result is
+      V : Interfaces.Integer_64;
+      C : Natural;
+      S : Status_Type;
    begin
       if From > Buffer'Last then
          return (Status => Need_More, Value => 0, Next => From);
       end if;
 
-      for Step in 1 .. Max_Varlong_Bytes loop
-         pragma Loop_Invariant (Pos in From .. Buffer'Last);
-         declare
-            B     : constant Octet := Buffer (Pos);
-            Bits  : constant Interfaces.Unsigned_64 :=
-              Interfaces.Unsigned_64 (B and 16#7F#);
-            Shift : constant Natural := (Step - 1) * 7;
-         begin
-            if Step = Max_Varlong_Bytes and then Bits > 1 then
-               return (Status => Rejected, Value => 0, Next => From);
+      Decode_Varlong (Buffer, From, V, C, S);
+      case S is
+         when Ok =>
+            if V < 0 then
+               return
+                 (Status => Status_Kind'(Ok),
+                  Value  =>
+                    Interfaces.Unsigned_64 (V + 2 ** 62 + 2 ** 62) + 2 ** 63,
+                  Next   => From + C);
+            else
+               return
+                 (Status => Status_Kind'(Ok),
+                  Value  => Interfaces.Unsigned_64 (V),
+                  Next   => From + C);
             end if;
-            Result := Result or Interfaces.Shift_Left (Bits, Shift);
-            Pos    := Pos + 1;
-            if (B and 16#80#) = 0 then
-               if Step > 1 and then Bits = 0 then
-                  return (Status => Rejected, Value => 0, Next => From);
-               end if;
-               return (Status => Status_Kind'(Ok), Value => Result, Next => Pos);
-            end if;
-            if Pos > Buffer'Last then
-               return (Status => Need_More, Value => 0, Next => From);
-            end if;
-         end;
-      end loop;
-      return (Status => Rejected, Value => 0, Next => From);
-   end Decode_Varlong;
+         when Truncated =>
+            return (Status => Need_More, Value => 0, Next => From);
+         when Overlong | Buffer_Too_Small =>
+            return (Status => Rejected, Value => 0, Next => From);
+      end case;
+   end Decode_VarLong;
 end Adacraft.Protocol.Varnum;

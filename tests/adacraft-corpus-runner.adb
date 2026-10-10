@@ -317,11 +317,14 @@ package body Adacraft.Corpus.Runner is
                declare
                   Payload : constant P.Octets :=
                     Input (F.Payload_First .. F.Payload_Last);
+                  --  Mirror Adacraft.Network.Handle_Frame_Body Gate 4:
+                  --  the live Login branch answers well-formed Start
+                  --  with offline success (no online-mode branch here;
+                  --  online refuse lives in Login.Handle_Start used via
+                  --  Ingress). Corpus login scenarios exercise offline.
                   Res : constant Prot_Login.Start_Result :=
                     Prot_Login.Handle_Start
-                      (Ctx.Session, Payload,
-                       (if Adacraft.Kernel.Online_Mode
-                        then Auth.Online else Auth.Offline));
+                      (Ctx.Session, Payload, Auth.Offline);
                   W : P.Buffer.Writer (Capacity => 512);
                begin
                   case Res.Outcome is

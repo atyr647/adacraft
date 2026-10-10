@@ -7,6 +7,10 @@ package body Adacraft.Protocol.Login is
 
    use type Auth.Server_Auth_Mode;
    use type Adacraft.Protocol.Status_Kind;
+   --  VarInt decoding for Login Start goes through Buffer.Decode_String
+   --  (which decodes the length prefix via Varnum); no local 16#80#
+   --  continuation-bit logic here. Protocol/version pins, where needed,
+   --  come from Adacraft.Protocol.State, not literals.
 
    function Is_Valid_Name (Name : String) return Boolean is
    begin

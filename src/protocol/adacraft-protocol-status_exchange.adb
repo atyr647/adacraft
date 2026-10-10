@@ -1,16 +1,27 @@
+with Ada.Strings.Fixed;
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Packets;
+with Adacraft.Protocol.State;
 
 package body Adacraft.Protocol.Status_Exchange with SPARK_Mode => Off is
    use Adacraft.Protocol;
    use type State.Connection_State;
 
-   function Build_JSON return String is
+   --  Single status JSON builder. Version fields are pinned to the single
+   --  version package Adacraft.Protocol.State (Protocol_Number = 777,
+   --  Minecraft_Version = "26.3"). Dropped fields vs. vanilla samples:
+   --  favicon, enforcesSecureChat and previews are omitted; players
+   --  reports max 20 / online 0 and description is {"text":"AdaCraft"}.
+   function Build_Response return String is
+      Num_Image : constant String :=
+        Ada.Strings.Fixed.Trim
+          (State.Protocol_Number'Image, Ada.Strings.Left);
    begin
-      return "{""version"":{""name"":""26.3"",""protocol"":777},"
+      return "{""version"":{""name"":""" & State.Minecraft_Version
+        & """,""protocol"":" & Num_Image & "},"
         & """players"":{""max"":20,""online"":0},"
         & """description"":{""text"":""AdaCraft""}}";
-   end Build_JSON;
+   end Build_Response;
 
    procedure Reset (S : in out Session) is
    begin
@@ -50,7 +61,7 @@ package body Adacraft.Protocol.Status_Exchange with SPARK_Mode => Off is
             return;
          end if;
          declare
-            JSON : constant String := Build_JSON;
+            JSON : constant String := Build_Response;
             W : Buffer.Writer (33_000);
          begin
             if JSON'Length > 32_767 then

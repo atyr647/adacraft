@@ -381,10 +381,10 @@ begin
       end;
    end;
 
-   --  Helper call-site coverage: both Emit_Unsigned sites (Encode,
-   --  Encode_Varlong) and both Decode_Unsigned sites (Decode,
-   --  Decode_Varlong), plus strict wrappers. Single-byte, multi-byte
-   --  maximum, sign path, overlong-rejected, truncated-rejected.
+   --  Helper call-site coverage: both Encode_Unsigned sites (Encode,
+   --  Encode_Varlong) via Emit_Unsigned, plus strict wrappers.
+   --  Single-byte, multi-byte maximum, sign path, overlong-rejected,
+   --  truncated-rejected.
    declare
       use type Interfaces.Integer_64;
       use type Interfaces.Unsigned_32;
@@ -396,7 +396,7 @@ begin
       D32   : Interfaces.Integer_32;
       D64   : I64;
    begin
-      --  VarInt-encode single-byte values (Encode site of Emit_Unsigned).
+      --  VarInt-encode single-byte values (Encode site).
       V.Encode (0, Buf, 1, W, S);
       Check (S = V.Ok and then W = 1 and then Buf (1) = 16#00#,
              "H varint enc single 0");
@@ -433,7 +433,7 @@ begin
       Check (S = V.Ok and then W = 10, "H varlong enc -1");
       V.Encode_Varlong (I64'First, Buf, 1, W, S);
       Check (S = V.Ok and then W = 10, "H varlong enc i64 first");
-      --  VarInt-decode single-byte value (Decode site of Decode_Unsigned).
+      --  VarInt-decode single-byte value.
       V.Decode (Octets'(1 => 16#00#), 1, D32, C, S);
       Check (S = V.Ok and then D32 = 0 and then C = 1,
              "H varint dec single 0");
@@ -459,7 +459,7 @@ begin
       V.Decode (Octets'(16#FF#, 16#FF#), 1, D32, C, S);
       Check (S = V.Truncated and then D32 = 0 and then C = 0,
              "H varint dec trunc FF FF cutoff");
-      --  VarLong-decode single-byte value (Decode_Varlong site).
+      --  VarLong-decode single-byte value.
       V.Decode_Varlong (Octets'(1 => 16#00#), 1, D64, C, S);
       Check (S = V.Ok and then D64 = 0 and then C = 1,
              "H varlong dec single 0");

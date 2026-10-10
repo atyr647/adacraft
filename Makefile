@@ -4,7 +4,7 @@ FLAGS := -gnat2022 -gnata -D obj
 
 .PHONY: all test server clean check check-packets-table
 
-all: bin/adacraft bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus bin/test_protocol_login bin/test_bad_clients bin/test_login_server bin/test_protocol_compression bin/test_handshake_exchange bin/test_status_exchange bin/test_protocol_packet_encoder
+all: bin/adacraft bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus bin/test_protocol_login bin/test_bad_clients bin/test_login_server bin/test_protocol_compression bin/test_handshake_exchange bin/test_status_exchange bin/test_protocol_packet_encoder bin/test_frame_zero_length
 
 bin/test_protocol_varnum: tests/test_protocol_varnum.adb
 	mkdir -p bin obj
@@ -62,7 +62,11 @@ bin/test_protocol_packet_encoder: tests/test_protocol_packet_encoder.adb
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_protocol_packet_encoder.adb -o $@
 
-test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus bin/test_protocol_login bin/test_bad_clients bin/test_login_server bin/test_protocol_compression bin/test_handshake_exchange bin/test_status_exchange bin/test_protocol_packet_encoder
+bin/test_frame_zero_length: tests/test_frame_zero_length.adb
+	mkdir -p bin obj
+	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_frame_zero_length.adb -o $@
+
+test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus bin/test_protocol_login bin/test_bad_clients bin/test_login_server bin/test_protocol_compression bin/test_handshake_exchange bin/test_status_exchange bin/test_protocol_packet_encoder bin/test_frame_zero_length
 	$(MAKE) --no-print-directory check-packets-table
 	$(MAKE) --no-print-directory check
 	./bin/adacraft_tests
@@ -78,6 +82,7 @@ test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/t
 	./bin/test_handshake_exchange
 	./bin/test_status_exchange
 	./bin/test_protocol_packet_encoder
+	./bin/test_frame_zero_length
 
 # Regenerates Adacraft.Protocol.Ids from the committed packets.json, compares
 # it with the committed file, and checks the report SHA-256 recorded in the

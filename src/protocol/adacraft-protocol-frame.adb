@@ -7,6 +7,7 @@ is
    use type Interfaces.Unsigned_32;
    use type Ada.Streams.Stream_Element_Offset;
    use type Ada.Streams.Stream_Element;
+   use type Varnum.Status_Type;
 
    function Remaining (Last : Natural; From : Natural) return Natural is
      (if From > Last then 0 else Last - From + 1);
@@ -81,7 +82,11 @@ is
 
       if Payload'Length > 0 then
          Body_First := Output'First + Prefix_Len;
-         Output (Body_First .. Body_First + Payload'Length - 1) := Payload;
+         Output
+           (Body_First
+            .. Body_First
+               + Ada.Streams.Stream_Element_Offset (Payload'Length) - 1) :=
+           Payload;
       end if;
 
       Last := Output'First + Frame_Len - 1;
@@ -109,7 +114,9 @@ is
          end if;
          for I in Chunk'Range loop
             Decoder.Count := Decoder.Count + 1;
-            Decoder.Data (Decoder.Count) := Chunk (I);
+            Decoder.Data
+              (Ada.Streams.Stream_Element_Offset (Decoder.Count)) :=
+              Chunk (I);
          end loop;
       end if;
 
@@ -144,7 +151,7 @@ is
             On_Frame (Decoder.Data (First .. Last));
             Remain := Decoder.Count - Frame_Len;
             if Remain > 0 then
-               Decoder.Data (1 .. Ada.Streams.Stream_Element_Offset (Remain)) :=
+               Decoder.Data (Ada.Streams.Stream_Element_Offset (1) .. Ada.Streams.Stream_Element_Offset (Remain)) :=
                  Decoder.Data
                    (Ada.Streams.Stream_Element_Offset (Frame_Len + 1)
                     .. Ada.Streams.Stream_Element_Offset (Decoder.Count));

@@ -23,7 +23,7 @@ Login behaves as the binary does, shown by `tests/test_login_server.adb` driving
 
 Not implemented: encryption, online authentication, compression, configuration, known packs, registry data / tags, and the play transition. There is no online login, no Login Success path, and no configuration or play handling.
 
-The server survives bad clients: resets, garbage handshakes, half-packets, and idle connections each close only that connection while others still get status plus ping. Every read is governed by a single 30s read timeout (`Adacraft.Network.Read_Timeout`), covering fully-idle and stalled-mid-frame connections alike, as shown by `tests/test_bad_clients.adb` and the `tools/smoke_bad_clients.py` probe.
+The server survives bad clients: resets, garbage handshakes, half-packets, and idle connections each close only that connection while others still get status plus ping. Every read is governed by a single 30s read timeout (`Adacraft.Network.Read_Timeout`), covering fully-idle and stalled-mid-frame connections alike, as shown by `tests/test_bad_clients.adb` and the `tools/smoke_bad_clients.py` probe. A zero-length frame (length-VarInt `0` built via `Adacraft.Protocol.Varnum.Encode`) is malformed framing: both `Adacraft.Protocol.Frame.Decode_Frame` and `Adacraft.Protocol.Frame.Feed` reject it as a framing error closing only that connection, as shown by `tests/test_frame_zero_length.adb`.
 
 ```text
 make test

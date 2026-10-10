@@ -63,7 +63,7 @@ is
        Post   => Encoded_Length_Varlong'Result in 1 .. Max_Varlong_Bytes;
    --  Exact number of bytes Encode_Varlong writes (negatives: 10).
 
-   procedure Encode_Varlong
+   procedure Encode_VarLong
      (Value       : in     Interfaces.Integer_64;
       Buffer      : in out Octets;
       Start_Index : in     Integer;
@@ -73,10 +73,11 @@ is
        Global => null,
        Post   =>
          (if Status = Ok
-          then Written = Encoded_Length_Varlong (Value)
+          then Written = Encoded_Length_VarLong (Value)
           else Status = Buffer_Too_Small
                and then Written = 0
                and then Buffer = Buffer'Old);
+   --  Canonical VarLong encoder (minimal form, negatives: 10 bytes).
 
    procedure Decode_VarLong
      (Buffer      : in     Octets;

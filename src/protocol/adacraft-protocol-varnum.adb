@@ -148,6 +148,20 @@ is
       Status := Overlong;
    end Decode;
 
+   procedure Encode_VarLong
+     (Value       : in     Interfaces.Integer_64;
+      Buffer      : in out Octets;
+      Start_Index : in     Integer;
+      Written     :    out Natural;
+      Status      :    out Status_Type)
+   is
+      Len : constant Natural := Encoded_Length_Varlong (Value);
+      U   : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Value);
+   begin
+      Encode_Unsigned (U, Len, Buffer, Start_Index, Written, Status);
+   end Encode_VarLong;
+
    function Encoded_Length_VarLong (Value : Interfaces.Integer_64) return Natural is
      (if Value < 0 then 10
       elsif Value < 2 ** 7 then 1
@@ -160,26 +174,7 @@ is
       elsif Value < 2 ** 56 then 8
       else 9);
 
-   procedure Encode_VarLong
-     (Value       : in     Interfaces.Integer_64;
-      Buffer      : in out Octets;
-      Start_Index : in     Integer;
-      Written     :    out Natural;
-      Status      :    out Status_Type)
-   is
-      Len : constant Natural := Encoded_Length_VarLong (Value);
-      U   : Interfaces.Unsigned_64;
-   begin
-      if Value < 0 then
-         U := Interfaces.Unsigned_64 (Value + 2 ** 62 + 2 ** 62) + 2 ** 63;
-      else
-         U := Interfaces.Unsigned_64 (Value);
-      end if;
-
-      Encode_Unsigned (U, Len, Buffer, Start_Index, Written, Status);
-   end Encode_Varlong;
-
-   procedure Decode_VarLong
+   procedure Decode_Varlong
      (Buffer      : in     Octets;
       Start_Index : in     Integer;
       Value       :    out Interfaces.Integer_64;
@@ -262,7 +257,7 @@ is
 
       Decode (Buffer, From, V, C, S);
       if S = Ok then
-         if C > 1 and then Buffer (From + C - 1) = 0 then
+         if C /= Encoded_Length (V) then
             return (Status => Rejected, Value => 0, Next => From);
          end if;
          return
@@ -289,6 +284,9 @@ is
       Decode_Varlong (Buffer, From, V, C, S);
       if S /= Ok then
          return (Status => Tail_Status (S), Value => 0, Next => From);
+      end if;
+      if C /= Encoded_Length_Varlong (V) then
+         return (Status => Rejected, Value => 0, Next => From);
       end if;
       if V < 0 then
          return

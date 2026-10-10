@@ -57,13 +57,37 @@ package body Adacraft.Corpus.Runner is
       Reencoded : Byte_Vectors.Vector;
    end record;
 
-   procedure Set_Reencoded (R : in out Feed_Result; Input : P.Octets) is
+   function Frame_Packet
+     (WB : P.Buffer.Writer) return Byte_Vectors.Vector;
+
+   procedure Set_Reencoded
+     (R : in out Feed_Result; Pid : Natural; Payload : P.Octets)
+   is
+      Body_W : P.Buffer.Writer (Capacity => Payload'Length + 8);
    begin
       R.Reencoded.Clear;
-      for I in Input'Range loop
-         R.Reencoded.Append (Input (I));
+      P.Buffer.Reset (Body_W);
+      P.Buffer.Put_Varint (Body_W, Interfaces.Unsigned_32 (Pid));
+      for I in Payload'Range loop
+         P.Buffer.Put_Octet (Body_W, Payload (I));
       end loop;
+      if Body_W.Failed then
+         return;
+      end if;
+      R.Reencoded := Frame_Packet (Body_W);
    end Set_Reencoded;
+
+   procedure Set_Reencoded_Empty (R : in out Feed_Result; Pid : Natural) is
+      Body_W : P.Buffer.Writer (Capacity => 8);
+   begin
+      R.Reencoded.Clear;
+      P.Buffer.Reset (Body_W);
+      P.Buffer.Put_Varint (Body_W, Interfaces.Unsigned_32 (Pid));
+      if Body_W.Failed then
+         return;
+      end if;
+      R.Reencoded := Frame_Packet (Body_W);
+   end Set_Reencoded_Empty;
 
    function Frame_Packet
      (WB : P.Buffer.Writer) return Byte_Vectors.Vector
@@ -216,7 +240,13 @@ package body Adacraft.Corpus.Runner is
                R.Pid := F.Packet_Id;
                R.Category := To_Unbounded_String ("handshake");
                R.Detail := To_Unbounded_String ("handshake accepted");
-               Set_Reencoded (R, Input);
+               if F.Payload_First > F.Payload_Last then
+                  Set_Reencoded_Empty (R, F.Packet_Id);
+               else
+                  Set_Reencoded
+                    (R, F.Packet_Id,
+                     Input (F.Payload_First .. F.Payload_Last));
+               end if;
                return;
             else
                R.Category := To_Unbounded_String ("handshake");
@@ -290,7 +320,13 @@ package body Adacraft.Corpus.Runner is
                R.Pid := F.Packet_Id;
                R.Category := To_Unbounded_String ("status");
                R.Detail := To_Unbounded_String ("status accepted");
-               Set_Reencoded (R, Input);
+               if F.Payload_First > F.Payload_Last then
+                  Set_Reencoded_Empty (R, F.Packet_Id);
+               else
+                  Set_Reencoded
+                    (R, F.Packet_Id,
+                     Input (F.Payload_First .. F.Payload_Last));
+               end if;
                if S_Res = SE.Rejected_Close then
                   Ctx.Closed := True;
                end if;
@@ -386,7 +422,9 @@ package body Adacraft.Corpus.Runner is
                         R.Pid := F.Packet_Id;
                         R.Category := To_Unbounded_String ("login");
                         R.Detail := To_Unbounded_String ("login start ok");
-                        Set_Reencoded (R, Input);
+                        Set_Reencoded
+                          (R, F.Packet_Id,
+                           Input (F.Payload_First .. F.Payload_Last));
                         return;
                      when Prot_Login.Need_Disconnect_Close
                         | Prot_Login.Refuse_Online =>
@@ -438,7 +476,9 @@ package body Adacraft.Corpus.Runner is
                      R.Pid := F.Packet_Id;
                      R.Category := To_Unbounded_String ("login");
                      R.Detail := To_Unbounded_String ("ack ok");
-                     Set_Reencoded (R, Input);
+                     Set_Reencoded
+                       (R, F.Packet_Id,
+                        Input (F.Payload_First .. F.Payload_Last));
                      return;
                   else
                      Ctx.Closed := True;
@@ -521,6 +561,7 @@ package body Adacraft.Corpus.Runner is
             St : constant Step := S.Steps (Idx);
             In_Len : constant Natural := Natural (St.Input.Length);
             R : Feed_Result;
+            Before : constant PS.Connection_State := D.Proto_State;
          begin
             if In_Len = 0 then
                declare
@@ -600,21 +641,21 @@ package body Adacraft.Corpus.Runner is
                   & " want=" & Bytes_Image (St.Input));
                return;
             end if;
-            --  Terminal steps leave state unchanged.
+            --  Terminal steps leave state unchanged: compare against
+            --  the state before the step, unconditionally.
             if (R.Actual = Rejected or else R.Actual = Incomplete)
-              and then St.Has_State_After
-              and then D.Proto_State /= St.State_After
+              and then D.Proto_State /= Before
             then
                Failure := To_Unbounded_String
                  ("step=" & Img (Idx)
                   & " detail=terminal step changed state got="
                   & Low (PS.Connection_State'Image (D.Proto_State))
                   & " want="
-                  & Low (PS.Connection_State'Image (St.State_After)));
+                  & Low (PS.Connection_State'Image (Before)));
                return;
             end if;
             if St.Has_Rejection_Category
-              and then R.Actual = Rejected
+              and then (R.Actual = Rejected or else R.Actual = Incomplete)
             then
                declare
                   Got : constant String :=

@@ -27,7 +27,6 @@ procedure Adacraft_Tests is
    use type Interfaces.Integer_32;
    use type Interfaces.Unsigned_8;
    use type Protocol.Status_Kind;
-   use type Protocol.Protocol_State;
    use type Protocol.Octet;
    use type Kernel.Attempt;
    use type Kernel.Authority;
@@ -170,7 +169,7 @@ begin
       Incoming (Wire.Len + 1 .. Wire.Len + Framed_R.Len) := Framed_R.Data (1 .. Framed_R.Len);
       Used := Wire.Len + Framed_R.Len;
       Ingress.Ingest (S, Incoming (1 .. Used), 1, Consumed, Outgoing, Close_Now);
-      Check (not Close_Now and then S.State = Protocol.Status, "entered status");
+      Check (not Close_Now and then S.State = Protocol.State.Status, "entered status");
       for I in 1 .. Outgoing.Len loop
          Text (I) := Character'Val (Natural (Outgoing.Data (I)));
       end loop;

@@ -155,7 +155,7 @@ is
       Written     :    out Natural;
       Status      :    out Status_Type)
    is
-      Len : constant Natural := Encoded_Length_Varlong (Value);
+      Len : constant Natural := Encoded_Length_VarLong (Value);
       U   : constant Interfaces.Unsigned_64 :=
         Interfaces.Unsigned_64 (Value);
    begin
@@ -174,7 +174,7 @@ is
       elsif Value < 2 ** 56 then 8
       else 9);
 
-   procedure Decode_Varlong
+   procedure Decode_VarLong
      (Buffer      : in     Octets;
       Start_Index : in     Integer;
       Value       :    out Interfaces.Integer_64;
@@ -232,7 +232,7 @@ is
       end loop;
 
       Status := Overlong;
-   end Decode_Varlong;
+   end Decode_VarLong;
 
    function Tail_Status (S : Status_Type) return Status_Kind is
    begin
@@ -281,11 +281,11 @@ is
          return (Status => Need_More, Value => 0, Next => From);
       end if;
 
-      Decode_Varlong (Buffer, From, V, C, S);
+      Decode_VarLong (Buffer, From, V, C, S);
       if S /= Ok then
          return (Status => Tail_Status (S), Value => 0, Next => From);
       end if;
-      if C /= Encoded_Length_Varlong (V) then
+      if C /= Encoded_Length_VarLong (V) then
          return (Status => Rejected, Value => 0, Next => From);
       end if;
       if V < 0 then

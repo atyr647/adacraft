@@ -57,10 +57,10 @@ is
    --  continuation bit set or is greater than 16#0F#. Non-minimal forms
    --  within 5 bytes are accepted.
 
-   function Encoded_Length_Varlong (Value : Interfaces.Integer_64) return Natural
+   function Encoded_Length_VarLong (Value : Interfaces.Integer_64) return Natural
      with
        Global => null,
-       Post   => Encoded_Length_Varlong'Result in 1 .. Max_Varlong_Bytes;
+       Post   => Encoded_Length_VarLong'Result in 1 .. Max_Varlong_Bytes;
    --  Exact number of bytes Encode_Varlong writes (negatives: 10).
 
    procedure Encode_VarLong

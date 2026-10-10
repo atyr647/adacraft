@@ -359,9 +359,19 @@ package body Adacraft.Corpus.Runner is
                   Body_W : P.Buffer.Writer (Payload'Length + 16);
                   Framed : P.Buffer.Writer (Payload'Length + 32);
                begin
+                  --  Re-encode decoded fields only; never copy Payload.
                   P.Buffer.Put_Varint
                     (Body_W, Interfaces.Unsigned_32 (F.Packet_Id));
-                  P.Buffer.Put_Bytes (Body_W, Payload);
+                  if F.Packet_Id = 1 then
+                     declare
+                        Dec : constant P.Packets.Ping :=
+                          P.Packets.Decode_Ping (Payload);
+                     begin
+                        P.Buffer.Put_U64 (Body_W, Dec.Value);
+                     end;
+                  else
+                     null;
+                  end if;
                   if P.Packets.Frame (Framed, Body_W)
                     and then not Framed.Failed
                   then

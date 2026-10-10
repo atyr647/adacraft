@@ -170,7 +170,7 @@ package body Adacraft.Corpus.Runner is
       end if;
       for I in Frame_Data'Range loop
          K := K + 1;
-         Oct (K) := Adacraft.Protocol.Octet (I);
+         Oct (K) := Adacraft.Protocol.Octet (Frame_Data (I));
       end loop;
       --  Split packet id / payload with the server's VarInt codec only.
       VR := Adacraft.Protocol.Varnum.Decode_Varint (Oct, 1);
@@ -182,7 +182,7 @@ package body Adacraft.Corpus.Runner is
       if D.Proto_State = Adacraft.Protocol.State.Handshake then
          declare
             H_Res : Adacraft.Protocol.Handshake_Exchange.Handle_Result;
-            Empty : constant Adacraft.Protocol.Octets (2 .. 1) := (others => <>);
+            Empty : constant Adacraft.Protocol.Octets (1 .. 0) := (others => <>);
          begin
             if Pay_First > Oct'Length then
                Adacraft.Protocol.Handshake_Exchange.Handle
@@ -208,7 +208,7 @@ package body Adacraft.Corpus.Runner is
             Resp_Id : Natural := 0;
             Resp_Len : Natural := 0;
             Want_Close : Boolean := False;
-            Empty : constant Adacraft.Protocol.Octets (2 .. 1) := (others => <>);
+            Empty : constant Adacraft.Protocol.Octets (1 .. 0) := (others => <>);
          begin
             if Pay_First > Oct'Length then
                Adacraft.Protocol.Status_Exchange.Handle

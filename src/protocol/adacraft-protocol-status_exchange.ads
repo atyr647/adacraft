@@ -8,6 +8,8 @@ package Adacraft.Protocol.Status_Exchange with SPARK_Mode => Off is
       Request_Seen : Boolean := False;
    end record;
 
+   function Build_Response return String;
+
    procedure Reset (S : in out Session);
 
    procedure Handle

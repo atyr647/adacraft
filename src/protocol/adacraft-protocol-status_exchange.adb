@@ -1,16 +1,15 @@
 with Adacraft.Protocol.Buffer;
-with Adacraft.Protocol.Packets;
 
 package body Adacraft.Protocol.Status_Exchange with SPARK_Mode => Off is
    use Adacraft.Protocol;
    use type State.Connection_State;
 
-   function Build_JSON return String is
+   function Build_Response return String is
    begin
       return "{""version"":{""name"":""26.3"",""protocol"":777},"
         & """players"":{""max"":20,""online"":0},"
         & """description"":{""text"":""AdaCraft""}}";
-   end Build_JSON;
+   end Build_Response;
 
    procedure Reset (S : in out Session) is
    begin
@@ -50,7 +49,7 @@ package body Adacraft.Protocol.Status_Exchange with SPARK_Mode => Off is
             return;
          end if;
          declare
-            JSON : constant String := Build_JSON;
+            JSON : constant String := Build_Response;
             W : Buffer.Writer (33_000);
          begin
             if JSON'Length > 32_767 then
@@ -85,16 +84,11 @@ package body Adacraft.Protocol.Status_Exchange with SPARK_Mode => Off is
             Close_Connection := True;
             return;
          end if;
-         declare
-            Dec : constant Packets.Ping :=
-              Packets.Decode_Ping (Payload);
-         begin
-            if Dec.Status /= Ok then
-               Result := Rejected_Close;
-               Close_Connection := True;
-               return;
-            end if;
-         end;
+         if not Buffer.U64_Ok (Payload, Payload'First) then
+            Result := Rejected_Close;
+            Close_Connection := True;
+            return;
+         end if;
          if 8 > Response_Data'Length then
             Result := Rejected_Close;
             Close_Connection := True;

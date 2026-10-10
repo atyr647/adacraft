@@ -22,7 +22,6 @@ package body Adacraft.Corpus.Runner is
    use type Adacraft.Protocol.State.Connection_State;
    use type Adacraft.Protocol.Status_Exchange.Handle_Result;
    use type Adacraft.Protocol.Status_Kind;
-   use type Adacraft.Protocol.Varnum.Decode_Status;
 
    procedure Init_Dispatch (D : out Dispatch_Session) is
    begin
@@ -349,7 +348,10 @@ package body Adacraft.Corpus.Runner is
                      Got_Frame := True;
                      Frame_Len := F'Length;
                      for I in F'Range loop
-                        Frame_Copy (Frame_Copy'First + Natural (I - F'First)) := F (I);
+                        Frame_Copy
+                          (Frame_Copy'First
+                           + Ada.Streams.Stream_Element_Offset (I - F'First)) :=
+                           F (I);
                      end loop;
                   end On_Frame;
                begin
@@ -448,6 +450,7 @@ package body Adacraft.Corpus.Runner is
                if St.Expected = Rejected or else St.Expected = Incomplete then
                   exit;
                end if;
+               end;
             end if;
          end;
       end loop;

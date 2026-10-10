@@ -290,6 +290,27 @@ package body Adacraft.Corpus.Runner is
                R.Pid := F.Packet_Id;
                R.Category := To_Unbounded_String ("handshake");
                R.Detail := To_Unbounded_String ("handshake ok");
+               declare
+                  Hello2 : constant P.Packets.Handshake :=
+                    P.Packets.Decode_Handshake (Payload);
+                  Body_W : P.Buffer.Writer (Payload'Length + 16);
+                  Framed : P.Buffer.Writer (Payload'Length + 32);
+               begin
+                  P.Buffer.Put_Varint
+                    (Body_W, Interfaces.Unsigned_32 (F.Packet_Id));
+                  P.Buffer.Put_Varint (Body_W, Hello2.Version);
+                  P.Buffer.Put_String
+                    (Body_W, Hello2.Address (1 .. Hello2.Addr_Len));
+                  P.Buffer.Put_U16 (Body_W, Hello2.Port);
+                  P.Buffer.Put_Varint (Body_W, Hello2.Intent);
+                  if P.Packets.Frame (Framed, Body_W)
+                    and then not Framed.Failed
+                  then
+                     for I in 1 .. Framed.Len loop
+                        R.Reencoded.Append (Framed.Data (I));
+                     end loop;
+                  end if;
+               end;
                return;
             else
                R.Category := To_Unbounded_String ("handshake");
@@ -334,6 +355,21 @@ package body Adacraft.Corpus.Runner is
                R.Pid := F.Packet_Id;
                R.Category := To_Unbounded_String ("status");
                R.Detail := To_Unbounded_String ("status ok");
+               declare
+                  Body_W : P.Buffer.Writer (Payload'Length + 16);
+                  Framed : P.Buffer.Writer (Payload'Length + 32);
+               begin
+                  P.Buffer.Put_Varint
+                    (Body_W, Interfaces.Unsigned_32 (F.Packet_Id));
+                  P.Buffer.Put_Bytes (Body_W, Payload);
+                  if P.Packets.Frame (Framed, Body_W)
+                    and then not Framed.Failed
+                  then
+                     for I in 1 .. Framed.Len loop
+                        R.Reencoded.Append (Framed.Data (I));
+                     end loop;
+                  end if;
+               end;
                if Want_Close then
                   Ctx.Closed := True;
                end if;

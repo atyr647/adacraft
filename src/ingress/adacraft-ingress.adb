@@ -170,7 +170,7 @@ package body Adacraft.Ingress is
                         elsif Hello.Intent = 1 then
                            S.State := Protocol.State.Status;
                            S.Version := Hello.Version;
-                        elsif Hello.Intent = 2 and then Hello.Version = Version.Protocol_Version then
+                        elsif Hello.Intent = 2 and then Hello.Version = Protocol.Version.Protocol_Version then
                            S.State := Protocol.State.Login;
                            S.Version := Hello.Version;
                         elsif Hello.Intent = 2 then

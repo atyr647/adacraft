@@ -17,24 +17,30 @@ is
       Last   : out Ada.Streams.Stream_Element_Offset)
      with SPARK_Mode => Off
    is
-      Left  : Frame_Body_Length := Length;
-      Digit : Ada.Streams.Stream_Element;
-      Index : Positive := 1;
+      use type Interfaces.Integer_32;
+      Tmp     : Octets (1 .. Max_Varint_Bytes) := (others => 0);
+      Written : Natural := 0;
+      St      : Varnum.Status_Type;
    begin
       Buffer := (others => 0);
       Last := 1;
-      loop
-         Digit := Ada.Streams.Stream_Element (Left mod 128);
-         Left := Left / 128;
-         if Left > 0 then
-            Buffer (Index) := Digit or 16#80#;
-         else
-            Buffer (Index) := Digit;
-         end if;
-         Last := Ada.Streams.Stream_Element_Offset (Index);
-         exit when Left = 0;
-         Index := Index + 1;
+      Varnum.Encode
+        (Value       => Interfaces.Integer_32 (Length),
+         Buffer      => Tmp,
+         Start_Index => 1,
+         Written     => Written,
+         Status      => St);
+      if St /= Varnum.Ok or else Written < 1
+        or else Written > Max_Frame_Prefix_Bytes
+      then
+         Buffer (1) := 0;
+         Last := 1;
+         return;
+      end if;
+      for I in 1 .. Written loop
+         Buffer (I) := Ada.Streams.Stream_Element (Tmp (I));
       end loop;
+      Last := Ada.Streams.Stream_Element_Offset (Written);
    end Write_Length_Prefix;
 
    procedure Encode
@@ -89,70 +95,62 @@ is
       Status   : out    Feed_Status)
      with SPARK_Mode => Off
    is
-      Empty_Body : constant Byte_Array (1 .. 0) := (others => 0);
-      Value      : Ada.Streams.Stream_Element;
    begin
       if Decoder.Failed then
          Status := Framing_Error;
          return;
       end if;
 
-      for I in Chunk'Range loop
-         Value := Chunk (I);
+      if Chunk'Length > 0 then
+         if Decoder.Count + Chunk'Length > Decoder.Data'Length then
+            Decoder.Failed := True;
+            Status := Framing_Error;
+            return;
+         end if;
+         for I in Chunk'Range loop
+            Decoder.Count := Decoder.Count + 1;
+            Decoder.Data (Decoder.Count) := Chunk (I);
+         end loop;
+      end if;
 
-         case Decoder.Phase is
-            when In_Prefix =>
-               Decoder.Prefix_Count := Decoder.Prefix_Count + 1;
-               Decoder.Prefix_Bytes (Decoder.Prefix_Count) := Value;
-
-               if (Value and 16#80#) /= 0 then
-                  if Decoder.Prefix_Count = Max_Frame_Prefix_Bytes then
-                     Decoder.Failed := True;
-                     Status := Framing_Error;
-                     return;
-                  end if;
-               else
-                  declare
-                     Length : Ada.Streams.Stream_Element_Offset := 0;
-                     Mult   : Ada.Streams.Stream_Element_Offset := 1;
-                  begin
-                     for J in 1 .. Decoder.Prefix_Count loop
-                        Length := Length
-                          + Ada.Streams.Stream_Element_Offset
-                              (Decoder.Prefix_Bytes (J) and 16#7F#) * Mult;
-                        Mult := Mult * 128;
-                     end loop;
-
-                     if Length > Max_Frame_Body_Length then
-                        Decoder.Failed := True;
-                        Status := Framing_Error;
-                        return;
-                     end if;
-
-                     Decoder.Body_Length := Length;
-                  end;
-
-                  Decoder.Body_Count := 0;
-                  if Decoder.Body_Length = 0 then
-                     On_Frame (Empty_Body);
-                     Decoder.Phase := In_Prefix;
-                     Decoder.Prefix_Count := 0;
-                  else
-                     Decoder.Phase := In_Body;
-                  end if;
-               end if;
-
-            when In_Body =>
-               Decoder.Body_Count := Decoder.Body_Count + 1;
-               Decoder.Body_Bytes (Decoder.Body_Count) := Value;
-
-               if Decoder.Body_Count = Decoder.Body_Length then
-                  Decoder.Phase := In_Prefix;
-                  Decoder.Prefix_Count := 0;
-                  On_Frame (Decoder.Body_Bytes (1 .. Decoder.Body_Length));
-                  Decoder.Body_Count := 0;
-               end if;
-         end case;
+      loop
+         exit when Decoder.Count = 0;
+         declare
+            View : Octets (1 .. Decoder.Count)
+              with Address => Decoder.Data (1)'Address;
+            Res       : Frame_Decode;
+            Frame_Len : Natural;
+            Remain    : Natural;
+            First     : Ada.Streams.Stream_Element_Offset;
+            Last      : Ada.Streams.Stream_Element_Offset;
+         begin
+            Res := Decode_Frame (View, 1);
+            case Res.Status is
+               when Need_More =>
+                  Status := Success;
+                  return;
+               when Rejected =>
+                  Decoder.Failed := True;
+                  Status := Framing_Error;
+                  return;
+               when Ok =>
+                  null;
+            end case;
+            Frame_Len := Res.Next - 1;
+            First :=
+              Ada.Streams.Stream_Element_Offset
+                (Res.Next - Res.Declared_Length);
+            Last := Ada.Streams.Stream_Element_Offset (Frame_Len);
+            On_Frame (Decoder.Data (First .. Last));
+            Remain := Decoder.Count - Frame_Len;
+            if Remain > 0 then
+               Decoder.Data (1 .. Ada.Streams.Stream_Element_Offset (Remain)) :=
+                 Decoder.Data
+                   (Ada.Streams.Stream_Element_Offset (Frame_Len + 1)
+                    .. Ada.Streams.Stream_Element_Offset (Decoder.Count));
+            end if;
+            Decoder.Count := Remain;
+         end;
       end loop;
 
       Status := Success;

@@ -5,6 +5,7 @@ package body Adacraft.Protocol.Buffer is
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_64;
    use type Status_Kind;
+   use type Varnum.Status_Type;
    procedure Reset (W : in out Writer) is
    begin
       W.Len := 0;
@@ -29,18 +30,31 @@ package body Adacraft.Protocol.Buffer is
    end Put_Bytes;
 
    procedure Put_Varint (W : in out Writer; Value : Interfaces.Unsigned_32) is
-      Rest : Interfaces.Unsigned_32 := Value;
-      Byte : Interfaces.Unsigned_32;
+      use type Interfaces.Integer_32;
+      use type Interfaces.Integer_64;
+      IVal    : Interfaces.Integer_32;
+      Tmp     : Octets (1 .. Max_Varint_Bytes) := (others => 0);
+      Written : Natural := 0;
+      St      : Varnum.Status_Type;
    begin
-      loop
-         Byte := Rest and 16#7F#;
-         Rest := Interfaces.Shift_Right (Rest, 7);
-         if Rest /= 0 then
-            Put_Octet (W, Octet (Byte or 16#80#));
-         else
-            Put_Octet (W, Octet (Byte));
-            exit;
-         end if;
+      if Value >= 16#8000_0000# then
+         IVal := Interfaces.Integer_32
+           (Interfaces.Integer_64 (Value) - 2 ** 32);
+      else
+         IVal := Interfaces.Integer_32 (Value);
+      end if;
+      Varnum.Encode
+        (Value       => IVal,
+         Buffer      => Tmp,
+         Start_Index => 1,
+         Written     => Written,
+         Status      => St);
+      if St /= Varnum.Ok then
+         W.Failed := True;
+         return;
+      end if;
+      for I in 1 .. Written loop
+         Put_Octet (W, Tmp (I));
       end loop;
    end Put_Varint;
 

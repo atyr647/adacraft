@@ -15,17 +15,42 @@ is
       elsif Value < 2 ** 28 then 4
       else 5);
 
-   procedure Encode
-     (Value       : in     Interfaces.Integer_32;
+   procedure Emit_Unsigned
+     (Value       : in     Interfaces.Unsigned_64;
+      Len         : in     Natural;
+      Buffer      : in out Octets;
+      Start_Index : in     Integer)
+     with
+       Global => null,
+       Pre    => Len in 1 .. Max_Varlong_Bytes
+                 and then Start_Index in Buffer'Range
+                 and then Buffer'Last - Start_Index + 1 >= Len
+   is
+      U    : Interfaces.Unsigned_64 := Value;
+      Byte : Octet;
+   begin
+      for I in 0 .. Len - 1 loop
+         pragma Loop_Invariant (Start_Index + Len - 1 <= Buffer'Last);
+         Byte := Octet (U and 16#7F#);
+         U    := Interfaces.Shift_Right (U, 7);
+         if I < Len - 1 then
+            Byte := Byte or 16#80#;
+         end if;
+         Buffer (Start_Index + I) := Byte;
+      end loop;
+   end Emit_Unsigned;
+
+   procedure Encode_Unsigned
+     (Value       : in     Interfaces.Unsigned_64;
+      Len         : in     Natural;
       Buffer      : in out Octets;
       Start_Index : in     Integer;
       Written     :    out Natural;
       Status      :    out Status_Type)
+     with
+       Global => null,
+       Pre    => Len in 1 .. Max_Varlong_Bytes
    is
-      Len  : constant Natural := Encoded_Length (Value);
-      V64  : Interfaces.Integer_64 := Interfaces.Integer_64 (Value);
-      U    : Interfaces.Unsigned_32;
-      Byte : Octet;
    begin
       Written := 0;
       Status  := Buffer_Too_Small;
@@ -38,23 +63,29 @@ is
          return;
       end if;
 
-      if V64 < 0 then
-         V64 := V64 + 2 ** 32;
-      end if;
-      U := Interfaces.Unsigned_32 (V64);
-
-      for I in 0 .. Len - 1 loop
-         pragma Loop_Invariant (Start_Index + Len - 1 <= Buffer'Last);
-         Byte := Octet (U and 16#7F#);
-         U    := Interfaces.Shift_Right (U, 7);
-         if I < Len - 1 then
-            Byte := Byte or 16#80#;
-         end if;
-         Buffer (Start_Index + I) := Byte;
-      end loop;
+      Emit_Unsigned (Value, Len, Buffer, Start_Index);
 
       Written := Len;
       Status  := Ok;
+   end Encode_Unsigned;
+
+   procedure Encode
+     (Value       : in     Interfaces.Integer_32;
+      Buffer      : in out Octets;
+      Start_Index : in     Integer;
+      Written     :    out Natural;
+      Status      :    out Status_Type)
+   is
+      Len : constant Natural := Encoded_Length (Value);
+      V64 : Interfaces.Integer_64 := Interfaces.Integer_64 (Value);
+      U   : Interfaces.Unsigned_64;
+   begin
+      if V64 < 0 then
+         V64 := V64 + 2 ** 32;
+      end if;
+      U := Interfaces.Unsigned_64 (V64);
+
+      Encode_Unsigned (U, Len, Buffer, Start_Index, Written, Status);
    end Encode;
 
    procedure Decode
@@ -136,39 +167,16 @@ is
       Written     :    out Natural;
       Status      :    out Status_Type)
    is
-      Len  : constant Natural := Encoded_Length_Varlong (Value);
-      U    : Interfaces.Unsigned_64;
-      Byte : Octet;
+      Len : constant Natural := Encoded_Length_Varlong (Value);
+      U   : Interfaces.Unsigned_64;
    begin
-      Written := 0;
-      Status  := Buffer_Too_Small;
-
-      if Buffer'Length = 0
-        or else Start_Index < Buffer'First
-        or else Start_Index > Buffer'Last
-        or else Buffer'Last - Start_Index + 1 < Len
-      then
-         return;
-      end if;
-
       if Value < 0 then
          U := Interfaces.Unsigned_64 (Value + 2 ** 62 + 2 ** 62) + 2 ** 63;
       else
          U := Interfaces.Unsigned_64 (Value);
       end if;
 
-      for I in 0 .. Len - 1 loop
-         pragma Loop_Invariant (Start_Index + Len - 1 <= Buffer'Last);
-         Byte := Octet (U and 16#7F#);
-         U    := Interfaces.Shift_Right (U, 7);
-         if I < Len - 1 then
-            Byte := Byte or 16#80#;
-         end if;
-         Buffer (Start_Index + I) := Byte;
-      end loop;
-
-      Written := Len;
-      Status  := Ok;
+      Encode_Unsigned (U, Len, Buffer, Start_Index, Written, Status);
    end Encode_Varlong;
 
    procedure Decode_Varlong

@@ -2,6 +2,7 @@ with Ada.Command_Line;
 with Ada.Streams;
 with Ada.Text_IO;
 with Adacraft.Ingress;
+with Adacraft.Protocol;
 with Adacraft.Protocol.Frame;
 
 procedure Test_Ingress_Framing is
@@ -125,6 +126,33 @@ begin
    Ingress.Receive (Conn_3.all, Wire (1 .. Last));
    Check (B3 = 1 and then C3 = 1, "mixed connection discards later input");
    Check (not Ingress.Is_Closed (Conn_2.all), "others unaffected");
+
+   --  (4) Zero-length frame (00 prefix) is a protocol error with no
+   --  packet, identically for Feed and Decode_Frame (shared core).
+   declare
+      use type Adacraft.Protocol.Status_Kind;
+      use type Frame.Feed_Status;
+      Zero_Chunk : constant Frame.Byte_Array (1 .. 1) := (1 => 16#00#);
+      Zero_Buf   : constant Adacraft.Protocol.Octets (1 .. 1) := (1 => 16#00#);
+      D          : Frame.Decoder_Type;
+      Got_Body   : Natural := 0;
+      FS         : Frame.Feed_Status;
+      R          : Frame.Frame_Decode;
+      procedure No_Body (F : Frame.Byte_Array) is
+         pragma Unreferenced (F);
+      begin
+         Got_Body := Got_Body + 1;
+      end No_Body;
+   begin
+      Frame.Feed (D, Zero_Chunk, No_Body'Access, FS);
+      R := Frame.Decode_Frame (Zero_Buf, 1);
+      Check (FS = Frame.Framing_Error, "feed zero-length is error");
+      Check (Got_Body = 0, "feed zero-length no packet");
+      Check (R.Status = Adacraft.Protocol.Rejected, "decode zero-length is error");
+      Check (R.Packet_Id = 0 and then R.Next = 1, "decode zero-length no packet");
+      Check ((FS = Frame.Framing_Error) = (R.Status = Adacraft.Protocol.Rejected)
+             and then Got_Body = 0, "zero-length same outcome");
+   end;
 
    if Failures = 0 then
       Ada.Text_IO.Put_Line ("ingress framing tests passed");

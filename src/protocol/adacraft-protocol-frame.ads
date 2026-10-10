@@ -3,6 +3,8 @@ with Ada.Streams;
 package Adacraft.Protocol.Frame
   with SPARK_Mode
 is
+   use type Ada.Streams.Stream_Element_Offset;
+
    type Frame_Decode is record
       Status          : Status_Kind := Rejected;
       Packet_Id       : Natural     := 0;
@@ -67,19 +69,19 @@ is
 
 private
 
-   type Decode_Phase is (In_Prefix, In_Body);
+   --  Single frame-decoding core: length-prefix decode via the Varnum
+   --  codec plus the at-least-1-byte packet-id check. Zero-length
+   --  frames are protocol errors (Rejected, no packet). Both Decode_Frame
+   --  (one-shot) and Feed (loop over accumulated bytes) call this core.
+   function Try_Decode_Frame (Buffer : Octets; From : Positive) return Frame_Decode
+     with Pre =>
+       Buffer'Last < Positive'Last and then From <= Buffer'Last + 1;
 
    type Decoder_Type is record
-      Phase        : Decode_Phase := In_Prefix;
-      Failed       : Boolean      := False;
-
-      Prefix_Count : Ada.Streams.Stream_Element_Offset
-        range 0 .. Max_Frame_Prefix_Bytes := 0;
-      Prefix_Bytes : Byte_Array (1 .. Max_Frame_Prefix_Bytes);
-
-      Body_Length  : Frame_Body_Length := 0;
-      Body_Count   : Frame_Body_Length := 0;
-      Body_Bytes   : Byte_Array (1 .. Max_Frame_Body_Length);
+      Failed      : Boolean := False;
+      Pending_Len : Natural := 0;
+      Pending     : Byte_Array
+        (1 .. Max_Frame_Body_Length + Max_Frame_Prefix_Bytes);
    end record;
 
 end Adacraft.Protocol.Frame;

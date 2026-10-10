@@ -64,6 +64,33 @@ package body Differential.Selftest is
                Item => "selftest: FAIL " & Name);
          end if;
       end Note;
+      --  Shared helper for the 120/137 pair (and the overlapping
+      --  134/151 Note pair): one wider helper clears both reported
+      --  pairs. Every difference (label, B state/direction) is a formal.
+      procedure Check_Single_Entry_Diverge
+        (Label   : String;
+         B_State : Connection_State;
+         B_Dir   : Packet_Direction);
+      procedure Check_Single_Entry_Diverge
+        (Label   : String;
+         B_State : Connection_State;
+         B_Dir   : Packet_Direction)
+      is
+         A, B : Differential.Transcript.Transcript;
+         V    : Differential.Compare.Verdict;
+      begin
+         Put_Entry (A, Handshake, Serverbound, 0);
+         Differential.Transcript.Set_Outcome
+           (A, Differential.Transcript.Completed);
+         Put_Entry (B, B_State, B_Dir, 0);
+         Differential.Transcript.Set_Outcome
+           (B, Differential.Transcript.Completed);
+         V := Differential.Compare.Compare (A, B);
+         Note (Label,
+           V.Kind = Differential.Compare.Diverge
+           and then V.Difference = Differential.Compare.First_Diff_Index
+           and then V.Index = 1);
+      end Check_Single_Entry_Diverge;
    begin
       --  1: identical -> MATCH.
       declare
@@ -119,39 +146,11 @@ package body Differential.Selftest is
            and then V.Right_Entry.Packet_Id = 2);
       end;
       --  4: differing state -> DIVERGE.
-      declare
-         A, B : Differential.Transcript.Transcript;
-         V    : Differential.Compare.Verdict;
-      begin
-         Put_Entry (A, Handshake, Serverbound, 0);
-         Differential.Transcript.Set_Outcome
-           (A, Differential.Transcript.Completed);
-         Put_Entry (B, Status, Serverbound, 0);
-         Differential.Transcript.Set_Outcome
-           (B, Differential.Transcript.Completed);
-         V := Differential.Compare.Compare (A, B);
-         Note ("differing-state-diverge",
-           V.Kind = Differential.Compare.Diverge
-           and then V.Difference = Differential.Compare.First_Diff_Index
-           and then V.Index = 1);
-      end;
+      Check_Single_Entry_Diverge
+        ("differing-state-diverge", Status, Serverbound);
       --  5: differing direction -> DIVERGE.
-      declare
-         A, B : Differential.Transcript.Transcript;
-         V    : Differential.Compare.Verdict;
-      begin
-         Put_Entry (A, Handshake, Serverbound, 0);
-         Differential.Transcript.Set_Outcome
-           (A, Differential.Transcript.Completed);
-         Put_Entry (B, Handshake, Clientbound, 0);
-         Differential.Transcript.Set_Outcome
-           (B, Differential.Transcript.Completed);
-         V := Differential.Compare.Compare (A, B);
-         Note ("differing-direction-diverge",
-           V.Kind = Differential.Compare.Diverge
-           and then V.Difference = Differential.Compare.First_Diff_Index
-           and then V.Index = 1);
-      end;
+      Check_Single_Entry_Diverge
+        ("differing-direction-diverge", Handshake, Clientbound);
       --  6: differing length -> DIVERGE with length mismatch.
       declare
          A, B : Differential.Transcript.Transcript;

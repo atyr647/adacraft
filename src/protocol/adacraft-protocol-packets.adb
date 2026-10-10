@@ -1,4 +1,5 @@
 with Adacraft.Protocol.Ids;
+with Adacraft.Protocol.Status_Exchange;
 with Adacraft.Protocol.Varnum;
 
 package body Adacraft.Protocol.Packets is
@@ -47,22 +48,9 @@ package body Adacraft.Protocol.Packets is
       return Result;
    end Decode_Handshake;
 
-   function Protocol_Version_Image return String is
-      Img : constant String := Integer'Image (Adacraft.Protocol_Version);
-   begin
-      if Img'Length > 0 and then Img (Img'First) = ' ' then
-         return Img (Img'First + 1 .. Img'Last);
-      else
-         return Img;
-      end if;
-   end Protocol_Version_Image;
-
    procedure Encode_Status_Response (W : in out Buffer.Writer) is
       JSON : constant String :=
-        "{""version"":{""name"":""" & Adacraft.Minecraft_Version
-        & """,""protocol"":" & Protocol_Version_Image & "},"
-        & """players"":{""max"":20,""online"":0},"
-        & """description"":{""text"":""AdaCraft""}}";
+        Adacraft.Protocol.Status_Exchange.Build_Response;
    begin
       Buffer.Put_Varint (W, Interfaces.Unsigned_32 (Ids.Protocol_Id (Ids.Cb_Status_Status_Response)));
       Buffer.Put_String (W, JSON);

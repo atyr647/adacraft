@@ -1,3 +1,4 @@
+with Ada.Unchecked_Deallocation;
 with Interfaces;
 with Adacraft.Protocol.Varnum;
 

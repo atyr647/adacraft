@@ -252,10 +252,19 @@ package body Adacraft.Corpus.Runner is
          Payload : constant P.Octets := Input (F.Payload_First .. F.Payload_Last);
          Intent  : PS.Handshake_Intent := 0;
          Hello   : P.Packets.Handshake;
+         Ping    : P.Packets.Ping;
          Is_Hs   : constant Boolean :=
            State = PS.Handshake and then Dir = Serverbound
            and then F.Packet_Id =
              P.Ids.Protocol_Id (P.Ids.Sb_Handshake_Intention);
+         Is_Status_Request : constant Boolean :=
+           State = PS.Status and then Dir = Serverbound
+           and then F.Packet_Id =
+             P.Ids.Protocol_Id (P.Ids.Sb_Status_Status_Request);
+         Is_Ping : constant Boolean :=
+           State = PS.Status and then Dir = Serverbound
+           and then F.Packet_Id =
+             P.Ids.Protocol_Id (P.Ids.Sb_Status_Ping_Request);
       begin
          if Is_Hs then
             Hello := P.Packets.Decode_Handshake (Payload);
@@ -265,6 +274,19 @@ package body Adacraft.Corpus.Runner is
                return;
             end if;
             Intent := PS.Handshake_Intent (Hello.Intent);
+         end if;
+         if Is_Ping then
+            Ping := P.Packets.Decode_Ping (Payload);
+            if Ping.Status /= P.Ok then
+               R.Category := To_Unbounded_String ("malformed_packet");
+               R.Detail := To_Unbounded_String ("ping payload rejected");
+               return;
+            end if;
+         end if;
+         if Is_Status_Request and then Payload'Length /= 0 then
+            R.Category := To_Unbounded_String ("malformed_packet");
+            R.Detail := To_Unbounded_String ("status request must be empty");
+            return;
          end if;
 
          declare
@@ -287,25 +309,54 @@ package body Adacraft.Corpus.Runner is
             R.Pid := F.Packet_Id;
          end;
 
-         declare
-            Body_W : P.Buffer.Writer (Payload'Length + 16);
-            Framed : P.Buffer.Writer (Payload'Length + 32);
-         begin
-            P.Buffer.Put_Varint (Body_W, Interfaces.Unsigned_32 (F.Packet_Id));
-            if Is_Hs then
+         --  Canonical re-encoding: re-encode decoded fields with the
+         --  real encoders only. Handshake branch unchanged (id plus
+         --  decoded version, address, port, intent). Status Request
+         --  writes the packet id only. Ping writes the id then the
+         --  decoded long with the real 64-bit writer. No Put_Bytes
+         --  and no raw Payload/Input copies here.
+         if Is_Hs then
+            declare
+               Body_W : P.Buffer.Writer (Payload'Length + 16);
+               Framed : P.Buffer.Writer (Payload'Length + 32);
+            begin
+               P.Buffer.Put_Varint (Body_W, Interfaces.Unsigned_32 (F.Packet_Id));
                P.Buffer.Put_Varint (Body_W, Hello.Version);
                P.Buffer.Put_String (Body_W, Hello.Address (1 .. Hello.Addr_Len));
                P.Buffer.Put_U16 (Body_W, Hello.Port);
                P.Buffer.Put_Varint (Body_W, Hello.Intent);
-            else
-               P.Buffer.Put_Bytes (Body_W, Payload);
-            end if;
-            if P.Packets.Frame (Framed, Body_W) and then not Framed.Failed then
-               for I in 1 .. Framed.Len loop
-                  R.Reencoded.Append (Framed.Data (I));
-               end loop;
-            end if;
-         end;
+               if P.Packets.Frame (Framed, Body_W) and then not Framed.Failed then
+                  for I in 1 .. Framed.Len loop
+                     R.Reencoded.Append (Framed.Data (I));
+                  end loop;
+               end if;
+            end;
+         elsif Is_Status_Request then
+            declare
+               Body_W : P.Buffer.Writer (16);
+               Framed : P.Buffer.Writer (32);
+            begin
+               P.Buffer.Put_Varint (Body_W, Interfaces.Unsigned_32 (F.Packet_Id));
+               if P.Packets.Frame (Framed, Body_W) and then not Framed.Failed then
+                  for I in 1 .. Framed.Len loop
+                     R.Reencoded.Append (Framed.Data (I));
+                  end loop;
+               end if;
+            end;
+         elsif Is_Ping then
+            declare
+               Body_W : P.Buffer.Writer (16);
+               Framed : P.Buffer.Writer (32);
+            begin
+               P.Buffer.Put_Varint (Body_W, Interfaces.Unsigned_32 (F.Packet_Id));
+               P.Buffer.Put_U64 (Body_W, Ping.Value);
+               if P.Packets.Frame (Framed, Body_W) and then not Framed.Failed then
+                  for I in 1 .. Framed.Len loop
+                     R.Reencoded.Append (Framed.Data (I));
+                  end loop;
+               end if;
+            end;
+         end if;
       end;
    end Feed;
 

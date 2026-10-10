@@ -3,7 +3,7 @@ with Interfaces;
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Login;
-with Adacraft.Protocol.Login;
+with Adacraft.Protocol.State;
 
 package Adacraft.Ingress is
    --  Per-connection framing wiring: one frame decoder per connection.

@@ -8,6 +8,10 @@ package Adacraft.Protocol.Status_Exchange with SPARK_Mode => Off is
       Request_Seen : Boolean := False;
    end record;
 
+   --  Single status JSON builder for the server binary. Version fields
+   --  come from Adacraft.Protocol.State (Protocol_Number / Minecraft_Version).
+   function Build_Response return String;
+
    procedure Reset (S : in out Session);
 
    procedure Handle

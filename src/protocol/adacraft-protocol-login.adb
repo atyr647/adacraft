@@ -1,6 +1,8 @@
 with Adacraft.Auth;
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Ids;
+with Adacraft.Protocol.State;
+with Adacraft.Protocol.Varnum;
 with Interfaces;
 
 package body Adacraft.Protocol.Login is

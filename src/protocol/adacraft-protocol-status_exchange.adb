@@ -2,6 +2,7 @@ with Ada.Strings.Fixed;
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Packets;
 with Adacraft.Protocol.State;
+with Adacraft.Protocol.Varnum;
 
 package body Adacraft.Protocol.Status_Exchange with SPARK_Mode => Off is
    use Adacraft.Protocol;

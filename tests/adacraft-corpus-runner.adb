@@ -28,8 +28,6 @@ package body Adacraft.Corpus.Runner is
 
    procedure Replay (S : Scenario; Failure : out Unbounded_String) is
       D : Dispatch_Session;
-      Ctx : Login_Ctx;
-      pragma Unreferenced (Ctx);
 
       procedure Fail (Step_Idx : Natural; Detail : String) is
       begin

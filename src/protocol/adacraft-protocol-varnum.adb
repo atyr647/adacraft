@@ -239,6 +239,18 @@ is
       Status := Overlong;
    end Decode_Varlong;
 
+   function Tail_Status (S : Status_Type) return Status_Kind is
+   begin
+      case S is
+         when Ok =>
+            return Ok;
+         when Truncated =>
+            return Need_More;
+         when Overlong | Buffer_Too_Small =>
+            return Rejected;
+      end case;
+   end Tail_Status;
+
    function Decode_VarInt (Buffer : Octets; From : Positive) return Varint_Result is
       V : Interfaces.Integer_32;
       C : Natural;
@@ -249,24 +261,20 @@ is
       end if;
 
       Decode (Buffer, From, V, C, S);
-      case S is
-         when Ok =>
-            if C > 1 and then Buffer (From + C - 1) = 0 then
-               return (Status => Rejected, Value => 0, Next => From);
-            end if;
-            return
-              (Status => Status_Kind'(Ok),
-               Value  =>
-                 (if V < 0
-                  then Interfaces.Unsigned_32
-                         (Interfaces.Integer_64 (V) + 2 ** 32)
-                  else Interfaces.Unsigned_32 (V)),
-               Next   => From + C);
-         when Truncated =>
-            return (Status => Need_More, Value => 0, Next => From);
-         when Overlong | Buffer_Too_Small =>
+      if S = Ok then
+         if C > 1 and then Buffer (From + C - 1) = 0 then
             return (Status => Rejected, Value => 0, Next => From);
-      end case;
+         end if;
+         return
+           (Status => Status_Kind'(Ok),
+            Value  =>
+              (if V < 0
+               then Interfaces.Unsigned_32
+                      (Interfaces.Integer_64 (V) + 2 ** 32)
+               else Interfaces.Unsigned_32 (V)),
+            Next   => From + C);
+      end if;
+      return (Status => Tail_Status (S), Value => 0, Next => From);
    end Decode_Varint;
 
    function Decode_VarLong (Buffer : Octets; From : Positive) return Varlong_Result is
@@ -274,29 +282,25 @@ is
       C : Natural;
       S : Status_Type;
    begin
-      if From > Buffer'Last then
+      if Buffer'Last < From then
          return (Status => Need_More, Value => 0, Next => From);
       end if;
 
       Decode_Varlong (Buffer, From, V, C, S);
-      case S is
-         when Ok =>
-            if V < 0 then
-               return
-                 (Status => Status_Kind'(Ok),
-                  Value  =>
-                    Interfaces.Unsigned_64 (V + 2 ** 62 + 2 ** 62) + 2 ** 63,
-                  Next   => From + C);
-            else
-               return
-                 (Status => Status_Kind'(Ok),
-                  Value  => Interfaces.Unsigned_64 (V),
-                  Next   => From + C);
-            end if;
-         when Truncated =>
-            return (Status => Need_More, Value => 0, Next => From);
-         when Overlong | Buffer_Too_Small =>
-            return (Status => Rejected, Value => 0, Next => From);
-      end case;
+      if S /= Ok then
+         return (Status => Tail_Status (S), Value => 0, Next => From);
+      end if;
+      if V < 0 then
+         return
+           (Status => Status_Kind'(Ok),
+            Value  =>
+              Interfaces.Unsigned_64 (V + 2 ** 62 + 2 ** 62) + 2 ** 63,
+            Next   => From + C);
+      else
+         return
+           (Status => Status_Kind'(Ok),
+            Value  => Interfaces.Unsigned_64 (V),
+            Next   => From + C);
+      end if;
    end Decode_VarLong;
 end Adacraft.Protocol.Varnum;

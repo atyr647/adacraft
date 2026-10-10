@@ -70,6 +70,27 @@ package body Adacraft.Corpus.Runner is
       return Result;
    end Frame_Packet;
 
+   --  Collect wire bytes for a Status_Exchange response (id + body)
+   --  using only the server's own Buffer/Packets entries, exactly as
+   --  Adacraft.Network.Queue_Response does. Resp_Id/Data/Len come
+   --  from SE.Handle; no runner-side JSON, ids or ping/pong logic.
+   function Frame_Response
+     (Resp_Id : Natural; Resp_Buf : P.Octets; Resp_Len : Natural)
+      return Byte_Vectors.Vector
+   is
+      Body_W : P.Buffer.Writer (Capacity => Resp_Len + 8);
+   begin
+      P.Buffer.Reset (Body_W);
+      P.Buffer.Put_Varint (Body_W, Interfaces.Unsigned_32 (Resp_Id));
+      for I in 1 .. Resp_Len loop
+         P.Buffer.Put_Octet (Body_W, Resp_Buf (Resp_Buf'First + I - 1));
+      end loop;
+      if Body_W.Failed then
+         return Byte_Vectors.Empty_Vector;
+      end if;
+      return Frame_Packet (Body_W);
+   end Frame_Response;
+
    procedure Handle_Empty_Handshake
      (D : in out Dispatch_Session; Pid : Natural; H_Res : out HE.Handle_Result)
    is
@@ -240,34 +261,26 @@ package body Adacraft.Corpus.Runner is
                   Response_Data => Resp_Buf, Response_Len => Resp_Len,
                   Close_Connection => Want_Close);
             end if;
-            --  Collect the bytes the server dispatch emitted
-            --  (Response_Id/Data/Len from SE.Handle) framed with the
-            --  server's own Packets.Frame. No runner-built status JSON
-            --  or packet ids here; Want_Close/Rejected_Close come from
-            --  the server dispatch. GAP NOTE (A5/constraints): the
-            --  dispatch has no single entry returning already-framed
-            --  wire bytes, so the runner frames the server-provided
-            --  response body with the server's own Frame entry; no
-            --  new src/ entry is added for the runner.
+            --  Collect the wire bytes for the SE.Handle response with
+            --  the server's own framing entry (see Frame_Response).
+            --  Resp_Id/Data/Len, S_Res and Want_Close all come from
+            --  the server dispatch; the runner builds no status JSON,
+            --  no status ids and no ping/pong handling of its own.
+            --  NOTE (A5/constraints): the dispatch has no single entry
+            --  returning already-framed wire bytes, so the runner
+            --  frames the server-provided response body with the
+            --  server's own Frame entry exactly as
+            --  Adacraft.Network.Queue_Response does; no new src/
+            --  entry is added for the runner.
             if Resp_Len > 0 then
                declare
-                  Resp_Body : P.Buffer.Writer (Capacity => Resp_Len + 16);
+                  Framed_Out : constant Byte_Vectors.Vector :=
+                    Frame_Response (Resp_Id, Resp_Buf, Resp_Len);
                begin
-                  P.Buffer.Reset (Resp_Body);
-                  P.Buffer.Put_Varint
-                    (Resp_Body, Interfaces.Unsigned_32 (Resp_Id));
-                  P.Buffer.Put_Bytes
-                    (Resp_Body, Resp_Buf (Resp_Buf'First
-                      .. Resp_Buf'First + Resp_Len - 1));
-                  declare
-                     Framed_Out : constant Byte_Vectors.Vector :=
-                       Frame_Packet (Resp_Body);
-                  begin
-                     if Natural (Framed_Out.Length) > 0 then
-                        Ctx.Pending_Output := Framed_Out;
-                        Ctx.Has_Pending := True;
-                     end if;
-                  end;
+                  if Natural (Framed_Out.Length) > 0 then
+                     Ctx.Pending_Output := Framed_Out;
+                     Ctx.Has_Pending := True;
+                  end if;
                end;
             end if;
             if S_Res = SE.Rejected_Close and then Resp_Len = 0 then
@@ -444,65 +457,18 @@ package body Adacraft.Corpus.Runner is
          end;
       end if;
 
-      declare
-         Payload : constant P.Octets := Input (F.Payload_First .. F.Payload_Last);
-         Intent  : PS.Handshake_Intent := 0;
-         Hello   : P.Packets.Handshake;
-         Is_Hs   : constant Boolean :=
-           State = PS.Handshake and then Dir = Serverbound
-           and then F.Packet_Id =
-             P.Ids.Protocol_Id (P.Ids.Sb_Handshake_Intention);
-      begin
-         if Is_Hs then
-            Hello := P.Packets.Decode_Handshake (Payload);
-            if Hello.Status /= P.Ok then
-               R.Category := To_Unbounded_String ("malformed_packet");
-               R.Detail := To_Unbounded_String ("handshake payload rejected");
-               return;
-            end if;
-            Intent := PS.Handshake_Intent (Hello.Intent);
-         end if;
-
-         declare
-            Ev : constant PS.Packet_Event :=
-              (Direction => (if Dir = Serverbound then PS.Serverbound
-                             else PS.Clientbound),
-               Id        => PS.Packet_Id (F.Packet_Id),
-               Intent    => Intent);
-            T  : constant PS.Transition_Result := PS.Transition (State, Ev);
-         begin
-            if T.Kind = PS.Rejected then
-               R.Category := To_Unbounded_String
-                 (Low (PS.Rejection_Reason'Image (T.Reason)));
-               R.Detail := To_Unbounded_String
-                 ("state machine rejected: " & Low (PS.Rejection_Reason'Image (T.Reason)));
-               return;
-            end if;
-            State := T.Next_State;
-            R.Actual := Accepted;
-            R.Pid := F.Packet_Id;
-         end;
-
-         declare
-            Body_W : P.Buffer.Writer (Payload'Length + 16);
-            Framed : P.Buffer.Writer (Payload'Length + 32);
-         begin
-            P.Buffer.Put_Varint (Body_W, Interfaces.Unsigned_32 (F.Packet_Id));
-            if Is_Hs then
-               P.Buffer.Put_Varint (Body_W, Hello.Version);
-               P.Buffer.Put_String (Body_W, Hello.Address (1 .. Hello.Addr_Len));
-               P.Buffer.Put_U16 (Body_W, Hello.Port);
-               P.Buffer.Put_Varint (Body_W, Hello.Intent);
-            else
-               P.Buffer.Put_Bytes (Body_W, Payload);
-            end if;
-            if P.Packets.Frame (Framed, Body_W) and then not Framed.Failed then
-               for I in 1 .. Framed.Len loop
-                  R.Reencoded.Append (Framed.Data (I));
-               end loop;
-            end if;
-         end;
-      end;
+      --  No runner-owned fallback dispatcher lives here. Handshake,
+      --  status and login inputs are handled only by the server
+      --  dispatch packages above (Handshake_Exchange.Handle,
+      --  Status_Exchange.Handle, Login.Handle_Start /
+      --  Handle_Acknowledged); anything reaching this point is a
+      --  rejection in the current server state. The runner parses no
+      --  handshake fields, decides no next state, builds no status
+      --  JSON and handles no ping/pong itself.
+      R.Category := To_Unbounded_String ("rejected");
+      R.Detail := To_Unbounded_String
+        ("no server dispatch accepts this input in this state");
+      return;
    end Feed;
 
    function Outcome_Image (O : Outcome) return String is

@@ -15,6 +15,8 @@ package Adacraft.Corpus.Runner is
         Adacraft.Protocol.State.Handshake;
       Stored : Adacraft.Protocol.Handshake_Exchange.Connection_Data;
       Sess   : Adacraft.Protocol.Status_Exchange.Session;
+      Pending : Byte_Vectors.Vector;
+      Closing : Boolean := False;
    end record;
 
    procedure Init_Dispatch (D : out Dispatch_Session);

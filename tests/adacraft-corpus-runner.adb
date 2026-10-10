@@ -6,12 +6,16 @@ with Adacraft.Auth;
 with Adacraft.Kernel;
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Frame;
+with Adacraft.Protocol.Handshake_Exchange;
 with Adacraft.Protocol.Ids;
 with Adacraft.Protocol.Login;
 with Adacraft.Protocol.Packets;
+with Adacraft.Protocol.Status_Exchange;
 
 package body Adacraft.Corpus.Runner is
 
+   package HE renames Adacraft.Protocol.Handshake_Exchange;
+   package SE renames Adacraft.Protocol.Status_Exchange;
    package P renames Adacraft.Protocol;
    package PS renames Adacraft.Protocol.State;
    package Prot_Login renames Adacraft.Protocol.Login;
@@ -29,6 +33,13 @@ package body Adacraft.Corpus.Runner is
 
    function Low (S : String) return String is
      (Ada.Characters.Handling.To_Lower (S));
+
+   procedure Init_Dispatch (D : out Dispatch_Session) is
+   begin
+      D.Proto_State := PS.Handshake;
+      D.Stored := (others => <>);
+      SE.Reset (D.Sess);
+   end Init_Dispatch;
 
    Login_Start_Pid      : constant := 0;
    Login_Ack_Pid        : constant := 3;

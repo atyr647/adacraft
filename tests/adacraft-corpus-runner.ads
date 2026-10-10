@@ -1,9 +1,24 @@
 with Ada.Strings.Unbounded;
+with Adacraft.Protocol.Handshake_Exchange;
 with Adacraft.Protocol.Login;
 with Adacraft.Protocol.State;
+with Adacraft.Protocol.Status_Exchange;
 
 --  Test-only replay glue over the existing protocol modules.
+--  Dispatch-only API: per-scenario session mirrors the live
+--  connection path in Adacraft.Network (Stored for
+--  Handshake_Exchange.Handle, Sess reset via Status_Exchange.Reset
+--  and passed as Session_State to Status_Exchange.Handle).
 package Adacraft.Corpus.Runner is
+
+   type Dispatch_Session is record
+      Proto_State : Adacraft.Protocol.State.Connection_State :=
+        Adacraft.Protocol.State.Handshake;
+      Stored : Adacraft.Protocol.Handshake_Exchange.Connection_Data;
+      Sess   : Adacraft.Protocol.Status_Exchange.Session;
+   end record;
+
+   procedure Init_Dispatch (D : out Dispatch_Session);
 
    --  Per-scenario LOGIN context: holds the pending serverbound
    --  output frame (Login Success or Login Disconnect) produced by

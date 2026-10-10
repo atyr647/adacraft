@@ -458,6 +458,13 @@ package body Adacraft.Corpus.Runner is
       --  steps already checked inline; leftover bytes with no clientbound
       --  step to compare against is a mismatch only if a clientbound step
       --  existed. Otherwise handshake-only scenarios correctly emit none.
+      if not Failed and then S.Has_Final_State
+        and then D.Proto_State /= S.Final_State
+      then
+         Fail ("step=0 expected=" & D.Proto_State'Image
+           & " actual=" & S.Final_State'Image
+           & " detail=final state mismatch");
+      end if;
       if not Failed then
          Failure := Null_Unbounded_String;
       else

@@ -160,7 +160,7 @@ is
       elsif Value < 2 ** 56 then 8
       else 9);
 
-   procedure Encode_Varlong
+   procedure Encode_VarLong
      (Value       : in     Interfaces.Integer_64;
       Buffer      : in out Octets;
       Start_Index : in     Integer;
@@ -177,9 +177,9 @@ is
       end if;
 
       Encode_Unsigned (U, Len, Buffer, Start_Index, Written, Status);
-   end Encode_Varlong;
+   end Encode_VarLong;
 
-   procedure Decode_Varlong
+   procedure Decode_VarLong
      (Buffer      : in     Octets;
       Start_Index : in     Integer;
       Value       :    out Interfaces.Integer_64;
@@ -237,7 +237,7 @@ is
       end loop;
 
       Status := Overlong;
-   end Decode_Varlong;
+   end Decode_VarLong;
 
    function Decode_Varint (Buffer : Octets; From : Positive) return Varint_Result is
       V : Interfaces.Integer_32;

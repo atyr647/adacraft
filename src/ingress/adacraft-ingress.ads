@@ -3,7 +3,7 @@ with Interfaces;
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Login;
-with Adacraft.Protocol.Login;
+with Adacraft.Protocol.State;
 
 package Adacraft.Ingress is
    --  Per-connection framing wiring: one frame decoder per connection.
@@ -33,7 +33,8 @@ package Adacraft.Ingress is
    function Is_Closed (Connection : Connection_Type) return Boolean;
 
    type Session is record
-      State       : Protocol.Protocol_State := Protocol.Handshake;
+      State       : Protocol.State.Connection_State :=
+        Protocol.State.Handshake;
       Version     : Interfaces.Unsigned_32 := 0;
       Login_State : Protocol.Login.Login_Session;
    end record;

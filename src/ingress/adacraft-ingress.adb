@@ -70,18 +70,6 @@ package body Adacraft.Ingress is
       return Connection.Closed;
    end Is_Closed;
 
-   function Same_UUID (Left : Protocol.Octets; Right : Auth.Digest) return Boolean is
-   begin
-      if Left'Length /= 16 then
-         return False;
-      end if;
-      for I in 1 .. 16 loop
-         if Left (Left'First + I - 1) /= Right (I) then
-            return False;
-         end if;
-      end loop;
-      return True;
-   end Same_UUID;
    procedure Append (W : in out Protocol.Buffer.Writer; Framed : Protocol.Buffer.Writer) is
    begin
       if Framed.Failed then
@@ -155,7 +143,7 @@ package body Adacraft.Ingress is
               Incoming (Frame.Payload_First .. Frame.Payload_Last);
          begin
             case S.State is
-               when Protocol.Handshake =>
+               when Protocol.State.Handshake =>
                   if Frame.Packet_Id /= Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Handshake_Intention) then
                      Close_Now := True;
                   else
@@ -166,13 +154,13 @@ package body Adacraft.Ingress is
                         if Hello.Status /= Protocol.Ok then
                            Close_Now := True;
                         elsif Hello.Intent = 1 then
-                           S.State := Protocol.Status;
+                           S.State := Protocol.State.Status;
                            S.Version := Hello.Version;
                         elsif Hello.Intent = 2 and then Hello.Version = Adacraft.Protocol_Version then
-                           S.State := Protocol.Login_Phase;
+                           S.State := Protocol.State.Login;
                            S.Version := Hello.Version;
                         elsif Hello.Intent = 2 then
-                           S.State := Protocol.Login_Phase;
+                           S.State := Protocol.State.Login;
                            S.Version := Hello.Version;
                            Disconnect (Outgoing, "This server is Minecraft 26.3, protocol 777", Close_Now);
                         else
@@ -181,7 +169,7 @@ package body Adacraft.Ingress is
                      end;
                   end if;
 
-               when Protocol.Status =>
+               when Protocol.State.Status =>
                   if Frame.Packet_Id = Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Status_Status_Request) then
                      declare
                         Body_W : Protocol.Buffer.Writer (512);
@@ -215,7 +203,7 @@ package body Adacraft.Ingress is
                      Close_Now := True;
                   end if;
 
-               when Protocol.Login_Phase =>
+               when Protocol.State.Login =>
                   declare
                      Dispatch_State : constant Protocol.State.Connection_State :=
                        (if S.Login_State.State = Protocol.Login.Success_Sent
@@ -271,7 +259,7 @@ package body Adacraft.Ingress is
                                 Protocol.Login.To_Configuration
                               then
                                  S.Login_State := Result.Session;
-                                 S.State := Protocol.Configuration;
+                                 S.State := Protocol.State.Configuration;
                               else
                                  S.Login_State := Result.Session;
                                  Close_Now := True;
@@ -283,7 +271,10 @@ package body Adacraft.Ingress is
                      end case;
                   end;
 
-               when Protocol.Configuration | Protocol.Play =>
+               when Protocol.State.Configuration | Protocol.State.Play
+                  | Protocol.State.Login_Awaiting_Ack
+                  | Protocol.State.Configuration_Awaiting_Ack
+                  | Protocol.State.Play_Awaiting_Config_Ack =>
                   Close_Now := True;
             end case;
          end;

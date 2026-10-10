@@ -19,7 +19,6 @@ is
       Dir   : Packet_Direction;
       Id    : Packet_Id) return Natural;
    function Is_Known_Id (Id : Packet_Id) return Boolean;
-   function Name (I : Positive) return String;
 
    --  LOGIN dispatch helpers (protocol 777, pinned 26.3 report).
    --  Direction + state check per section 19: a LOGIN id is routed to

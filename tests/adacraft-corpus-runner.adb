@@ -7,13 +7,24 @@ with Adacraft.Kernel;
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Ids;
+with Adacraft.Protocol.Handshake_Exchange;
 with Adacraft.Protocol.Login;
 with Adacraft.Protocol.Packets;
+with Adacraft.Protocol.State;
+with Adacraft.Protocol.Status_Exchange;
 
 package body Adacraft.Corpus.Runner is
 
+   --  Single-state / single-status dispatch: handshake and status steps
+   --  reach the server only through Handshake_Exchange.Handle and
+   --  Status_Exchange.Handle (single status JSON builder); no local
+   --  status builder and no duplicate state type or conversion here.
+   --  Version fields come from the single version package
+   --  Adacraft.Protocol.State (Protocol_Number / Minecraft_Version).
    package P renames Adacraft.Protocol;
    package PS renames Adacraft.Protocol.State;
+   package HE renames Adacraft.Protocol.Handshake_Exchange;
+   package SE renames Adacraft.Protocol.Status_Exchange;
    package Prot_Login renames Adacraft.Protocol.Login;
    use Ada.Strings.Unbounded;
    use type P.Status_Kind;
@@ -21,6 +32,8 @@ package body Adacraft.Corpus.Runner is
    use type PS.Connection_State;
    use type PS.Login_Dispatch;
    use type Prot_Login.Ack_Outcome;
+   use type HE.Handle_Result;
+   use type SE.Handle_Result;
    use type Byte_Vectors.Vector;
    use type Interfaces.Unsigned_32;
 
@@ -34,6 +47,14 @@ package body Adacraft.Corpus.Runner is
    Login_Ack_Pid        : constant := 3;
    Login_Success_Pid    : constant := 2;
    Login_Disconnect_Pid : constant := 0;
+
+   --  Single-dispatch server state: handshake stored data and status
+   --  session live across Feed calls within one scenario; reset in
+   --  Replay. Feed reaches handshake/status only through
+   --  Handshake_Exchange.Handle / Status_Exchange.Handle (single
+   --  status JSON builder in the server binary).
+   HS_Stored : HE.Connection_Data;
+   SE_Sess   : SE.Session;
 
    function Frame_Packet
      (WB : P.Buffer.Writer) return Byte_Vectors.Vector
@@ -248,6 +269,84 @@ package body Adacraft.Corpus.Runner is
          end;
       end if;
 
+      --  Handshake steps go through the server handshake dispatch.
+      if State = PS.Handshake and then Dir = Serverbound then
+         declare
+            Payload : constant P.Octets :=
+              Input (F.Payload_First .. F.Payload_Last);
+            H_Res : HE.Handle_Result;
+         begin
+            HE.Handle
+              (Packet_Id => F.Packet_Id,
+               Payload   => Payload,
+               Current   => State,
+               Stored    => HS_Stored,
+               Result    => H_Res);
+            if H_Res = HE.Accepted_Status
+              or else H_Res = HE.Accepted_Login
+            then
+               State := State;
+               R.Actual := Accepted;
+               R.Pid := F.Packet_Id;
+               R.Category := To_Unbounded_String ("handshake");
+               R.Detail := To_Unbounded_String ("handshake ok");
+               return;
+            else
+               R.Category := To_Unbounded_String ("handshake");
+               R.Detail := To_Unbounded_String ("handshake rejected");
+               return;
+            end if;
+         end;
+      end if;
+
+      --  Status steps go through the single server status dispatch
+      --  (single JSON builder; version fields from
+      --  Adacraft.Protocol.State.Protocol_Number / Minecraft_Version).
+      if State = PS.Status then
+         if Dir /= Serverbound then
+            R.Category := To_Unbounded_String ("status");
+            R.Detail := To_Unbounded_String ("status wrong direction");
+            return;
+         end if;
+         declare
+            Payload : constant P.Octets :=
+              Input (F.Payload_First .. F.Payload_Last);
+            S_Res : SE.Handle_Result;
+            Resp_Id : Natural := 0;
+            Resp_Len : Natural := 0;
+            Resp_Buf : P.Octets (1 .. 33_008) := (others => 0);
+            Want_Close : Boolean := False;
+         begin
+            SE.Handle
+              (Packet_Id        => F.Packet_Id,
+               Payload          => Payload,
+               Current          => State,
+               Session_State    => SE_Sess,
+               Result           => S_Res,
+               Response_Id      => Resp_Id,
+               Response_Data    => Resp_Buf,
+               Response_Len     => Resp_Len,
+               Close_Connection => Want_Close);
+            if S_Res = SE.Responded
+              or else S_Res = SE.Pong_Ready_Close
+            then
+               R.Actual := Accepted;
+               R.Pid := F.Packet_Id;
+               R.Category := To_Unbounded_String ("status");
+               R.Detail := To_Unbounded_String ("status ok");
+               if Want_Close then
+                  Ctx.Closed := True;
+               end if;
+               return;
+            else
+               Ctx.Closed := True;
+               R.Category := To_Unbounded_String ("status");
+               R.Detail := To_Unbounded_String ("status rejected");
+               return;
+            end if;
+         end;
+      end if;
+
       declare
          Payload : constant P.Octets := Input (F.Payload_First .. F.Payload_Last);
          Intent  : PS.Handshake_Intent := 0;
@@ -312,6 +411,9 @@ package body Adacraft.Corpus.Runner is
    procedure Replay (S : Scenario; Failure : out Unbounded_String) is
       State : PS.Connection_State := S.Initial_State;
       Ctx   : Login_Ctx;
+      --  Per-scenario server dispatch state uses the single
+      --  Adacraft.Protocol.State.Connection_State type directly;
+      --  no duplicate state type and no To_State/From_State/Convert.
       Idx   : Natural := 0;
 
       procedure Fail (Expected, Actual, Detail : String) is
@@ -322,6 +424,8 @@ package body Adacraft.Corpus.Runner is
       end Fail;
    begin
       Failure := Null_Unbounded_String;
+      HS_Stored := (others => <>);
+      SE.Reset (SE_Sess);
       for St of S.Steps loop
          Idx := Idx + 1;
          declare

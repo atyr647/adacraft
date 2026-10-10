@@ -1,3 +1,6 @@
+--  Single-state dispatch: connection state lives only in
+--  Adacraft.Protocol.State.Connection_State; no duplicate
+--  state type or To_State/From_State/Convert here.
 with Adacraft.Protocol.State;
 
 package Adacraft.Protocol.Handshake_Exchange with SPARK_Mode => Off is

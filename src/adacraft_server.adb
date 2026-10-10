@@ -3,7 +3,7 @@ with Ada.Text_IO;
 with GNAT.OS_Lib;
 with GNAT.Sockets;
 with Adacraft.Network;
-with Adacraft;
+with Adacraft.Protocol.State;
 --  Login is handled only in Adacraft.Network.Handle_Frame_Body; no
 --  second login handler here (cleanup pass forbids duplicate blocks).
 
@@ -38,8 +38,8 @@ begin
       end;
    end if;
    Ada.Text_IO.Put_Line
-     ("AdaCraft " & Adacraft.Minecraft_Version
-      & " protocol" & Adacraft.Protocol_Version'Image
+     ("AdaCraft " & Adacraft.Protocol.State.Minecraft_Version
+      & " protocol" & Adacraft.Protocol.State.Protocol_Number'Image
       & " listening on" & Port'Image);
    declare
       use GNAT.Sockets;

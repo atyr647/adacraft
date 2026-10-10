@@ -13,6 +13,7 @@ procedure Test_Frame_Zero_Length is
    use Adacraft.Protocol;
    use type Adacraft.Protocol.Status_Kind;
    use type Frame.Feed_Status;
+   use type Interfaces.Unsigned_8;
    use type Varnum.Status_Type;
 
    Failures   : Natural := 0;

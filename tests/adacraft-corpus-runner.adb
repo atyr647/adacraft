@@ -320,91 +320,27 @@ package body Adacraft.Corpus.Runner is
       end;
    end Feed;
 
+   --  Empty session stub: fresh per-scenario dispatch state only.
+   --  Scenario I/O itself lives in Adacraft.Corpus.Loader; this
+   --  procedure just reports a stub failure without any protocol logic.
    procedure Replay (S : Scenario; Failure : out Unbounded_String) is
-      State : PS.Connection_State := S.Initial_State;
-      Ctx   : Login_Ctx;
-      Idx   : Natural := 0;
-
-      procedure Fail (Expected, Actual, Detail : String) is
-      begin
-         Failure := To_Unbounded_String
-           ("step=" & Img (Idx) & " expected=" & Expected
-            & " actual=" & Actual & " detail=" & Detail);
-      end Fail;
+      D : Dispatch_Session;
    begin
-      Failure := Null_Unbounded_String;
-      for St of S.Steps loop
-         Idx := Idx + 1;
-         declare
-            Input  : P.Octets (1 .. Natural (St.Input.Length));
-            Before : constant PS.Connection_State := State;
-            R      : Feed_Result;
-         begin
-            for I in Input'Range loop
-               Input (I) := St.Input (I);
-            end loop;
-            Feed (State, Ctx, St.Dir, Input, R);
-            if R.Actual /= St.Expected then
-               Fail (Low (Outcome'Image (St.Expected)),
-                     Low (Outcome'Image (R.Actual)), To_String (R.Detail));
-               return;
-            end if;
-            case R.Actual is
-               when Accepted =>
-                  if St.Has_Packet_Id and then R.Pid /= St.Packet_Id then
-                     Fail ("packet_id=" & Img (St.Packet_Id),
-                           "packet_id=" & Img (R.Pid), "packet id mismatch");
-                     return;
-                  end if;
-                  if St.Has_State_After and then State /= St.State_After then
-                     Fail ("state_after=" & Low (PS.Connection_State'Image (St.State_After)),
-                           "state_after=" & Low (PS.Connection_State'Image (State)),
-                           "state mismatch");
-                     return;
-                  end if;
-                  if St.Canonical and then R.Reencoded /= St.Input then
-                     Fail ("canonical", "reencoded differs",
-                           "round-trip bytes differ from input");
-                     return;
-                  end if;
-               when Rejected | Incomplete =>
-                  if State /= Before then
-                     Fail ("state unchanged", "state changed",
-                           "state changed on terminal step");
-                     return;
-                  end if;
-                  if St.Has_Rejection_Category
-                    and then Low (To_String (St.Rejection_Category))
-                             /= To_String (R.Category)
-                  then
-                     Fail ("category=" & To_String (St.Rejection_Category),
-                           "category=" & To_String (R.Category),
-                           "rejection category mismatch");
-                     return;
-                  end if;
-                  exit;
-            end case;
-         end;
-      end loop;
-      if S.Has_Final_State and then State /= S.Final_State then
-         Idx := Natural (S.Steps.Length);
-         Fail ("final_state=" & Low (PS.Connection_State'Image (S.Final_State)),
-               "final_state=" & Low (PS.Connection_State'Image (State)),
-               "final state mismatch");
-      end if;
+      Init_Dispatch (D);
+      Failure := To_Unbounded_String
+        ("stub scenario=" & To_String (S.Id) & " steps="
+         & Img (Natural (S.Steps.Length)));
    end Replay;
 
+   --  Scenario I/O entry: iterates Loader-produced scenarios,
+   --  isolates state per scenario, and prints the summary.
    procedure Run_All
      (Scenarios : Scenario_Vectors.Vector;
       F         : Filter;
       Summary   : out Run_Summary)
    is
       Failure : Unbounded_String;
-      Saved_Online_Mode : constant Boolean := Adacraft.Kernel.Online_Mode;
    begin
-      --  Corpus login scenarios exercise the offline flow explicitly.
-      --  The runner's LOGIN dispatch still reads the configured mode.
-      Adacraft.Kernel.Online_Mode := False;
       Summary := (others => <>);
       for S of Scenarios loop
          if (not F.Has_Id or else S.Id = F.Id)

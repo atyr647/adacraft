@@ -2,6 +2,7 @@ with Ada.Command_Line;
 with Ada.Text_IO;
 with Interfaces;
 with Adacraft.Protocol;
+with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Varnum;
 
 procedure Test_Protocol_Varnum is
@@ -506,6 +507,30 @@ begin
          Check (T32.Status = Need_More, "H strict varint lone 80 needmore");
          Check (T64.Status = Need_More, "H strict varlong lone 80 needmore");
       end;
+   end;
+
+   --  Buffer.Put_Varint is a thin forwarder over Varnum.Encode: values
+   --  >= 16#8000_0000# (negative VarInts) must yield exact 5 bytes.
+   declare
+      use type Interfaces.Unsigned_32;
+      W : Adacraft.Protocol.Buffer.Writer (Capacity => 8);
+      Big : constant Interfaces.Unsigned_32 :=
+        Interfaces.Unsigned_32 (2 ** 31);
+      Neg_One : constant Interfaces.Unsigned_32 :=
+        Interfaces.Unsigned_32'Last;
+   begin
+      Adacraft.Protocol.Buffer.Reset (W);
+      Adacraft.Protocol.Buffer.Put_Varint (W, Big);
+      Check (not W.Failed and then W.Len = 5
+             and then W.Data (1 .. 5)
+               = Octets'(16#80#, 16#80#, 16#80#, 16#80#, 16#08#),
+             "Buffer.Put_Varint 80000000 is 80 80 80 80 08");
+      Adacraft.Protocol.Buffer.Reset (W);
+      Adacraft.Protocol.Buffer.Put_Varint (W, Neg_One);
+      Check (not W.Failed and then W.Len = 5
+             and then W.Data (1 .. 5)
+               = Octets'(16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#0F#),
+             "Buffer.Put_Varint -1 is FF FF FF FF 0F");
    end;
 
    if Failures = 0 then

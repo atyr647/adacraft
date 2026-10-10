@@ -3,22 +3,23 @@ with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Packets;
 with Adacraft.Protocol.State;
 with Adacraft.Protocol.Varnum;
+with Adacraft.Protocol.Version;
 
 package body Adacraft.Protocol.Status_Exchange with SPARK_Mode => Off is
    use Adacraft.Protocol;
    use type State.Connection_State;
 
    --  Single status JSON builder. Version fields are pinned to the single
-   --  version package Adacraft.Protocol.State (Protocol_Number = 777,
-   --  Minecraft_Version = "26.3"). Dropped fields vs. vanilla samples:
+   --  version package Adacraft.Protocol.Version (Protocol_Version = 777,
+   --  Version_Name = "26.3"). Dropped fields vs. vanilla samples:
    --  favicon, enforcesSecureChat and previews are omitted; players
    --  reports max 20 / online 0 and description is {"text":"AdaCraft"}.
    function Build_Response return String is
       Num_Image : constant String :=
         Ada.Strings.Fixed.Trim
-          (State.Protocol_Number'Image, Ada.Strings.Left);
+          (Version.Protocol_Version'Image, Ada.Strings.Left);
    begin
-      return "{""version"":{""name"":""" & State.Minecraft_Version
+      return "{""version"":{""name"":""" & Version.Version_Name
         & """,""protocol"":" & Num_Image & "},"
         & """players"":{""max"":20,""online"":0},"
         & """description"":{""text"":""AdaCraft""}}";

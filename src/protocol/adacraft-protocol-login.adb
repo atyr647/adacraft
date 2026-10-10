@@ -1,8 +1,6 @@
 with Adacraft.Auth;
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Ids;
-with Adacraft.Protocol.State;
-with Adacraft.Protocol.Varnum;
 with Interfaces;
 
 package body Adacraft.Protocol.Login is
@@ -10,9 +8,9 @@ package body Adacraft.Protocol.Login is
    use type Auth.Server_Auth_Mode;
    use type Adacraft.Protocol.Status_Kind;
    --  VarInt decoding for Login Start goes through Buffer.Decode_String
-   --  (which decodes the length prefix via Varnum); no local 16#80#
-   --  continuation-bit logic here. Protocol/version pins, where needed,
-   --  come from Adacraft.Protocol.State, not literals.
+   --  (which decodes the length prefix via Varnum); no local continuation-bit
+   --  logic here. Protocol/version pins, where needed, come from
+   --  Adacraft.Protocol.Version, not literals.
 
    function Is_Valid_Name (Name : String) return Boolean is
    begin

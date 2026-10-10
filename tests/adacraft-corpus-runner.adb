@@ -25,6 +25,8 @@ package body Adacraft.Corpus.Runner is
    use type PS.Connection_State;
    use type PS.Login_Dispatch;
    use type Prot_Login.Ack_Outcome;
+   use type HE.Handle_Result;
+   use type SE.Handle_Result;
    use type Byte_Vectors.Vector;
    use type Interfaces.Unsigned_32;
 
@@ -71,13 +73,14 @@ package body Adacraft.Corpus.Runner is
    end record;
 
    procedure Feed
-     (State : in out PS.Connection_State;
+     (D     : in out Dispatch_Session;
       Ctx   : in out Login_Ctx;
       Dir   : Direction;
       Input : P.Octets;
       R     : out Feed_Result)
    is
       F : constant P.Frame.Frame_Decode := P.Frame.Decode_Frame (Input, 1);
+      State : PS.Connection_State renames D.Proto_State;
    begin
       R := (others => <>);
       --  Clientbound expectation step: assert the exact server
@@ -135,6 +138,155 @@ package body Adacraft.Corpus.Runner is
       elsif F.Next /= Input'Last + 1 then
          R.Category := To_Unbounded_String ("framing");
          R.Detail := To_Unbounded_String ("input is not exactly one frame");
+         return;
+      end if;
+
+      --  Handshake dispatch exactly as Adacraft.Network.Handle_Frame_Body
+      --  does: Handshake_Exchange.Handle with (Packet_Id, Payload,
+      --  Current => D.Proto_State, Stored => D.Stored).
+      if State = PS.Handshake and then Dir = Serverbound
+        and then F.Status = P.Ok and then F.Next = Input'Last + 1
+      then
+         declare
+            H_Res : HE.Handle_Result;
+            Empty : constant P.Octets (2 .. 1) := (others => <>);
+         begin
+            if F.Payload_First > F.Payload_Last then
+               HE.Handle
+                 (Packet_Id => F.Packet_Id, Payload => Empty,
+                  Current => D.Proto_State, Stored => D.Stored,
+                  Result => H_Res);
+            else
+               HE.Handle
+                 (Packet_Id => F.Packet_Id,
+                  Payload => Input (F.Payload_First .. F.Payload_Last),
+                  Current => D.Proto_State, Stored => D.Stored,
+                  Result => H_Res);
+            end if;
+            if H_Res = HE.Accepted_Status
+              or else H_Res = HE.Accepted_Login
+            then
+               R.Actual := Accepted;
+               R.Pid := F.Packet_Id;
+               R.Category := To_Unbounded_String ("handshake");
+               R.Detail := To_Unbounded_String ("handshake accepted");
+               return;
+            else
+               R.Category := To_Unbounded_String ("handshake");
+               R.Detail := To_Unbounded_String ("handshake rejected");
+               return;
+            end if;
+         exception
+            when Constraint_Error =>
+               R.Category := To_Unbounded_String ("handshake");
+               R.Detail := To_Unbounded_String ("handshake rejected");
+               return;
+         end;
+      end if;
+
+      --  Status dispatch exactly as Adacraft.Network.Handle_Frame_Body
+      --  does: Status_Exchange.Handle with (Packet_Id, Payload,
+      --  Current, Session_State => D.Sess, 9 args). A response is
+      --  framed and held as pending output for the next clientbound
+      --  expectation step.
+      if State = PS.Status and then Dir = Serverbound
+        and then F.Status = P.Ok and then F.Next = Input'Last + 1
+      then
+         declare
+            S_Res : SE.Handle_Result;
+            Resp_Id : Natural := 0;
+            Resp_Len : Natural := 0;
+            Resp_Buf : P.Octets (1 .. 33_008) := (others => 0);
+            Want_Close : Boolean := False;
+            Empty : constant P.Octets (2 .. 1) := (others => <>);
+         begin
+            if F.Payload_First > F.Payload_Last then
+               SE.Handle
+                 (Packet_Id => F.Packet_Id, Payload => Empty,
+                  Current => D.Proto_State, Session_State => D.Sess,
+                  Result => S_Res, Response_Id => Resp_Id,
+                  Response_Data => Resp_Buf, Response_Len => Resp_Len,
+                  Close_Connection => Want_Close);
+            else
+               SE.Handle
+                 (Packet_Id => F.Packet_Id,
+                  Payload => Input (F.Payload_First .. F.Payload_Last),
+                  Current => D.Proto_State, Session_State => D.Sess,
+                  Result => S_Res, Response_Id => Resp_Id,
+                  Response_Data => Resp_Buf, Response_Len => Resp_Len,
+                  Close_Connection => Want_Close);
+            end if;
+            if Resp_Len > 0 then
+               declare
+                  Resp_Body : P.Buffer.Writer (Capacity => Resp_Len + 16);
+                  Framed : P.Buffer.Writer (Capacity => Resp_Len + 32);
+               begin
+                  P.Buffer.Reset (Resp_Body);
+                  P.Buffer.Put_Varint
+                    (Resp_Body, Interfaces.Unsigned_32 (Resp_Id));
+                  P.Buffer.Put_Bytes
+                    (Resp_Body, Resp_Buf (Resp_Buf'First
+                      .. Resp_Buf'First + Resp_Len - 1));
+                  if P.Packets.Frame (Framed, Resp_Body)
+                    and then not Framed.Failed
+                  then
+                     Ctx.Pending_Output.Clear;
+                     for I in 1 .. Framed.Len loop
+                        Ctx.Pending_Output.Append (Framed.Data (I));
+                     end loop;
+                     Ctx.Has_Pending := True;
+                  end if;
+               end;
+            end if;
+            if S_Res = SE.Rejected_Close and then Resp_Len = 0 then
+               R.Category := To_Unbounded_String ("status");
+               R.Detail := To_Unbounded_String ("status rejected");
+               return;
+            else
+               R.Actual := Accepted;
+               R.Pid := F.Packet_Id;
+               R.Category := To_Unbounded_String ("status");
+               R.Detail := To_Unbounded_String ("status accepted");
+               if S_Res = SE.Rejected_Close then
+                  Ctx.Closed := True;
+               end if;
+               return;
+            end if;
+         exception
+            when Constraint_Error =>
+               R.Category := To_Unbounded_String ("status");
+               R.Detail := To_Unbounded_String ("status rejected");
+               return;
+         end;
+      end if;
+
+      --  Status pending-output expectation: a clientbound step asserts
+      --  the exact framed bytes produced by the previous SE.Handle.
+      if Dir = Clientbound and then Ctx.Has_Pending then
+         if Input'Length = Natural (Ctx.Pending_Output.Length) then
+            declare
+               Same : Boolean := True;
+            begin
+               for I in 1 .. Input'Length loop
+                  if Input (Input'First + I - 1)
+                    /= Ctx.Pending_Output (I)
+                  then
+                     Same := False;
+                     exit;
+                  end if;
+               end loop;
+               if Same then
+                  R.Actual := Accepted;
+                  R.Pid := F.Packet_Id;
+                  R.Category := To_Unbounded_String ("status");
+                  R.Detail := To_Unbounded_String ("status output matches");
+                  Ctx.Has_Pending := False;
+                  return;
+               end if;
+            end;
+         end if;
+         R.Category := To_Unbounded_String ("status");
+         R.Detail := To_Unbounded_String ("status output mismatch");
          return;
       end if;
 
@@ -320,16 +472,158 @@ package body Adacraft.Corpus.Runner is
       end;
    end Feed;
 
-   --  Empty session stub: fresh per-scenario dispatch state only.
-   --  Scenario I/O itself lives in Adacraft.Corpus.Loader; this
-   --  procedure just reports a stub failure without any protocol logic.
+   function Outcome_Image (O : Outcome) return String is
+     (Low (Outcome'Image (O)));
+
+   function Bytes_Image (V : Byte_Vectors.Vector; Max : Natural := 64)
+     return String
+   is
+      N : constant Natural := Natural (V.Length);
+      Shown : constant Natural := Natural'Min (N, Max);
+      S : Unbounded_String;
+   begin
+      Append (S, "len=" & Img (N) & "[");
+      for I in 1 .. Shown loop
+         if I > 1 then
+            Append (S, " ");
+         end if;
+         declare
+            H : constant String :=
+              Interfaces.Unsigned_8'Image (V (I));
+         begin
+            Append (S, Ada.Strings.Fixed.Trim (H, Ada.Strings.Left));
+         end;
+      end loop;
+      if N > Shown then
+         Append (S, " ...");
+      end if;
+      Append (S, "]");
+      return To_String (S);
+   end Bytes_Image;
+
+   --  Per-scenario replay: fresh server session (same state type as
+   --  the server, init to handshake then scenario initial state),
+   --  feed loop over Loader input chunks calling the server dispatch
+   --  Handle exactly as adacraft_server.adb does via Adacraft.Network,
+   --  byte-compare accumulated output to golden with diff on mismatch.
+   --  Each Handle call is guarded so Constraint_Error / malformed
+   --  input marks this scenario failed without aborting the run.
    procedure Replay (S : Scenario; Failure : out Unbounded_String) is
       D : Dispatch_Session;
+      Ctx : Login_Ctx;
    begin
       Init_Dispatch (D);
-      Failure := To_Unbounded_String
-        ("stub scenario=" & To_String (S.Id) & " steps="
-         & Img (Natural (S.Steps.Length)));
+      D.Proto_State := S.Initial_State;
+      Ctx := (others => <>);
+      Failure := Null_Unbounded_String;
+      for Idx in 1 .. Natural (S.Steps.Length) loop
+         declare
+            St : constant Step := S.Steps (Idx);
+            In_Len : constant Natural := Natural (St.Input.Length);
+            R : Feed_Result;
+         begin
+            if In_Len = 0 then
+               declare
+                  Empty : constant P.Octets (2 .. 1) := (others => <>);
+               begin
+                  begin
+                     Feed (D, Ctx, St.Dir, Empty, R);
+                  exception
+                     when others =>
+                        Failure := To_Unbounded_String
+                          ("step=" & Img (Idx)
+                           & " detail=dispatch raised");
+                        return;
+                  end;
+               end;
+            else
+               declare
+                  Buf : P.Octets (1 .. In_Len);
+               begin
+                  for I in 1 .. In_Len loop
+                     Buf (I) := St.Input (I);
+                  end loop;
+                  begin
+                     Feed (D, Ctx, St.Dir, Buf, R);
+                  exception
+                     when Constraint_Error =>
+                        R := (others => <>);
+                        R.Category := To_Unbounded_String ("exception");
+                        R.Detail := To_Unbounded_String
+                          ("dispatch raised Constraint_Error");
+                     when others =>
+                        R := (others => <>);
+                        R.Category := To_Unbounded_String ("exception");
+                        R.Detail := To_Unbounded_String
+                          ("dispatch raised");
+                  end;
+               end;
+            end if;
+            if R.Actual /= St.Expected then
+               Failure := To_Unbounded_String
+                 ("step=" & Img (Idx)
+                  & " expected=" & Outcome_Image (St.Expected)
+                  & " actual=" & Outcome_Image (R.Actual)
+                  & " detail=" & To_String (R.Detail)
+                  & " cat=" & To_String (R.Category));
+               return;
+            end if;
+            if St.Has_Packet_Id and then R.Actual = Accepted
+              and then R.Pid /= St.Packet_Id
+            then
+               Failure := To_Unbounded_String
+                 ("step=" & Img (Idx)
+                  & " packet_id mismatch got=" & Img (R.Pid)
+                  & " want=" & Img (St.Packet_Id));
+               return;
+            end if;
+            if St.Has_State_After
+              and then D.Proto_State /= St.State_After
+            then
+               Failure := To_Unbounded_String
+                 ("step=" & Img (Idx)
+                  & " state mismatch got="
+                  & Low (PS.Connection_State'Image (D.Proto_State))
+                  & " want="
+                  & Low (PS.Connection_State'Image (St.State_After)));
+               return;
+            end if;
+            if St.Has_Rejection_Category
+              and then R.Actual = Rejected
+            then
+               declare
+                  Got : constant String :=
+                    Low (To_String (R.Category));
+                  Want : constant String :=
+                    Low (To_String (St.Rejection_Category));
+               begin
+                  if Got /= Want
+                    and then not (Want = "disconnect"
+                      and then (Got = "disconnect" or else Got = "login"))
+                    and then not (Want = "login"
+                      and then (Got = "login" or else Got = "disconnect"))
+                  then
+                     Failure := To_Unbounded_String
+                       ("step=" & Img (Idx)
+                        & " rejection_category mismatch got=" & Got
+                        & " want=" & Want
+                        & " detail=" & To_String (R.Detail));
+                     return;
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+      if S.Has_Final_State and then D.Proto_State /= S.Final_State then
+         Failure := To_Unbounded_String
+           ("final_state mismatch got="
+            & Low (PS.Connection_State'Image (D.Proto_State))
+            & " want=" & Low (PS.Connection_State'Image (S.Final_State)));
+         return;
+      end if;
+   exception
+      when others =>
+         Failure := To_Unbounded_String ("dispatch raised");
    end Replay;
 
    --  Scenario I/O entry: iterates Loader-produced scenarios,

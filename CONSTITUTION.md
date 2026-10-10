@@ -1,6 +1,4 @@
-Yes. I checked the current release before filling the pin: Minecraft Java Edition 26.3 is the current release, released September 15, 2026, with protocol 777 and data version 5023; it requires Java 25 for the oracle server. Mojang's official 26.3 release notes confirm the release and its technical changes, while the protocol/data-version mapping is independently corroborated by current version references. 
-
-One important correction to the scaffold you pasted: the old 1.21.1 / protocol 767 / data version 3955 scaffold must not be carried forward. The frozen target is 26.3 / 777 / 5023. Also, 26.3 has substantial current data-driven changes, so the protocol and registry work should be generated directly from the pinned 26.3 artifacts rather than copied from a 1.21.x implementation. 
+AdaCraft v1.0 targets Minecraft: Java Edition 26.3 with protocol 777 and data version 5023.
 
 AdaCraft v1.0
 

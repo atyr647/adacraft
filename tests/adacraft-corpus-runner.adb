@@ -43,19 +43,25 @@ package body Adacraft.Corpus.Runner is
       SE.Reset (D.Sess);
    end Init_Dispatch;
 
-   Login_Start_Pid      : constant := 0;
-   Login_Ack_Pid        : constant := 3;
-   Login_Success_Pid    : constant := 2;
-   Login_Disconnect_Pid : constant := 0;
+   Login_Start_Pid : constant := 0;
+   Login_Ack_Pid   : constant := 3;
 
+   --  Mode for Login.Handle_Start: read from the same explicit server
+   --  configuration the live path uses (Kernel.Online_Mode), never a
+   --  hardcoded default.
+   function Server_Auth_Mode return Auth.Server_Auth_Mode is
+     (if Adacraft.Kernel.Online_Mode then Auth.Online else Auth.Offline);
+
+   --  Frame a ready server packet body (id included) with the server's
+   --  own framing entry (Packets.Frame). No runner-side id/length
+   --  codec here; this only collects the bytes the server package
+   --  emitted into a vector for the clientbound expectation step.
    function Frame_Packet
      (WB : P.Buffer.Writer) return Byte_Vectors.Vector
    is
       Framed : P.Buffer.Writer (Capacity => WB.Len + 32 + 1);
       Result : Byte_Vectors.Vector;
    begin
-      --  WB already holds the full packet body including its id,
-      --  so frame it directly without prepending another id.
       if P.Packets.Frame (Framed, WB) and then not Framed.Failed then
          for I in 1 .. Framed.Len loop
             Result.Append (Framed.Data (I));
@@ -63,6 +69,32 @@ package body Adacraft.Corpus.Runner is
       end if;
       return Result;
    end Frame_Packet;
+
+   procedure Handle_Empty_Handshake
+     (D : in out Dispatch_Session; Pid : Natural; H_Res : out HE.Handle_Result)
+   is
+      Empty : constant P.Octets (1 .. 0) := (others => <>);
+   begin
+      HE.Handle
+        (Packet_Id => Pid, Payload => Empty,
+         Current => D.Proto_State, Stored => D.Stored, Result => H_Res);
+   end Handle_Empty_Handshake;
+
+   procedure Handle_Empty_Status
+     (D : in out Dispatch_Session;
+      Pid : Natural; S_Res : out SE.Handle_Result;
+      Resp_Id : out Natural; Resp_Buf : out P.Octets; Resp_Len : out Natural;
+      Want_Close : out Boolean)
+   is
+      Empty : constant P.Octets (1 .. 0) := (others => <>);
+   begin
+      SE.Handle
+        (Packet_Id => Pid, Payload => Empty,
+         Current => D.Proto_State, Session_State => D.Sess,
+         Result => S_Res, Response_Id => Resp_Id,
+         Response_Data => Resp_Buf, Response_Len => Resp_Len,
+         Close_Connection => Want_Close);
+   end Handle_Empty_Status;
 
    type Feed_Result is record
       Actual    : Outcome := Rejected;
@@ -149,13 +181,9 @@ package body Adacraft.Corpus.Runner is
       then
          declare
             H_Res : HE.Handle_Result;
-            Empty : constant P.Octets (2 .. 1) := (others => <>);
          begin
             if F.Payload_First > F.Payload_Last then
-               HE.Handle
-                 (Packet_Id => F.Packet_Id, Payload => Empty,
-                  Current => D.Proto_State, Stored => D.Stored,
-                  Result => H_Res);
+               Handle_Empty_Handshake (D, F.Packet_Id, H_Res);
             else
                HE.Handle
                  (Packet_Id => F.Packet_Id,
@@ -198,15 +226,11 @@ package body Adacraft.Corpus.Runner is
             Resp_Len : Natural := 0;
             Resp_Buf : P.Octets (1 .. 33_008) := (others => 0);
             Want_Close : Boolean := False;
-            Empty : constant P.Octets (2 .. 1) := (others => <>);
          begin
             if F.Payload_First > F.Payload_Last then
-               SE.Handle
-                 (Packet_Id => F.Packet_Id, Payload => Empty,
-                  Current => D.Proto_State, Session_State => D.Sess,
-                  Result => S_Res, Response_Id => Resp_Id,
-                  Response_Data => Resp_Buf, Response_Len => Resp_Len,
-                  Close_Connection => Want_Close);
+               Handle_Empty_Status
+                 (D, F.Packet_Id, S_Res, Resp_Id, Resp_Buf, Resp_Len,
+                  Want_Close);
             else
                SE.Handle
                  (Packet_Id => F.Packet_Id,
@@ -216,10 +240,18 @@ package body Adacraft.Corpus.Runner is
                   Response_Data => Resp_Buf, Response_Len => Resp_Len,
                   Close_Connection => Want_Close);
             end if;
+            --  Collect the bytes the server dispatch emitted
+            --  (Response_Id/Data/Len from SE.Handle) framed with the
+            --  server's own Packets.Frame. No runner-built status JSON
+            --  or packet ids here; Want_Close/Rejected_Close come from
+            --  the server dispatch. GAP NOTE (A5/constraints): the
+            --  dispatch has no single entry returning already-framed
+            --  wire bytes, so the runner frames the server-provided
+            --  response body with the server's own Frame entry; no
+            --  new src/ entry is added for the runner.
             if Resp_Len > 0 then
                declare
                   Resp_Body : P.Buffer.Writer (Capacity => Resp_Len + 16);
-                  Framed : P.Buffer.Writer (Capacity => Resp_Len + 32);
                begin
                   P.Buffer.Reset (Resp_Body);
                   P.Buffer.Put_Varint
@@ -227,15 +259,15 @@ package body Adacraft.Corpus.Runner is
                   P.Buffer.Put_Bytes
                     (Resp_Body, Resp_Buf (Resp_Buf'First
                       .. Resp_Buf'First + Resp_Len - 1));
-                  if P.Packets.Frame (Framed, Resp_Body)
-                    and then not Framed.Failed
-                  then
-                     Ctx.Pending_Output.Clear;
-                     for I in 1 .. Framed.Len loop
-                        Ctx.Pending_Output.Append (Framed.Data (I));
-                     end loop;
-                     Ctx.Has_Pending := True;
-                  end if;
+                  declare
+                     Framed_Out : constant Byte_Vectors.Vector :=
+                       Frame_Packet (Resp_Body);
+                  begin
+                     if Natural (Framed_Out.Length) > 0 then
+                        Ctx.Pending_Output := Framed_Out;
+                        Ctx.Has_Pending := True;
+                     end if;
+                  end;
                end;
             end if;
             if S_Res = SE.Rejected_Close and then Resp_Len = 0 then
@@ -317,14 +349,12 @@ package body Adacraft.Corpus.Runner is
                declare
                   Payload : constant P.Octets :=
                     Input (F.Payload_First .. F.Payload_Last);
-                  --  Mirror Adacraft.Network.Handle_Frame_Body Gate 4:
-                  --  the live Login branch answers well-formed Start
-                  --  with offline success (no online-mode branch here;
-                  --  online refuse lives in Login.Handle_Start used via
-                  --  Ingress). Corpus login scenarios exercise offline.
+                  --  Live Login path (Adacraft.Network.Handle_Frame_Body
+                  --  Gate 4 via Login.Handle_Start): mode comes from the
+                  --  explicit server configuration, never hardcoded.
                   Res : constant Prot_Login.Start_Result :=
                     Prot_Login.Handle_Start
-                      (Ctx.Session, Payload, Auth.Offline);
+                      (Ctx.Session, Payload, Server_Auth_Mode);
                   W : P.Buffer.Writer (Capacity => 512);
                begin
                   case Res.Outcome is
@@ -527,7 +557,7 @@ package body Adacraft.Corpus.Runner is
          begin
             if In_Len = 0 then
                declare
-                  Empty : constant P.Octets (2 .. 1) := (others => <>);
+                  Empty : constant P.Octets (1 .. 0) := (others => <>);
                begin
                   begin
                      Feed (D, Ctx, St.Dir, Empty, R);
@@ -591,6 +621,31 @@ package body Adacraft.Corpus.Runner is
                   & Low (PS.Connection_State'Image (St.State_After)));
                return;
             end if;
+            --  Round-trip: canonical accepted steps must re-encode to
+            --  the exact input bytes.
+            if R.Actual = Accepted and then St.Canonical
+              and then R.Reencoded /= St.Input
+            then
+               Failure := To_Unbounded_String
+                 ("step=" & Img (Idx)
+                  & " detail=round-trip mismatch"
+                  & " got=" & Bytes_Image (R.Reencoded)
+                  & " want=" & Bytes_Image (St.Input));
+               return;
+            end if;
+            --  Terminal steps leave state unchanged.
+            if (R.Actual = Rejected or else R.Actual = Incomplete)
+              and then St.Has_State_After
+              and then D.Proto_State /= St.State_After
+            then
+               Failure := To_Unbounded_String
+                 ("step=" & Img (Idx)
+                  & " detail=terminal step changed state got="
+                  & Low (PS.Connection_State'Image (D.Proto_State))
+                  & " want="
+                  & Low (PS.Connection_State'Image (St.State_After)));
+               return;
+            end if;
             if St.Has_Rejection_Category
               and then R.Actual = Rejected
             then
@@ -600,12 +655,7 @@ package body Adacraft.Corpus.Runner is
                   Want : constant String :=
                     Low (To_String (St.Rejection_Category));
                begin
-                  if Got /= Want
-                    and then not (Want = "disconnect"
-                      and then (Got = "disconnect" or else Got = "login"))
-                    and then not (Want = "login"
-                      and then (Got = "login" or else Got = "disconnect"))
-                  then
+                  if Got /= Want then
                      Failure := To_Unbounded_String
                        ("step=" & Img (Idx)
                         & " rejection_category mismatch got=" & Got
@@ -614,6 +664,10 @@ package body Adacraft.Corpus.Runner is
                      return;
                   end if;
                end;
+            end if;
+            --  Stop feeding after a terminal step, as before.
+            if R.Actual = Rejected or else R.Actual = Incomplete then
+               exit;
             end if;
          end;
       end loop;

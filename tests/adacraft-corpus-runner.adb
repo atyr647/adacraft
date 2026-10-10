@@ -46,9 +46,6 @@ package body Adacraft.Corpus.Runner is
    Login_Start_Pid : constant := 0;
    Login_Ack_Pid   : constant := 3;
 
-   --  Mode for Login.Handle_Start: read from the same explicit server
-   --  configuration the live path uses (Kernel.Online_Mode), never a
-   --  hardcoded default.
    function Server_Auth_Mode return Auth.Server_Auth_Mode is
      (if Adacraft.Kernel.Online_Mode then Auth.Online else Auth.Offline);
 
@@ -68,10 +65,6 @@ package body Adacraft.Corpus.Runner is
       end loop;
    end Set_Reencoded;
 
-   --  Frame a ready server packet body (id included) with the server's
-   --  own framing entry (Packets.Frame). No runner-side id/length
-   --  codec here; this only collects the bytes the server package
-   --  emitted into a vector for the clientbound expectation step.
    function Frame_Packet
      (WB : P.Buffer.Writer) return Byte_Vectors.Vector
    is
@@ -86,10 +79,6 @@ package body Adacraft.Corpus.Runner is
       return Result;
    end Frame_Packet;
 
-   --  Collect wire bytes for a Status_Exchange response (id + body)
-   --  using only the server's own Buffer/Packets entries, exactly as
-   --  Adacraft.Network.Queue_Response does. Resp_Id/Data/Len come
-   --  from SE.Handle; no runner-side JSON, ids or ping/pong logic.
    function Frame_Response
      (Resp_Id : Natural; Resp_Buf : P.Octets; Resp_Len : Natural)
       return Byte_Vectors.Vector

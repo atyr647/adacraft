@@ -1,4 +1,5 @@
 with Ada.Containers;
+with Ada.Exceptions;
 with Ada.Streams;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
@@ -284,9 +285,24 @@ package body Adacraft.Corpus.Runner is
 
       procedure Check_Clientbound (St : Step) is
       begin
+         --  Rejected / Incomplete clientbound expectation: the server
+         --  must have emitted nothing (e.g. wrong-direction). Do not
+         --  compare against the scenario input bytes.
+         if St.Expected = Rejected or else St.Expected = Incomplete then
+            if D.Pending.Length /= 0 then
+               Fail ("step=" & Natural'Image (St.Line)
+                 & " expected=" & Hex_Of (St.Input)
+                 & " actual=" & Hex_Of (D.Pending)
+                 & " detail=clientbound expected no output");
+            else
+               D.Pending.Clear;
+            end if;
+            return;
+         end if;
          if D.Pending.Length /= St.Input.Length then
             Fail ("step=" & Natural'Image (St.Line)
               & " expected=" & Hex_Of (St.Input)
+              & " actual=" & Hex_Of (D.Pending)
               & " actual-pending-len=" & D.Pending.Length'Image
               & " detail=clientbound length mismatch");
             return;
@@ -338,7 +354,8 @@ package body Adacraft.Corpus.Runner is
                   Chunk : constant Adacraft.Protocol.Frame.Byte_Array :=
                     To_Chunk (St.Input);
                   Got_Frame : Boolean := False;
-                  Frame_Copy : Adacraft.Protocol.Frame.Byte_Array (1 .. 2_097_151);
+                  --  Exact-size heap copy: never a 2 MB stack array.
+                  Frame_Heap : Byte_Vectors.Vector;
                   Frame_Len : Natural := 0;
                   Feed_St : Adacraft.Protocol.Frame.Feed_Status :=
                     Adacraft.Protocol.Frame.Success;
@@ -346,12 +363,10 @@ package body Adacraft.Corpus.Runner is
                   procedure On_Frame (F : Adacraft.Protocol.Frame.Byte_Array) is
                   begin
                      Got_Frame := True;
+                     Frame_Heap.Clear;
                      Frame_Len := F'Length;
-                     for I in F'Range loop
-                        Frame_Copy
-                          (Frame_Copy'First
-                           + Ada.Streams.Stream_Element_Offset (I - F'First)) :=
-                           F (I);
+                     for E of F loop
+                        Frame_Heap.Append (Interfaces.Unsigned_8 (E));
                      end loop;
                   end On_Frame;
                begin
@@ -403,10 +418,20 @@ package body Adacraft.Corpus.Runner is
                   end if;
                else
                   begin
-                     Dispatch_Frame_Body
-                       (D, Frame_Copy (Frame_Copy'First .. Frame_Copy'First + Ada.Streams.Stream_Element_Offset (Frame_Len) - 1));
+                     declare
+                        Frame_Body : Adacraft.Protocol.Frame.Byte_Array
+                          (1 .. Ada.Streams.Stream_Element_Offset (Frame_Len));
+                        K : Natural := 0;
+                     begin
+                        for E of Frame_Heap loop
+                           K := K + 1;
+                           Frame_Body (Ada.Streams.Stream_Element_Offset (K)) :=
+                             Ada.Streams.Stream_Element (E);
+                        end loop;
+                        Dispatch_Frame_Body (D, Frame_Body);
+                     end;
                   exception
-                     when others =>
+                     when E : others =>
                         if St.Expected = Rejected then
                            if St.Has_Rejection_Category then
                               null;
@@ -421,7 +446,8 @@ package body Adacraft.Corpus.Runner is
                            exit;
                         else
                            Fail ("step=" & Natural'Image (St.Line)
-                             & " expected=accepted actual=rejected detail=dispatch raised");
+                             & " expected=accepted actual=rejected detail=dispatch raised: "
+                             & Ada.Exceptions.Exception_Information (E));
                         end if;
                   end;
                   if not Failed then
@@ -473,7 +499,8 @@ package body Adacraft.Corpus.Runner is
    exception
       when E : others =>
          Failure := To_Unbounded_String
-           ("step=0 expected=accepted actual=exception detail=runner");
+           ("step=0 expected=accepted actual=exception detail=runner: "
+            & Ada.Exceptions.Exception_Information (E));
    end Replay;
 
    procedure Run_All

@@ -7,6 +7,7 @@ with Adacraft.Protocol.Login;
 with Adacraft.Protocol.Packet_Encoder;
 with Adacraft.Protocol.Packets;
 with Adacraft.Protocol.State;
+with Adacraft.Protocol.Version;
 
 package body Adacraft.Ingress is
    use type Protocol.Status_Kind;
@@ -15,6 +16,7 @@ package body Adacraft.Ingress is
    use type Ada.Streams.Stream_Element_Offset;
    use type Protocol.Login.Login_State;
    use type Protocol.Login.Ack_Outcome;
+   use type Protocol.State.Connection_State;
 
    procedure Close_Connection (Connection : in out Connection_Type) is
    begin
@@ -155,7 +157,7 @@ package body Adacraft.Ingress is
               Incoming (Frame.Payload_First .. Frame.Payload_Last);
          begin
             case S.State is
-               when Protocol.Handshake =>
+               when Protocol.State.Handshake =>
                   if Frame.Packet_Id /= Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Handshake_Intention) then
                      Close_Now := True;
                   else
@@ -166,13 +168,13 @@ package body Adacraft.Ingress is
                         if Hello.Status /= Protocol.Ok then
                            Close_Now := True;
                         elsif Hello.Intent = 1 then
-                           S.State := Protocol.Status;
+                           S.State := Protocol.State.Status;
                            S.Version := Hello.Version;
-                        elsif Hello.Intent = 2 and then Hello.Version = Adacraft.Protocol_Version then
-                           S.State := Protocol.Login_Phase;
+                        elsif Hello.Intent = 2 and then Hello.Version = Version.Protocol_Version then
+                           S.State := Protocol.State.Login;
                            S.Version := Hello.Version;
                         elsif Hello.Intent = 2 then
-                           S.State := Protocol.Login_Phase;
+                           S.State := Protocol.State.Login;
                            S.Version := Hello.Version;
                            Disconnect (Outgoing, "This server is Minecraft 26.3, protocol 777", Close_Now);
                         else
@@ -181,7 +183,7 @@ package body Adacraft.Ingress is
                      end;
                   end if;
 
-               when Protocol.Status =>
+               when Protocol.State.Status =>
                   if Frame.Packet_Id = Protocol.Ids.Protocol_Id (Protocol.Ids.Sb_Status_Status_Request) then
                      declare
                         Body_W : Protocol.Buffer.Writer (512);
@@ -215,7 +217,7 @@ package body Adacraft.Ingress is
                      Close_Now := True;
                   end if;
 
-               when Protocol.Login_Phase =>
+               when Protocol.State.Login | Protocol.State.Login_Awaiting_Ack =>
                   declare
                      Dispatch_State : constant Protocol.State.Connection_State :=
                        (if S.Login_State.State = Protocol.Login.Success_Sent
@@ -271,7 +273,7 @@ package body Adacraft.Ingress is
                                 Protocol.Login.To_Configuration
                               then
                                  S.Login_State := Result.Session;
-                                 S.State := Protocol.Configuration;
+                                 S.State := Protocol.State.Configuration;
                               else
                                  S.Login_State := Result.Session;
                                  Close_Now := True;
@@ -283,7 +285,10 @@ package body Adacraft.Ingress is
                      end case;
                   end;
 
-               when Protocol.Configuration | Protocol.Play =>
+               when Protocol.State.Configuration
+                 | Protocol.State.Configuration_Awaiting_Ack
+                 | Protocol.State.Play
+                 | Protocol.State.Play_Awaiting_Config_Ack =>
                   Close_Now := True;
             end case;
          end;

@@ -7,8 +7,6 @@ with Adacraft.Protocol.Handshake_Exchange;
 with Adacraft.Protocol.State;
 with Adacraft.Protocol.Status_Exchange;
 
-with Adacraft.Protocol.Frame;
-
 package Adacraft.Network is
    Read_Timeout : constant Duration := 30.0;
    Selector_Tick : constant Duration := 0.5;
@@ -53,9 +51,9 @@ package Adacraft.Network is
    procedure Close_Conn (Idx : Positive; Reason : String := "");
 
    procedure Handle_Frame_Body
-    (C : Conn_Access; Frame_Data : Adacraft.Protocol.Frame.Byte_Array);
+      (C : Conn_Access; Frame_Data : Adacraft.Protocol.Frame.Byte_Array);
 
-  procedure Parse_Port (Image : String; Port : out GNAT.Sockets.Port_Type);
+   procedure Parse_Port (Image : String; Port : out GNAT.Sockets.Port_Type);
 
    procedure Serve (Port : GNAT.Sockets.Port_Type);
 end Adacraft.Network;

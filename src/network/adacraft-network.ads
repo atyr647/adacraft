@@ -36,6 +36,17 @@ package Adacraft.Network is
    type Conn_Access is access Conn;
    Conn_Table : array (1 .. Max_Conns) of Conn_Access := (others => null);
 
+   --  One frame body (packet id and payload, no length prefix) through the
+   --  server's own dispatch for the connection's state. Socket-free: it
+   --  reads and writes only C (replies are queued in C.Send_Buf, the state
+   --  moves in C.Proto_State, C.Closing says the server closes). Raises
+   --  Constraint_Error where the server closes the connection at once. Used
+   --  by the event loop, and by the golden corpus runner (tests/), so what
+   --  the corpus replays is what the server does.
+   procedure Handle_Frame_Body
+     (C          : Conn_Access;
+      Frame_Data : Adacraft.Protocol.Frame.Byte_Array);
+
    procedure Initialize_Listener
      (Port     : GNAT.Sockets.Port_Type;
       Listener : out GNAT.Sockets.Socket_Type);

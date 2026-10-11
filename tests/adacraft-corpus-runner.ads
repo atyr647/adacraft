@@ -1,4 +1,5 @@
 with Ada.Strings.Unbounded;
+with Adacraft.Network;
 with Adacraft.Protocol.Handshake_Exchange;
 with Adacraft.Protocol.State;
 with Adacraft.Protocol.Status_Exchange;
@@ -17,9 +18,15 @@ package Adacraft.Corpus.Runner is
       Sess   : Adacraft.Protocol.Status_Exchange.Session;
       Pending : Byte_Vectors.Vector;
       Closing : Boolean := False;
+      --  The server's own connection record, for LOGIN and later states,
+      --  whose dispatch is Adacraft.Network.Handle_Frame_Body (made by
+      --  Init_Dispatch, freed by Release_Dispatch).
+      Live : Adacraft.Network.Conn_Access := null;
    end record;
 
    procedure Init_Dispatch (D : out Dispatch_Session);
+
+   procedure Release_Dispatch (D : in out Dispatch_Session);
 
    type Filter is record
       Has_Id       : Boolean := False;

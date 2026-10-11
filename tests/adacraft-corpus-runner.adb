@@ -3,7 +3,9 @@ with Ada.Exceptions;
 with Ada.Streams;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
+with Ada.Unchecked_Deallocation;
 with Interfaces;
+with Adacraft.Network;
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Handshake_Exchange;
@@ -19,6 +21,7 @@ package body Adacraft.Corpus.Runner is
    use type Ada.Streams.Stream_Element_Offset;
    use type Adacraft.Protocol.Frame.Encode_Status;
    use type Adacraft.Protocol.Frame.Feed_Status;
+   use type Adacraft.Network.Conn_Access;
    use type Adacraft.Protocol.Handshake_Exchange.Handle_Result;
    use type Adacraft.Protocol.State.Connection_State;
    use type Adacraft.Protocol.Status_Exchange.Handle_Result;
@@ -31,7 +34,15 @@ package body Adacraft.Corpus.Runner is
       Adacraft.Protocol.Status_Exchange.Reset (D.Sess);
       D.Pending.Clear;
       D.Closing := False;
+      D.Live := new Adacraft.Network.Conn;
    end Init_Dispatch;
+
+   procedure Release_Dispatch (D : in out Dispatch_Session) is
+      procedure Free is new Ada.Unchecked_Deallocation
+        (Adacraft.Network.Conn, Adacraft.Network.Conn_Access);
+   begin
+      Free (D.Live);
+   end Release_Dispatch;
 
    function To_Octets
      (B : Adacraft.Protocol.Frame.Byte_Array) return Adacraft.Protocol.Octets
@@ -242,13 +253,38 @@ package body Adacraft.Corpus.Runner is
             end if;
          end;
       else
-         --  Gap: the server dispatch has no socket-free entry returning
-         --  framed bytes for Login and later states (that path lives in
-         --  Adacraft.Network.Handle_Frame_Body over a live connection).
-         --  Close with no reply so the two Login Success goldens stay
-         --  red until "Live Login sends Login Success" ships.
-         D.Closing := True;
-         raise Constraint_Error with "gap: login dispatch needs live connection";
+         --  LOGIN and later: the server's own dispatch over its own
+         --  connection record (the one Adacraft.Network keeps for a socket,
+         --  here without the socket): the state, the stored handshake and
+         --  the closing flag go in, the replies it queued and the state it
+         --  moved to come out. A server that closes the connection (a
+         --  Disconnect queued, or nothing) is a rejected step: the state
+         --  stays what it was, as the corpus asks.
+         declare
+            C : Adacraft.Network.Conn renames D.Live.all;
+         begin
+            C.Proto_State := D.Proto_State;
+            C.Stored := D.Stored;
+            C.Sess := D.Sess;
+            C.Closing := False;
+            C.Send_Len := 0;
+            C.Send_Pos := 1;
+            Adacraft.Network.Handle_Frame_Body (D.Live, Frame_Data);
+            if C.Closing then
+               D.Closing := True;
+               raise Constraint_Error with "server closes the connection";
+            end if;
+            D.Proto_State := C.Proto_State;
+            D.Stored := C.Stored;
+            D.Sess := C.Sess;
+            for I in Ada.Streams.Stream_Element_Offset (C.Send_Pos)
+                     .. Ada.Streams.Stream_Element_Offset (C.Send_Len)
+            loop
+               D.Pending.Append (Interfaces.Unsigned_8 (C.Send_Buf (I)));
+            end loop;
+            C.Send_Len := 0;
+            C.Send_Pos := 1;
+         end;
       end if;
    end Dispatch_Frame_Body;
 
@@ -330,6 +366,7 @@ package body Adacraft.Corpus.Runner is
       Failure := Null_Unbounded_String;
       if S.Steps.Length = 0 then
          Failure := To_Unbounded_String ("step=0 expected=steps actual=none detail=no steps");
+         Release_Dispatch (D);
          return;
       end if;
       for Step_Idx in 1 .. Natural (S.Steps.Length) loop
@@ -496,11 +533,15 @@ package body Adacraft.Corpus.Runner is
       else
          Failure := Fail_Msg;
       end if;
+      Release_Dispatch (D);
    exception
       when E : others =>
          Failure := To_Unbounded_String
            ("step=0 expected=accepted actual=exception detail=runner: "
             & Ada.Exceptions.Exception_Information (E));
+         if D.Live /= null then
+            Release_Dispatch (D);
+         end if;
    end Replay;
 
    procedure Run_All

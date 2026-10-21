@@ -80,12 +80,23 @@ Offline mode computes UUID version 3 of the UTF-8 bytes of `OfflinePlayer:` conc
 
 Login disconnect is clientbound id 0, a JSON text component encoded as a protocol string.
 
-There is no configuration or play codec yet. Entering those states closes the connection. Registry bytes for that phase are the generated reports, not a second table.
+## Configuration
+
+The server's side of configuration is the official 26.3 server's, byte for byte. `tools/capture_configuration.py` drives the pinned jar (offline mode, white-list off, compression off) in the lab as a vanilla client and records every configuration frame in `generated/26.3/configuration/oracle-core.jsonl`. `tools/extract_configuration.py` turns that capture into `generated/adacraft-protocol-configuration_data.ads` and the captured golden scenario `configuration-core-pack`. `make test` fails if either differs from the capture. Nothing in `src/` builds a registry entry or a tag by hand.
+
+1. Login Acknowledged, empty, moves to CONFIGURATION. The server sends `custom_payload` (`minecraft:brand`, `vanilla`), `update_enabled_features` (`minecraft:vanilla`) and `select_known_packs` offering `minecraft:core` `26.3`.
+2. The client may send Client Information, plugin messages, keep-alive and pong answers, resource-pack and cookie answers, custom click actions and the code-of-conduct answer. None is answered.
+3. The client's `select_known_packs` must be well formed (at most 64 packs, no bytes left over) and name `minecraft:core` `26.3`. The server then sends the 32 `registry_data` packets, `update_tags` and `finish_configuration`, in the oracle's order. The pack known, registry entries carry no data: the client has it. The state is then CONFIGURATION awaiting the client's Finish Configuration.
+4. The client's `finish_configuration`, empty, moves to PLAY. Nothing is sent: there is no play codec yet. Any packet in PLAY closes the connection.
+
+A client that does not know the core pack would need every registry entry's full data (about 140 KB, all of it in the generated reports' datapack). That is not served yet: such a `select_known_packs`, a second one, a Finish Configuration before ours, or any other packet closes the connection.
+
+Keep-alive from the server during configuration, the code of conduct, server links, dialogs and resource packs are not sent.
 
 ## Bounds
 
-Strings are bounded by the declared character maximum and by the bytes actually present. Packet length cannot exceed 2,097,151. The connection buffer is 8192 bytes, which covers handshake, status, and login. A declared length above that is rejected.
+Strings are bounded by the declared character maximum and by the bytes actually present. Packet length cannot exceed 2,097,151. The connection buffer is 8192 bytes, which covers handshake, status, and login. A declared length above that is rejected. The send buffer is 128 KiB, which holds the whole of configuration's answer (about 68 KB) at once.
 
 ## What is deliberately absent
 
-Chunk packets, registry-data encoding, encryption, compression, and the rest of the play catalog. Their ids exist in the generated table so they cannot be invented later from a 1.21.x scaffold. Their bodies get specified here before the code that sends them, per the roadmap.
+Chunk packets, registry data for a client without the core pack, encryption, compression, and the rest of the play catalog. Their ids exist in the generated table so they cannot be invented later from a 1.21.x scaffold. Their bodies get specified here before the code that sends them, per the roadmap.

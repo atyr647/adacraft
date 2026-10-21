@@ -15,7 +15,13 @@ with Adacraft.Protocol.State.Table;
 with Adacraft.Protocol.Status_Exchange;
 with Adacraft.Protocol.Varnum;
 
+with Adacraft.Protocol.Configuration_Exchange;
+with Adacraft.Protocol.Configuration_Data;
+
 package body Adacraft.Network is
+
+   package Config renames Adacraft.Protocol.Configuration_Exchange;
+   package CD renames Adacraft.Protocol.Configuration_Data;
    use type Ada.Calendar.Time;
    use type Ada.Streams.Stream_Element_Offset;
    use type Adacraft.Protocol.Frame.Feed_Status;
@@ -541,6 +547,12 @@ package body Adacraft.Network is
                return;
             elsif Is_Ack then
                if Pay_First > Blen then
+                  --  Configuration opens as the 26.3 server opens it: its
+                  --  brand, the enabled features, and the known-packs
+                  --  question (docs/PROTOCOL.md, Configuration).
+                  Queue_Framed (C, Config.From_Hex (CD.Brand));
+                  Queue_Framed (C, Config.From_Hex (CD.Enabled_Features));
+                  Queue_Framed (C, Config.From_Hex (CD.Select_Known_Packs));
                   C.Proto_State := Adacraft.Protocol.State.Configuration;
                   C.Last_Activity := Ada.Calendar.Clock;
                   return;
@@ -558,9 +570,50 @@ package body Adacraft.Network is
                return;
             end if;
          end;
+      elsif C.Proto_State = Adacraft.Protocol.State.Configuration
+        or else C.Proto_State = Adacraft.Protocol.State.Configuration_Awaiting_Ack
+      then
+         --  CONFIGURATION (docs/PROTOCOL.md, Configuration). Client
+         --  Information, plugin messages, keep-alive and pong answers,
+         --  resource pack and cookie answers, custom click actions and the
+         --  code of conduct are taken without a reply. Select Known Packs,
+         --  once, naming minecraft:core 26.3: the registries, the tags and
+         --  Finish Configuration, as the oracle sends them; naming
+         --  anything else, or a second time: the connection closes (full
+         --  registry contents are not sent). Finish Configuration, empty,
+         --  after ours: PLAY. Anything else closes the connection.
+         declare
+            Awaiting : constant Boolean :=
+              C.Proto_State = Adacraft.Protocol.State.Configuration_Awaiting_Ack;
+            Empty : constant Adacraft.Protocol.Octets (2 .. 1) := (others => <>);
+            function Payload return Adacraft.Protocol.Octets is
+              (if Pay_First > Blen then Empty else Oct (Pay_First .. Blen));
+         begin
+            case Pid is
+               when 0 | 1 | 2 | 4 | 5 | 6 | 8 | 9 =>
+                  null;
+               when 7 =>
+                  if Awaiting or else not Config.Names_Core_Pack (Payload) then
+                     raise Constraint_Error with "known packs not served";
+                  end if;
+                  for R of CD.Registries loop
+                     Queue_Framed (C, Config.From_Hex (R.all));
+                  end loop;
+                  Queue_Framed (C, Config.From_Hex (CD.Update_Tags));
+                  Queue_Framed (C, Config.From_Hex (CD.Finish_Configuration));
+                  C.Proto_State := Adacraft.Protocol.State.Configuration_Awaiting_Ack;
+               when 3 =>
+                  if not Awaiting or else Pay_First <= Blen then
+                     raise Constraint_Error with "finish configuration out of turn";
+                  end if;
+                  C.Proto_State := Adacraft.Protocol.State.Play;
+               when others =>
+                  raise Constraint_Error with "packet not valid in configuration";
+            end case;
+         end;
       else
-         --  Configuration onward: not implemented; plain close.
-         raise Constraint_Error with "configuration not implemented";
+         --  PLAY: not implemented; plain close.
+         raise Constraint_Error with "play not implemented";
       end if;
       C.Last_Activity := Ada.Calendar.Clock;
    end Handle_Frame_Body;

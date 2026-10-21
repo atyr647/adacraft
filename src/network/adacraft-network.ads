@@ -11,7 +11,9 @@ package Adacraft.Network is
    Read_Timeout : constant Duration := 30.0;
    Selector_Tick : constant Duration := 0.5;
    Max_Conns : constant := 64;
-   Send_Capacity : constant := 40_000;
+   --  Room for the whole of configuration at once: the registries and the
+   --  tags are about 68 KB (docs/PROTOCOL.md, Configuration).
+   Send_Capacity : constant := 131_072;
    Recv_Capacity : constant := 8_192;
 
    type Conn is record
@@ -26,7 +28,7 @@ package Adacraft.Network is
       Stored        : Adacraft.Protocol.Handshake_Exchange.Connection_Data;
       Sess          : Adacraft.Protocol.Status_Exchange.Session;
       Last_Activity : Ada.Calendar.Time := Ada.Calendar.Clock;
-      Send_Buf      : Ada.Streams.Stream_Element_Array (1 .. 40_000);
+      Send_Buf      : Ada.Streams.Stream_Element_Array (1 .. Send_Capacity);
       Send_Pos      : Positive := 1;
       Send_Len      : Natural := 0;
       Closing       : Boolean := False;

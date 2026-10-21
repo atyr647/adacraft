@@ -319,6 +319,12 @@ package body Adacraft.Corpus.Runner is
          end if;
       end Fail;
 
+      --  Whether the scenario says what the server sends: then all it
+      --  sends must be in its clientbound steps. (A scenario of only
+      --  serverbound steps checks states and outcomes, not output.)
+      Lists_Output : constant Boolean :=
+        (for some X of S.Steps => X.Dir = Clientbound and then X.Expected = Accepted);
+
       procedure Check_Clientbound (St : Step) is
       begin
          --  Rejected / Incomplete clientbound expectation: the server
@@ -335,7 +341,10 @@ package body Adacraft.Corpus.Runner is
             end if;
             return;
          end if;
-         if D.Pending.Length /= St.Input.Length then
+         --  One step, one frame: the step's bytes are the next the server
+         --  sent (a packet can be answered with several: configuration),
+         --  and are taken off what is pending.
+         if D.Pending.Length < St.Input.Length then
             Fail ("step=" & Natural'Image (St.Line)
               & " expected=" & Hex_Of (St.Input)
               & " actual=" & Hex_Of (D.Pending)
@@ -343,22 +352,29 @@ package body Adacraft.Corpus.Runner is
               & " detail=clientbound length mismatch");
             return;
          end if;
-         declare
-            K : Natural := 0;
-         begin
-            for E of D.Pending loop
-               K := K + 1;
-               if E /= St.Input (K) then
-                  Fail ("step=" & Natural'Image (St.Line)
-                    & " expected=" & Hex_Of (St.Input)
-                    & " actual=" & Hex_Of (D.Pending)
-                    & " detail=clientbound byte mismatch");
-                  return;
-               end if;
-            end loop;
-         end;
-         D.Pending.Clear;
+         for K in 1 .. Natural (St.Input.Length) loop
+            if D.Pending (K) /= St.Input (K) then
+               Fail ("step=" & Natural'Image (St.Line)
+                 & " expected=" & Hex_Of (St.Input)
+                 & " actual=" & Hex_Of (D.Pending)
+                 & " detail=clientbound byte mismatch");
+               return;
+            end if;
+         end loop;
+         D.Pending.Delete_First (Ada.Containers.Count_Type (St.Input.Length));
       end Check_Clientbound;
+
+      --  Output the scenario doesn't account for: the server sent more
+      --  than the clientbound steps say, before the next serverbound step
+      --  or the end.
+      procedure Check_Nothing_Pending (Line : Natural) is
+      begin
+         if D.Pending.Length /= 0 then
+            Fail ("step=" & Natural'Image (Line)
+              & " expected=no further output actual=" & Hex_Of (D.Pending)
+              & " detail=unexpected clientbound output");
+         end if;
+      end Check_Nothing_Pending;
 
    begin
       Init_Dispatch (D);
@@ -375,6 +391,12 @@ package body Adacraft.Corpus.Runner is
             State_Before : constant Adacraft.Protocol.State.Connection_State :=
               D.Proto_State;
          begin
+            if Failed then
+               exit;
+            end if;
+            if St.Dir = Serverbound and then Lists_Output then
+               Check_Nothing_Pending (St.Line);
+            end if;
             if Failed then
                exit;
             end if;
@@ -521,6 +543,9 @@ package body Adacraft.Corpus.Runner is
       --  steps already checked inline; leftover bytes with no clientbound
       --  step to compare against is a mismatch only if a clientbound step
       --  existed. Otherwise handshake-only scenarios correctly emit none.
+      if not Failed and then Lists_Output then
+         Check_Nothing_Pending (0);
+      end if;
       if not Failed and then S.Has_Final_State
         and then D.Proto_State /= S.Final_State
       then

@@ -21,7 +21,9 @@ A 26.3 client can complete a server-list status ping and see protocol 777. Hands
 
 Login behaves as the binary does, shown by `tests/test_login_server.adb` driving the built `bin/adacraft` over real TCP: a Handshake with next state Login followed by a well-formed Login Start is answered with one correctly framed protocol 777 Login Disconnect carrying a human-readable reason, after which the server closes only that connection. A Handshake with next state Login and a protocol version other than 777 is answered with Login Disconnect carrying a reason, not a silent close. A packet that is invalid in the Login state closes that connection with no reply. That is the constitution's order, not a temporary shortcut around it.
 
-Not implemented: encryption, online authentication, compression, configuration, known packs, registry data / tags, and the play transition. There is no online login, no Login Success path, and no configuration or play handling.
+Configuration runs as the official 26.3 server runs it, byte for byte: after Login Acknowledged the server sends its brand, the enabled features and the known-packs question; a client naming `minecraft:core` 26.3 gets the 32 registries, the tags and Finish Configuration, and its own Finish Configuration enters PLAY. The bytes come from a lab capture of the pinned jar (`generated/26.3/configuration/`), checked by the captured golden scenario, by `tests/test_login_server.adb` over real TCP, and by capturing `bin/adacraft` with the same tool, which matches the oracle frame for frame (docs/PROTOCOL.md, Configuration).
+
+Not implemented: encryption, online authentication, compression on the wire, registry data for a client without the core pack, and anything in play. There is no online login.
 
 The server survives bad clients: resets, garbage handshakes, half-packets, and idle connections each close only that connection while others still get status plus ping. Every read is governed by a single 30s read timeout (`Adacraft.Network.Read_Timeout`), covering fully-idle and stalled-mid-frame connections alike, as shown by `tests/test_bad_clients.adb` and the `tools/smoke_bad_clients.py` probe.
 

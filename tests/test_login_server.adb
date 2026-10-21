@@ -16,6 +16,8 @@ with Interfaces;
 with Adacraft.Auth;
 with Adacraft.Protocol;
 with Adacraft.Protocol.Buffer;
+with Adacraft.Protocol.Configuration_Exchange;
+with Adacraft.Protocol.Configuration_Data;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Handshake_Exchange;
 with Adacraft.Protocol.Login;
@@ -33,6 +35,8 @@ procedure Test_Login_Server is
    package ST renames Adacraft.Protocol.State;
    package STT renames Adacraft.Protocol.State.Table;
    package VN renames Adacraft.Protocol.Varnum;
+   package Config renames Adacraft.Protocol.Configuration_Exchange;
+   package CD renames Adacraft.Protocol.Configuration_Data;
    use type Adacraft.Protocol.State.Login_Dispatch;
    use type Adacraft.Protocol.Varnum.Status_Type;
    use type Adacraft.Protocol.Login.Login_Start_Status;
@@ -647,31 +651,60 @@ procedure Test_Login_Server is
                Got2 : Boolean;
             begin
                Send_Packet (S, 3, Empty);
-               Got2 := Read_Frame (S, Buf2, Last2);
-               Check (not Got2,
-                      Name & " R2 ack -> config, no extra login bytes");
+               --  Configuration opens as the 26.3 server opens it: brand,
+               --  enabled features, the known-packs question, nothing else
+               --  (docs/PROTOCOL.md, Configuration).
+               declare
+                  type Hex_List is array (Positive range <>) of CD.Hex_Access;
+                  Opening : constant Hex_List :=
+                    [CD.Brand'Access, CD.Enabled_Features'Access,
+                     CD.Select_Known_Packs'Access];
+               begin
+                  for H of Opening loop
+                     Got2 := Read_Frame (S, Buf2, Last2);
+                     Check (Got2 and then Octets_Equal
+                              (Frame_To_Octets (Buf2, Last2), Config.From_Hex (H.all)),
+                            Name & " R2 ack -> configuration opening bytes exact");
+                  end loop;
+               end;
                --  Still open after the accepted Ack: server must not
                --  have closed (no EOF within a short window).
                Check (not Wait_Readable (S, 1.0),
                       Name & " R2 connection stays open after ack");
-               --  And it is Configuration, not Login_Awaiting_Ack: a
-               --  duplicate Start must NOT yield a login Disconnect
-               --  frame anymore.
-               Send_Packet (S, 0, LS);
+               --  The client's information, then the known packs naming
+               --  minecraft:core 26.3: every registry, the tags, Finish
+               --  Configuration, each as the oracle sent it.
                declare
-                  Buf3 : Stream_Element_Array (1 .. 4096);
-                  Last3 : Stream_Element_Offset := 0;
-                  Got3 : Boolean := Read_Frame (S, Buf3, Last3);
-                  Exp_D : constant Octets :=
-                    Expected_Disconnect (LG.Default_Disconnect_Reason);
+                  Info : constant Octets :=
+                    Config.From_Hex ("05656E5F75730800017F01000100");
+                  Packs : constant Octets :=
+                    Config.From_Hex ("01096D696E65637261667404636F72650432362E33");
+                  Big  : Stream_Element_Array (1 .. 70_000);
+                  Big_Last : Stream_Element_Offset := 0;
+                  All_Exact : Boolean := True;
                begin
-                  if Got3 then
-                     Check (not Octets_Equal
-                              (Frame_To_Octets (Buf3, Last3), Exp_D),
-                            Name & " R2 no login disconnect after ack");
-                  else
-                     Check (True, Name & " R2 no login disconnect after ack");
-                  end if;
+                  Send_Packet (S, 0, Info);
+                  Send_Packet (S, 7, Packs);
+                  for R of CD.Registries loop
+                     All_Exact := All_Exact
+                       and then Read_Frame (S, Big, Big_Last)
+                       and then Octets_Equal (Frame_To_Octets (Big, Big_Last),
+                                              Config.From_Hex (R.all));
+                  end loop;
+                  Check (All_Exact, Name & " R2 registries exact");
+                  Check (Read_Frame (S, Big, Big_Last)
+                         and then Octets_Equal (Frame_To_Octets (Big, Big_Last),
+                                                Config.From_Hex (CD.Update_Tags)),
+                         Name & " R2 tags exact");
+                  Check (Read_Frame (S, Big, Big_Last)
+                         and then Octets_Equal (Frame_To_Octets (Big, Big_Last),
+                                                Config.From_Hex (CD.Finish_Configuration)),
+                         Name & " R2 finish configuration exact");
+                  --  The client's Finish Configuration: PLAY, nothing sent,
+                  --  the connection open.
+                  Send_Packet (S, 3, Empty);
+                  Check (not Wait_Readable (S, 1.0),
+                         Name & " R2 finish acknowledged, connection open in play");
                end;
             end;
          end if;

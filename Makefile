@@ -2,63 +2,67 @@ GNATMAKE ?= gnatmake
 SRC := -Igenerated -Isrc -Isrc/protocol -Isrc/kernel -Isrc/auth -Isrc/ingress -Isrc/network
 FLAGS := -gnat2022 -gnata -D obj
 
-.PHONY: all test server clean check check-packets-table
+.PHONY: all test server clean check check-packets-table FORCE
+
+# gnatmake works out what to recompile from the sources; Make only says
+# when to ask it (a test listing only its own file went stale).
+FORCE:
 
 all: bin/adacraft bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus bin/test_protocol_login bin/test_bad_clients bin/test_login_server bin/test_protocol_compression bin/test_handshake_exchange bin/test_status_exchange bin/test_protocol_packet_encoder
 
-bin/test_protocol_varnum: tests/test_protocol_varnum.adb
+bin/test_protocol_varnum: tests/test_protocol_varnum.adb FORCE
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_protocol_varnum.adb -o $@
 
-bin/test_protocol_state: tests/test_protocol_state.adb
+bin/test_protocol_state: tests/test_protocol_state.adb FORCE
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_protocol_state.adb -o $@
 
-bin/test_protocol_login: tests/test_protocol_login.adb
+bin/test_protocol_login: tests/test_protocol_login.adb FORCE
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_protocol_login.adb -o $@
 
-bin/adacraft_tests: tests/adacraft_tests.adb
+bin/adacraft_tests: tests/adacraft_tests.adb FORCE
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) -Itests $(SRC) tests/adacraft_tests.adb -o $@
 
-bin/test_ingress_framing: tests/test_ingress_framing.adb
+bin/test_ingress_framing: tests/test_ingress_framing.adb FORCE
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_ingress_framing.adb -o $@
 
-bin/test_corpus_loader: tests/test_corpus_loader.adb tests/adacraft-corpus.ads tests/adacraft-corpus-loader.ads tests/adacraft-corpus-loader.adb
+bin/test_corpus_loader: tests/test_corpus_loader.adb tests/adacraft-corpus.ads tests/adacraft-corpus-loader.ads tests/adacraft-corpus-loader.adb FORCE
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) -Itests $(SRC) tests/test_corpus_loader.adb -o $@
 
-bin/test_golden_corpus: tests/test_golden_corpus.adb tests/adacraft-corpus.ads tests/adacraft-corpus-loader.ads tests/adacraft-corpus-loader.adb tests/adacraft-corpus-runner.ads tests/adacraft-corpus-runner.adb
+bin/test_golden_corpus: tests/test_golden_corpus.adb tests/adacraft-corpus.ads tests/adacraft-corpus-loader.ads tests/adacraft-corpus-loader.adb tests/adacraft-corpus-runner.ads tests/adacraft-corpus-runner.adb FORCE
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) -Itests $(SRC) tests/test_golden_corpus.adb -o $@
 
-bin/adacraft: src/adacraft_server.adb src/network/adacraft-network.adb src/network/adacraft-network.ads src/protocol/adacraft-protocol-login.adb src/protocol/adacraft-protocol-login.ads src/protocol/adacraft-protocol-frame.adb src/protocol/adacraft-protocol-frame.ads src/protocol/adacraft-protocol-varnum.adb src/protocol/adacraft-protocol-varnum.ads src/protocol/adacraft-protocol-handshake_exchange.adb src/protocol/adacraft-protocol-handshake_exchange.ads src/protocol/adacraft-protocol-state-table.adb src/protocol/adacraft-protocol-state-table.ads generated/adacraft-protocol-ids.ads
+bin/adacraft: src/adacraft_server.adb src/network/adacraft-network.adb src/network/adacraft-network.ads src/protocol/adacraft-protocol-login.adb src/protocol/adacraft-protocol-login.ads src/protocol/adacraft-protocol-frame.adb src/protocol/adacraft-protocol-frame.ads src/protocol/adacraft-protocol-varnum.adb src/protocol/adacraft-protocol-varnum.ads src/protocol/adacraft-protocol-handshake_exchange.adb src/protocol/adacraft-protocol-handshake_exchange.ads src/protocol/adacraft-protocol-state-table.adb src/protocol/adacraft-protocol-state-table.ads generated/adacraft-protocol-ids.ads FORCE
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) src/adacraft_server.adb -o $@
 
-bin/test_bad_clients: tests/test_bad_clients.adb
+bin/test_bad_clients: tests/test_bad_clients.adb FORCE
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_bad_clients.adb -o $@
 
-bin/test_login_server: tests/test_login_server.adb bin/adacraft
+bin/test_login_server: tests/test_login_server.adb bin/adacraft FORCE
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_login_server.adb -o $@
 
-bin/test_protocol_compression: tests/test_protocol_compression.adb src/protocol/adacraft-protocol-zlib.ads src/protocol/adacraft-protocol-zlib.adb
+bin/test_protocol_compression: tests/test_protocol_compression.adb src/protocol/adacraft-protocol-zlib.ads src/protocol/adacraft-protocol-zlib.adb FORCE
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_protocol_compression.adb -o $@ -largs -lz
 
-bin/test_handshake_exchange: tests/test_handshake_exchange.adb
+bin/test_handshake_exchange: tests/test_handshake_exchange.adb FORCE
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_handshake_exchange.adb -o $@
 
-bin/test_status_exchange: tests/test_status_exchange.adb
+bin/test_status_exchange: tests/test_status_exchange.adb FORCE
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_status_exchange.adb -o $@
 
-bin/test_protocol_packet_encoder: tests/test_protocol_packet_encoder.adb
+bin/test_protocol_packet_encoder: tests/test_protocol_packet_encoder.adb FORCE
 	mkdir -p bin obj
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_protocol_packet_encoder.adb -o $@
 
@@ -96,6 +100,7 @@ check-packets-table:
 
 check:
 	python3 tools/check_boundaries.py
+	python3 tools/extract_configuration.py --check
 
 server: bin/adacraft
 	./bin/adacraft

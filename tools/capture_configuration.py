@@ -19,6 +19,8 @@ import socket
 import sys
 
 PROTOCOL = 777
+PLAY_KEEP_ALIVE_CB = 0x2D   # minecraft:keep_alive, clientbound, PLAY
+PLAY_KEEP_ALIVE_SB = 0x1C   # minecraft:keep_alive, serverbound, PLAY
 
 
 def varint(n: int) -> bytes:
@@ -89,6 +91,15 @@ class Oracle:
 
 def main() -> int:
     host, port, out = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+    # --play N: after configuration, also record the first N frames of
+    # PLAY (the state the client enters); keep-alives are answered.
+    play = int(sys.argv[sys.argv.index("--play") + 1]) if "--play" in sys.argv else 0
+    # --silent: in PLAY, never answer a keep-alive, and record until the
+    # server gives up on the client (its timeout disconnect).
+    silent = "--silent" in sys.argv
+    # --wrong-keep-alive: in PLAY, answer the first keep-alive with another
+    # id, and record what the server does about it.
+    wrong = "--wrong-keep-alive" in sys.argv
     o = Oracle(host, port)
     o.send(0x00, varint(PROTOCOL) + string("localhost") + port.to_bytes(2, "big") + varint(2))
     o.send(0x00, string("Notch") + bytes(range(1, 17)))
@@ -110,6 +121,18 @@ def main() -> int:
         elif pid == 0x03:   # Finish Configuration
             o.send(0x03)
             break
+    if silent or wrong:
+        o.sock.settimeout(60)
+    for _ in range(play):
+        try:
+            pid, body = o.recv()
+        except (EOFError, socket.timeout, ConnectionResetError):
+            break
+        if pid == PLAY_KEEP_ALIVE_CB and not silent:
+            answer = body
+            if wrong:
+                answer = (int.from_bytes(body, "big") + 1).to_bytes(8, "big")
+            o.send(PLAY_KEEP_ALIVE_SB, answer)
     with open(out, "w") as f:
         for e in o.log:
             f.write(json.dumps(e) + "\n")

@@ -144,13 +144,13 @@ def main() -> int:
         "title: Configuration with the vanilla core pack, as the 26.3 server does it",
         "description: Login Acknowledged opens configuration with brand, features and the "
         "known-packs question; a client naming minecraft:core 26.3 gets the registries, the "
-        "tags and Finish Configuration, byte for byte as the oracle sent them; its Finish "
-        "Configuration moves to PLAY.",
+        "tags and Finish Configuration, byte for byte as the oracle sent them, and the "
+        "server then waits for the client's Finish Configuration.",
         "category: configuration",
         "protocol: 777",
         "provenance: captured",
         "initial_state: LOGIN",
-        "final_state: PLAY",
+        "final_state: CONFIGURATION_AWAITING_ACK",
         "",
     ]
 
@@ -164,6 +164,11 @@ def main() -> int:
     # The server's answer to Login Acknowledged comes straight after it in
     # the scenario (on the socket the client's first packets crossed it).
     ordered = first + [f for f in frames if f not in first]
+    # It ends with the server's Finish Configuration, the client's to
+    # come: what follows is entering PLAY, the play-opening scenario's.
+    ordered = [f for f in ordered
+               if not (f["direction"] == "serverbound"
+                       and sb[f["id"]] == "minecraft:finish_configuration")]
     state = "CONFIGURATION"
     for f in ordered:
         # The answer to Select Known Packs ends with Finish Configuration:

@@ -1,3 +1,4 @@
+with Interfaces;
 with Ada.Calendar;
 with Ada.Streams;
 with GNAT.Sockets;
@@ -9,6 +10,9 @@ with Adacraft.Protocol.Status_Exchange;
 
 package Adacraft.Network is
    Read_Timeout : constant Duration := 30.0;
+   --  A keep-alive every 15 seconds in PLAY, as the 26.3 server sends them;
+   --  one still unanswered when the next is due ends the connection.
+   Keep_Alive_Every : constant Duration := 15.0;
    Selector_Tick : constant Duration := 0.5;
    Max_Conns : constant := 64;
    --  Room for the whole of configuration at once: the registries and the
@@ -33,6 +37,12 @@ package Adacraft.Network is
       Send_Len      : Natural := 0;
       Closing       : Boolean := False;
       In_Use        : Boolean := False;
+      --  In PLAY (docs/PROTOCOL.md, Play): the player's entity id, and the
+      --  keep-alive: sent every Keep_Alive_Every, answered with its id.
+      Entity_Id         : Integer := 0;
+      Keep_Alive_Last   : Ada.Calendar.Time := Ada.Calendar.Clock;
+      Keep_Alive_Waits  : Boolean := False;
+      Keep_Alive_Id     : Interfaces.Unsigned_64 := 0;
    end record;
 
    type Conn_Access is access Conn;

@@ -18,6 +18,7 @@ with Adacraft.Protocol;
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Configuration_Exchange;
 with Adacraft.Protocol.Configuration_Data;
+with Adacraft.Protocol.Play_Data;
 with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Handshake_Exchange;
 with Adacraft.Protocol.Login;
@@ -37,6 +38,7 @@ procedure Test_Login_Server is
    package VN renames Adacraft.Protocol.Varnum;
    package Config renames Adacraft.Protocol.Configuration_Exchange;
    package CD renames Adacraft.Protocol.Configuration_Data;
+   package PD renames Adacraft.Protocol.Play_Data;
    use type Adacraft.Protocol.State.Login_Dispatch;
    use type Adacraft.Protocol.Varnum.Status_Type;
    use type Adacraft.Protocol.Login.Login_Start_Status;
@@ -241,7 +243,8 @@ procedure Test_Login_Server is
    --  Returns True when a full frame arrived; Body holds it.
    function Read_Frame
      (S : Socket_Type; Frame_Data : in out Stream_Element_Array;
-      Frame_Last : out Stream_Element_Offset) return Boolean
+      Frame_Last : out Stream_Element_Offset;
+      Seconds : Duration := Io_Timeout) return Boolean
    is
       Prefix : Stream_Element_Array
         (Stream_Element_Offset (1) .. Stream_Element_Offset (5));
@@ -259,8 +262,9 @@ procedure Test_Login_Server is
       Frame_Last := Frame_Data'First - 1;
       --  Read VarInt length prefix byte by byte.
       for I in 1 .. 5 loop
+         --  (The first byte may be a while coming: a keep-alive.)
          N := Recv_With_Timeout
-           (S, Piece (Piece'First .. Piece'First), Io_Timeout);
+           (S, Piece (Piece'First .. Piece'First), (if I = 1 then Seconds else Io_Timeout));
          if N /= 1 then
             return False;
          end if;
@@ -700,11 +704,64 @@ procedure Test_Login_Server is
                          and then Octets_Equal (Frame_To_Octets (Big, Big_Last),
                                                 Config.From_Hex (CD.Finish_Configuration)),
                          Name & " R2 finish configuration exact");
-                  --  The client's Finish Configuration: PLAY, nothing sent,
-                  --  the connection open.
+                  --  The client's Finish Configuration: PLAY, opened with the
+                  --  oracle's packets, the player's entity id in those that
+                  --  carry one (docs/PROTOCOL.md, Play).
                   Send_Packet (S, 3, Empty);
-                  Check (not Wait_Readable (S, 1.0),
-                         Name & " R2 finish acknowledged, connection open in play");
+                  declare
+                     Opening_Exact : Boolean := True;
+                     Entity        : Integer := -1;
+                  begin
+                     for K in PD.Opening'Range loop
+                        if Read_Frame (S, Big, Big_Last) then
+                           declare
+                              Got  : constant Octets := Frame_To_Octets (Big, Big_Last);
+                              Want : Octets := Config.From_Hex (PD.Opening (K).all);
+                           begin
+                              if PD.Carries_Entity (K) and then Got'Length = Want'Length then
+                                 --  (its entity id, whatever it is, the same in each)
+                                 declare
+                                    E : constant Integer :=
+                                      Integer (Got (2)) * 16#1000000# + Integer (Got (3)) * 16#10000#
+                                      + Integer (Got (4)) * 16#100# + Integer (Got (5));
+                                 begin
+                                    if Entity = -1 then
+                                       Entity := E;
+                                    end if;
+                                    Opening_Exact := Opening_Exact and then E = Entity and then E > 0;
+                                    Want (2 .. 5) := Got (2 .. 5);
+                                 end;
+                              end if;
+                              Opening_Exact := Opening_Exact and then Octets_Equal (Got, Want);
+                           end;
+                        else
+                           Opening_Exact := False;
+                        end if;
+                     end loop;
+                     Check (Opening_Exact, Name & " R2 play opening exact, one entity id in it");
+                  end;
+                  --  A keep-alive within 15 seconds or so; answered with another
+                  --  id: the oracle's timeout disconnect, and the close.
+                  declare
+                     Got_KA : constant Boolean := Read_Frame (S, Big, Big_Last, Seconds => 20.0);
+                  begin
+                     Check (Got_KA and then Natural (Big_Last - Big'First + 1) = 9
+                            and then Integer (Big (Big'First)) = PD.Cb_Keep_Alive,
+                            Name & " R2 a keep-alive comes in play");
+                     if Got_KA then
+                        declare
+                           Answer : Octets := Frame_To_Octets (Big, Big_Last) (2 .. 9);
+                        begin
+                           Answer (8) := Answer (8) xor 1;
+                           Send_Packet (S, PD.Sb_Keep_Alive, Answer);
+                           Check (Read_Frame (S, Big, Big_Last)
+                                  and then Octets_Equal (Frame_To_Octets (Big, Big_Last),
+                                                         Config.From_Hex (PD.Timeout_Disconnect)),
+                                  Name & " R2 a wrong keep-alive answer: the timeout disconnect");
+                           Check (Socket_Closed_Soon (S), Name & " R2 and the connection closes");
+                        end;
+                     end if;
+                  end;
                end;
             end;
          end if;

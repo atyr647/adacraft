@@ -1,12 +1,12 @@
 corpus_format: 1
 id: configuration-core-pack
 title: Configuration with the vanilla core pack, as the 26.3 server does it
-description: Login Acknowledged opens configuration with brand, features and the known-packs question; a client naming minecraft:core 26.3 gets the registries, the tags and Finish Configuration, byte for byte as the oracle sent them; its Finish Configuration moves to PLAY.
+description: Login Acknowledged opens configuration with brand, features and the known-packs question; a client naming minecraft:core 26.3 gets the registries, the tags and Finish Configuration, byte for byte as the oracle sent them, and the server then waits for the client's Finish Configuration.
 category: configuration
 protocol: 777
 provenance: captured
 initial_state: LOGIN
-final_state: PLAY
+final_state: CONFIGURATION_AWAITING_ACK
 
 step:
   direction: serverbound
@@ -301,10 +301,3 @@ step:
   outcome: accepted
   packet_id: 0x03
   state_after: CONFIGURATION_AWAITING_ACK
-
-step:
-  direction: serverbound
-  input: 01 03
-  outcome: accepted
-  packet_id: 0x03
-  state_after: PLAY

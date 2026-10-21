@@ -93,10 +93,23 @@ A client that does not know the core pack would need every registry entry's full
 
 Keep-alive from the server during configuration, the code of conduct, server links, dialogs and resource packs are not sent.
 
+## Play
+
+Entering PLAY is the official 26.3 server's too. `tools/capture_configuration.py --play 11` records its first PLAY frames (a fresh flat world, seed 777, motd `AdaCraft`, a new player) in `generated/26.3/play/oracle-opening.jsonl`; `--wrong-keep-alive` records what it does with a wrong keep-alive answer in `oracle-wrong-keep-alive.jsonl` (trimmed to that exchange). `tools/extract_play.py` turns them into `generated/adacraft-protocol-play_data.ads` and the golden scenario `play-opening`; `make test` fails if either differs from the captures.
+
+1. The client's `finish_configuration`, empty, after ours: PLAY. The server sends the oracle's opening: `login`, `change_difficulty`, `player_abilities`, `set_held_slot`, `update_recipes`, `entity_event`, `recipe_book_settings`, `recipe_book_add`, `player_position`, `server_data`. The oracle's `commands` is left out: AdaCraft runs no commands yet, and a command tree would offer the client ones that do nothing.
+2. The one field that differs between connections is the player's entity id, a big-endian Int straight after the packet id in `login` and `entity_event`. AdaCraft gives each connection entering PLAY the next id, from 1 (the oracle's first player's).
+3. A `keep_alive` every 15 seconds, its id the time in milliseconds. The client answers with the same id. An answer with another id, or one still missing when the next is due, gets the oracle's disconnect (`{"translate":"disconnect.timeout"}` as network NBT), and the connection closes. (Quite silent for 30 seconds, the oracle closes without a word, its read timeout first; AdaCraft's keep-alive, due at the same moment, says why.)
+4. Any other packet the table has for PLAY is taken without a reply: nothing of the world runs yet. An id it hasn't closes the connection.
+
+There is no chunk, spawn or world yet: a vanilla client stays on its "loading terrain" screen, connected, answering keep-alives.
+
+The oracle sends the tags of `update_tags` in an order that changes from one run of its process to the next (the same bytes, rearranged): the golden is one run's order. A differential check against a new run compares the tags as a set.
+
 ## Bounds
 
 Strings are bounded by the declared character maximum and by the bytes actually present. Packet length cannot exceed 2,097,151. The connection buffer is 8192 bytes, which covers handshake, status, and login. A declared length above that is rejected. The send buffer is 128 KiB, which holds the whole of configuration's answer (about 68 KB) at once.
 
 ## What is deliberately absent
 
-Chunk packets, registry data for a client without the core pack, encryption, compression, and the rest of the play catalog. Their ids exist in the generated table so they cannot be invented later from a 1.21.x scaffold. Their bodies get specified here before the code that sends them, per the roadmap.
+Chunk packets, a command tree, registry data for a client without the core pack, encryption, compression, and the rest of the play catalog. Their ids exist in the generated table so they cannot be invented later from a 1.21.x scaffold. Their bodies get specified here before the code that sends them, per the roadmap.

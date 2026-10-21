@@ -17,11 +17,39 @@ with Adacraft.Protocol.Varnum;
 
 with Adacraft.Protocol.Configuration_Exchange;
 with Adacraft.Protocol.Configuration_Data;
+with Adacraft.Protocol.Play_Data;
 
 package body Adacraft.Network is
 
    package Config renames Adacraft.Protocol.Configuration_Exchange;
    package CD renames Adacraft.Protocol.Configuration_Data;
+   package PD renames Adacraft.Protocol.Play_Data;
+
+   --  Entity ids for players, from 1, one per connection entering PLAY.
+   Next_Entity : Integer := 0;
+
+   --  The connection's player's entity id put into an opening packet that
+   --  carries one (a big-endian Int after the packet id).
+   function With_Entity
+     (Body_Octets : Adacraft.Protocol.Octets; Id : Integer) return Adacraft.Protocol.Octets
+   is
+      R : Adacraft.Protocol.Octets := Body_Octets;
+      U : constant Interfaces.Unsigned_32 := Interfaces.Unsigned_32 (Id);
+      use type Interfaces.Unsigned_32;
+   begin
+      for K in 0 .. 3 loop
+         R (R'First + 1 + K) := Adacraft.Protocol.Octet
+           (Interfaces.Shift_Right (U, 8 * (3 - K)) and 16#FF#);
+      end loop;
+      return R;
+   end With_Entity;
+
+   --  Enters PLAY: the opening packets, as the 26.3 server sends them.
+   procedure Enter_Play (C : Conn_Access);
+
+   --  The keep-alive answered with another id, or still unanswered when the
+   --  next is due: the oracle's timeout disconnect, then the close.
+   procedure Time_Out (C : Conn_Access);
    use type Ada.Calendar.Time;
    use type Ada.Streams.Stream_Element_Offset;
    use type Adacraft.Protocol.Frame.Feed_Status;
@@ -329,6 +357,63 @@ package body Adacraft.Network is
          raise;
    end Queue_Framed;
 
+   procedure Enter_Play (C : Conn_Access) is
+   begin
+      Next_Entity := Next_Entity + 1;
+      C.Entity_Id := Next_Entity;
+      for K in PD.Opening'Range loop
+         declare
+            B : constant Adacraft.Protocol.Octets := Config.From_Hex (PD.Opening (K).all);
+         begin
+            Queue_Framed (C, (if PD.Carries_Entity (K) then With_Entity (B, C.Entity_Id) else B));
+         end;
+      end loop;
+      C.Proto_State := Adacraft.Protocol.State.Play;
+      C.Keep_Alive_Last := Ada.Calendar.Clock;
+      C.Keep_Alive_Waits := False;
+   end Enter_Play;
+
+   procedure Time_Out (C : Conn_Access) is
+   begin
+      Queue_Framed (C, Config.From_Hex (PD.Timeout_Disconnect));
+      C.Closing := True;
+   end Time_Out;
+
+   --  Due in PLAY: a keep-alive, its id the time in milliseconds; or, one
+   --  still unanswered, the end of the connection (as the 26.3 server).
+   procedure Keep_Alive_Tick (C : Conn_Access; Now : Ada.Calendar.Time) is
+      use type Ada.Calendar.Time;
+      use type Interfaces.Unsigned_64;
+      use type Adacraft.Protocol.State.Connection_State;
+   begin
+      if C = null or else C.Closing
+        or else C.Proto_State /= Adacraft.Protocol.State.Play
+        or else Now - C.Keep_Alive_Last < Keep_Alive_Every
+      then
+         return;
+      end if;
+      if C.Keep_Alive_Waits then
+         Time_Out (C);
+         return;
+      end if;
+      declare
+         Ms : constant Interfaces.Unsigned_64 :=
+           Interfaces.Unsigned_64 (Long_Long_Integer (Ada.Calendar.Seconds (Now) * 1000.0))
+           + Interfaces.Unsigned_64 (Ada.Calendar.Day (Now)) * 86_400_000;
+         B  : Adacraft.Protocol.Octets (1 .. 9);
+      begin
+         B (1) := Adacraft.Protocol.Octet (PD.Cb_Keep_Alive);
+         for K in 0 .. 7 loop
+            B (2 + K) := Adacraft.Protocol.Octet
+              (Interfaces.Shift_Right (Ms, 8 * (7 - K)) and 16#FF#);
+         end loop;
+         Queue_Framed (C, B);
+         C.Keep_Alive_Id := Ms;
+         C.Keep_Alive_Waits := True;
+         C.Keep_Alive_Last := Now;
+      end;
+   end Keep_Alive_Tick;
+
    procedure Handle_Frame_Body (C : Conn_Access; Frame_Data : Adacraft.Protocol.Frame.Byte_Array) is
       use type Adacraft.Protocol.Status_Kind;
       Blen : Natural := Frame_Data'Length;
@@ -606,14 +691,41 @@ package body Adacraft.Network is
                   if not Awaiting or else Pay_First <= Blen then
                      raise Constraint_Error with "finish configuration out of turn";
                   end if;
-                  C.Proto_State := Adacraft.Protocol.State.Play;
+                  Enter_Play (C);
                when others =>
                   raise Constraint_Error with "packet not valid in configuration";
             end case;
          end;
+      elsif C.Proto_State = Adacraft.Protocol.State.Play then
+         --  PLAY (docs/PROTOCOL.md, Play): the keep-alive answer is checked;
+         --  any other packet the table has for PLAY is taken without a
+         --  reply (nothing of the world runs yet); an id it hasn't closes.
+         if Pid = PD.Sb_Keep_Alive then
+            declare
+               use type Interfaces.Unsigned_64;
+               Got : Interfaces.Unsigned_64 := 0;
+            begin
+               if Blen - Pay_First + 1 /= 8 then
+                  raise Constraint_Error with "keep-alive answer malformed";
+               end if;
+               for I in Pay_First .. Blen loop
+                  Got := Interfaces.Shift_Left (Got, 8) or Interfaces.Unsigned_64 (Oct (I));
+               end loop;
+               if C.Keep_Alive_Waits and then Got = C.Keep_Alive_Id then
+                  C.Keep_Alive_Waits := False;
+               else
+                  Time_Out (C);
+                  return;
+               end if;
+            end;
+         elsif Adacraft.Protocol.State.Table.Find
+                 (Adacraft.Protocol.State.Play, Adacraft.Protocol.State.Serverbound,
+                  Adacraft.Protocol.State.Packet_Id (Pid)) = 0
+         then
+            raise Constraint_Error with "packet not valid in play";
+         end if;
       else
-         --  PLAY: not implemented; plain close.
-         raise Constraint_Error with "play not implemented";
+         raise Constraint_Error with "packet not valid in this state";
       end if;
       C.Last_Activity := Ada.Calendar.Clock;
    end Handle_Frame_Body;
@@ -917,6 +1029,8 @@ package body Adacraft.Network is
                begin
                   if Now - Conn_Table (I).Last_Activity > Read_Timeout then
                      Close_Conn (I, "read timeout");
+                  else
+                     Keep_Alive_Tick (Conn_Table (I), Now);
                   end if;
                exception
                   when others => null;

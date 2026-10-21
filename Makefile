@@ -101,6 +101,7 @@ check-packets-table:
 check:
 	python3 tools/check_boundaries.py
 	python3 tools/extract_configuration.py --check
+	python3 tools/extract_play.py --check
 
 server: bin/adacraft
 	./bin/adacraft

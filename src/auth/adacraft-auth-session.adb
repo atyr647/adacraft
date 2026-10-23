@@ -1,19 +1,20 @@
 package body Adacraft.Auth.Session with SPARK_Mode => On is
    use type Interfaces.Unsigned_8;
 
-   function Is_Hex (C : Character) return Boolean is
+   function Is_Hex (C : Character) return Boolean with Global => null is
    begin
       return (C in '0' .. '9')
         or else (C in 'a' .. 'f')
         or else (C in 'A' .. 'F');
    end Is_Hex;
 
-   function Is_Hex4 (S : String; P : Natural) return Boolean is
+   function Is_Hex4 (S : String; P : Natural) return Boolean with Global => null is
    begin
       if P + 3 > S'Last then
          return False;
       end if;
       for K in P .. P + 3 loop
+         pragma Loop_Invariant (K >= P and then K <= P + 3);
          if not Is_Hex (S (K)) then
             return False;
          end if;
@@ -21,7 +22,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       return True;
    end Is_Hex4;
 
-   function Is_Simple_Escape (E : Character) return Boolean is
+   function Is_Simple_Escape (E : Character) return Boolean with Global => null is
    begin
       case E is
          when '"' | '\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' =>
@@ -31,7 +32,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       end case;
    end Is_Simple_Escape;
 
-   function Unescape (E : Character) return Character is
+   function Unescape (E : Character) return Character with Global => null is
    begin
       case E is
          when 'b'    => return ASCII.BS;
@@ -43,7 +44,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       end case;
    end Unescape;
 
-   function Nibble (C : Character) return Interfaces.Unsigned_8 is
+   function Nibble (C : Character) return Interfaces.Unsigned_8 with Global => null is
    begin
       if C in '0' .. '9' then
          return Interfaces.Unsigned_8 (Character'Pos (C) - Character'Pos ('0'));
@@ -56,12 +57,13 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       end if;
    end Nibble;
 
-   function Is_32_Hex (S : String) return Boolean is
+   function Is_32_Hex (S : String) return Boolean with Global => null is
    begin
       if S'Length /= 32 then
          return False;
       end if;
       for I in S'Range loop
+         pragma Loop_Invariant (I >= S'First and then I <= S'Last);
          if not Is_Hex (S (I)) then
             return False;
          end if;
@@ -69,7 +71,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       return True;
    end Is_32_Hex;
 
-   function Hex_To_Uuid (S : String) return Uuid is
+   function Hex_To_Uuid (S : String) return Uuid with Global => null is
       R      : Uuid := [others => 0];
       Hi, Lo : Interfaces.Unsigned_8;
    begin
@@ -77,6 +79,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
          return R;
       end if;
       for I in 0 .. 15 loop
+         pragma Loop_Invariant (I >= 0 and then I <= 15);
          Hi := Nibble (S (S'First + I * 2));
          Lo := Nibble (S (S'First + I * 2 + 1));
          R (I) := Hi * Interfaces.Unsigned_8 (16) + Lo;
@@ -127,12 +130,13 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       end;
    end Consume_Escape;
 
-   procedure Skip_WS (S : String; P : in out Natural) is
+   procedure Skip_WS (S : String; P : in out Natural) with Global => null is
    begin
       while P <= S'Last
         and then (S (P) = ' ' or else S (P) = ASCII.HT
                   or else S (P) = ASCII.LF or else S (P) = ASCII.CR)
       loop
+         pragma Loop_Invariant (P >= S'First and then P <= S'Last + 1);
          P := P + 1;
       end loop;
    end Skip_WS;
@@ -159,6 +163,9 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       end if;
       P := P + 1;
       while P <= S'Last loop
+         pragma Loop_Invariant
+           (P >= S'First and then P <= S'Last + 1
+            and then Out_Next >= Buf_First and then Out_Next <= Cap + 1);
          if S (P) = '"' then
             P := P + 1;
             Len := Out_Next - Buf_First;
@@ -201,9 +208,10 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       Ok : out Boolean);
 
    --  Skip digit run helper for Skip_Number.
-   procedure Skip_Digits (S : String; P : in out Natural) is
+   procedure Skip_Digits (S : String; P : in out Natural) with Global => null is
    begin
       while P <= S'Last and then S (P) in '0' .. '9' loop
+         pragma Loop_Invariant (P >= S'First and then P <= S'Last + 1);
          P := P + 1;
       end loop;
    end Skip_Digits;
@@ -443,6 +451,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       end if;
       P := P + 1;
       while P <= S'Last loop
+         pragma Loop_Invariant (P >= S'First and then P <= S'Last + 1);
          if S (P) = '\' then
             declare
                C   : Character := '?';
@@ -677,18 +686,33 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       Ok := True;
    end Finish_Document;
 
-   function Is_Id_Key (K_Buf : String; KLen : Natural) return Boolean is
+   --  Single shared key comparator: merges the Is_Id_Key/Is_Name_Key copies.
+   function Key_Is
+     (K_Buf : String; KLen : Natural; Expect : String) return Boolean
+     with Global => null
+   is
    begin
-      return KLen = 2
-        and then K_Buf'Length >= 2
-        and then K_Buf (K_Buf'First .. K_Buf'First + 1) = "id";
+      if KLen /= Expect'Length then
+         return False;
+      end if;
+      if K_Buf'Length < Expect'Length then
+         return False;
+      end if;
+      return K_Buf (K_Buf'First .. K_Buf'First + Expect'Length - 1) = Expect;
+   end Key_Is;
+
+   function Is_Id_Key (K_Buf : String; KLen : Natural) return Boolean
+     with Global => null
+   is
+   begin
+      return Key_Is (K_Buf, KLen, "id");
    end Is_Id_Key;
 
-   function Is_Name_Key (K_Buf : String; KLen : Natural) return Boolean is
+   function Is_Name_Key (K_Buf : String; KLen : Natural) return Boolean
+     with Global => null
+   is
    begin
-      return KLen = 4
-        and then K_Buf'Length >= 4
-        and then K_Buf (K_Buf'First .. K_Buf'First + 3) = "name";
+      return Key_Is (K_Buf, KLen, "name");
    end Is_Name_Key;
 
    --  Parse one scalar id/name field value by key length tag.
@@ -897,7 +921,9 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       end loop;
    end Parse_Document;
 
-   function Map_Reject (Reason : Disconnect_Reason) return Auth_Result is
+   function Map_Reject (Reason : Disconnect_Reason) return Auth_Result
+     with Global => null
+   is
    begin
       return (Kind => Rejected, Reason => Reason);
    end Map_Reject;

@@ -677,6 +677,20 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       Ok := True;
    end Finish_Document;
 
+   function Is_Id_Key (K_Buf : String; KLen : Natural) return Boolean is
+   begin
+      return KLen = 2
+        and then K_Buf'Length >= 2
+        and then K_Buf (K_Buf'First .. K_Buf'First + 1) = "id";
+   end Is_Id_Key;
+
+   function Is_Name_Key (K_Buf : String; KLen : Natural) return Boolean is
+   begin
+      return KLen = 4
+        and then K_Buf'Length >= 4
+        and then K_Buf (K_Buf'First .. K_Buf'First + 3) = "name";
+   end Is_Name_Key;
+
    --  Parse one scalar id/name field value by key length tag.
    procedure Parse_Doc_Scalar
      (S : String; P : in out Natural; K_Buf : String; KLen : Natural;
@@ -688,17 +702,13 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       SOk : Boolean;
    begin
       Ok := False;
-      if KLen = 2
-        and then K_Buf (K_Buf'First .. K_Buf'First + 1) = "id"
-      then
+      if Is_Id_Key (K_Buf, KLen) then
          Parse_String (S, P, Tmp_Id, Tmp_Id'First, Tmp_Id_Len, SOk);
          if not SOk then
             return;
          end if;
          Id_Set := True;
-      elsif KLen = 4
-        and then K_Buf (K_Buf'First .. K_Buf'First + 3) = "name"
-      then
+      elsif Is_Name_Key (K_Buf, KLen) then
          Parse_String (S, P, Tmp_N, Tmp_N'First, Tmp_N_Len, SOk);
          if not SOk then
             return;
@@ -770,11 +780,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       SOk : Boolean;
    begin
       Ok := False;
-      if (KLen = 2
-          and then K_Buf (K_Buf'First .. K_Buf'First + 1) = "id")
-        or else (KLen = 4
-          and then K_Buf (K_Buf'First .. K_Buf'First + 3) = "name")
-      then
+      if Is_Id_Key (K_Buf, KLen) or else Is_Name_Key (K_Buf, KLen) then
          Parse_Doc_Scalar (S, P, K_Buf, KLen, Tmp_Id, Tmp_Id_Len,
                            Tmp_N, Tmp_N_Len, Id_Set, Name_Set, SOk);
          Ok := SOk;

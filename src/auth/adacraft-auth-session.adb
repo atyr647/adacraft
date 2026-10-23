@@ -333,7 +333,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
    --  Returns Done=True when Close consumed (Ok=True); otherwise
    --  positions P at next element start.
    procedure Skip_Separator
-     (S : String; P : in out Natural; Close : Character; Is_Object : Boolean;
+     (S : String; P : in out Natural; Close : Character;
       First : in out Boolean; Done : out Boolean; Ok : out Boolean)
    is
    begin
@@ -401,7 +401,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
    begin
       Ok := False;
       loop
-         Skip_Separator (S, P, Close, Is_Object, First, Done, SOk);
+         Skip_Separator (S, P, Close, First, Done, SOk);
          if not SOk then
             return;
          end if;

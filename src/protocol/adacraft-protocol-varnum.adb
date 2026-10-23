@@ -251,9 +251,6 @@ is
       Decode (Buffer, From, V, C, S);
       case S is
          when Ok =>
-            if C > 1 and then Buffer (From + C - 1) = 0 then
-               return (Status => Rejected, Value => 0, Next => From);
-            end if;
             return
               (Status => Status_Kind'(Ok),
                Value  =>
@@ -291,9 +288,6 @@ is
             Result := Result or Interfaces.Shift_Left (Bits, Shift);
             Pos    := Pos + 1;
             if (B and 16#80#) = 0 then
-               if Step > 1 and then Bits = 0 then
-                  return (Status => Rejected, Value => 0, Next => From);
-               end if;
                return (Status => Status_Kind'(Ok), Value => Result, Next => Pos);
             end if;
             if Pos > Buffer'Last then

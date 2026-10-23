@@ -137,7 +137,8 @@ package body Adacraft.Corpus.Runner is
                   or else State = PS.Configuration or else State = PS.Play)
       then
          declare
-            Runner_Conn : aliased Adacraft.Network.Conn;
+            Runner_Conn : Adacraft.Network.Conn_Access :=
+              new Adacraft.Network.Conn;
             Id_W : P.Buffer.Writer (Capacity => 8);
             FB_Len : Natural := 0;
             Before : constant PS.Connection_State := State;
@@ -151,23 +152,31 @@ package body Adacraft.Corpus.Runner is
                  + (if F.Payload_Last >= F.Payload_First
                     then F.Payload_Last - F.Payload_First + 1 else 0);
                declare
-                  FB : P.Frame.Byte_Array (1 .. Natural'Max (FB_Len, 1));
-                  K  : Natural := 0;
+                  use type Ada.Streams.Stream_Element_Offset;
+                  FB : P.Frame.Byte_Array
+                    (Ada.Streams.Stream_Element_Offset (1) ..
+                     Ada.Streams.Stream_Element_Offset
+                       (Natural'Max (FB_Len, 1)));
+                  K  : Ada.Streams.Stream_Element_Offset :=
+                    Ada.Streams.Stream_Element_Offset (0);
                   Send_Before : constant Natural := Runner_Conn.Send_Len;
                begin
                   for I in 1 .. Id_W.Len loop
                      K := K + 1;
-                     FB (K) := Id_W.Data (I);
+                     FB (K) := Ada.Streams.Stream_Element (Id_W.Data (I));
                   end loop;
                   if F.Payload_Last >= F.Payload_First then
                      for I in F.Payload_First .. F.Payload_Last loop
                         K := K + 1;
-                        FB (K) := Input (I);
+                        FB (K) := Ada.Streams.Stream_Element (Input (I));
                      end loop;
                   end if;
                   if FB_Len > 0 then
                      Adacraft.Network.Handle_Frame_Body
-                       (Runner_Conn'Access, FB (1 .. FB_Len));
+                       (Runner_Conn,
+                        FB (FB'First ..
+                          FB'First +
+                            Ada.Streams.Stream_Element_Offset (FB_Len) - 1));
                   end if;
                   State := Runner_Conn.Proto_State;
                   if Runner_Conn.Send_Len > Send_Before then
@@ -201,7 +210,7 @@ package body Adacraft.Corpus.Runner is
                   R.Detail := To_Unbounded_String ("login rejected");
                   return;
                end;
-            end;
+            end if;
          exception
             when others =>
                Ctx.Closed := True;

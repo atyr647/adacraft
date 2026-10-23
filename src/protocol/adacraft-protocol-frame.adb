@@ -20,24 +20,27 @@ is
       Last   : out Ada.Streams.Stream_Element_Offset)
      with SPARK_Mode => Off
    is
-      Left  : Frame_Body_Length := Length;
-      Digit : Ada.Streams.Stream_Element;
-      Index : Positive := 1;
+      Raw     : Octets (1 .. Max_Frame_Prefix_Bytes) := (others => 0);
+      Written : Natural := 0;
+      St      : Varnum.Status_Type := Varnum.Truncated;
    begin
       Buffer := (others => 0);
       Last := 1;
-      loop
-         Digit := Ada.Streams.Stream_Element (Left mod 128);
-         Left := Left / 128;
-         if Left > 0 then
-            Buffer (Index) := Digit or 16#80#;
-         else
-            Buffer (Index) := Digit;
-         end if;
-         Last := Ada.Streams.Stream_Element_Offset (Index);
-         exit when Left = 0;
-         Index := Index + 1;
+      Varnum.Encode
+        (Value       => Interfaces.Integer_32 (Length),
+         Buffer      => Raw,
+         Start_Index => 1,
+         Written     => Written,
+         Status      => St);
+      if St /= Varnum.Ok or else Written < 1 then
+         Buffer (1) := 0;
+         Last := 1;
+         return;
+      end if;
+      for I in 1 .. Written loop
+         Buffer (I) := Ada.Streams.Stream_Element (Raw (I));
       end loop;
+      Last := Ada.Streams.Stream_Element_Offset (Written);
    end Write_Length_Prefix;
 
    procedure Encode

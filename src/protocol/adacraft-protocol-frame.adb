@@ -5,6 +5,8 @@ package body Adacraft.Protocol.Frame
   with SPARK_Mode
 is
    use type Interfaces.Unsigned_32;
+   use type Interfaces.Integer_32;
+   use type Varnum.Status_Type;
    use type Ada.Streams.Stream_Element_Offset;
    use type Ada.Streams.Stream_Element;
 
@@ -63,7 +65,9 @@ is
 
       Write_Length_Prefix
         (Frame_Body_Length (Payload'Length), Prefix, Prefix_Len);
-      Frame_Len := Prefix_Len + Payload'Length;
+      Frame_Len :=
+        Prefix_Len +
+          Ada.Streams.Stream_Element_Offset (Payload'Length);
 
       if Output'Length < Frame_Len then
          return;
@@ -75,7 +79,11 @@ is
 
       if Payload'Length > 0 then
          Body_First := Output'First + Prefix_Len;
-         Output (Body_First .. Body_First + Payload'Length - 1) := Payload;
+         Output
+           (Body_First ..
+              Body_First +
+                Ada.Streams.Stream_Element_Offset (Payload'Length) - 1) :=
+            Payload;
       end if;
 
       Last := Output'First + Frame_Len - 1;
@@ -105,42 +113,55 @@ is
                Decoder.Prefix_Count := Decoder.Prefix_Count + 1;
                Decoder.Prefix_Bytes (Decoder.Prefix_Count) := Value;
 
-               if (Value and 16#80#) /= 0 then
-                  if Decoder.Prefix_Count = Max_Frame_Prefix_Bytes then
-                     Decoder.Failed := True;
-                     Status := Framing_Error;
-                     return;
-                  end if;
-               else
-                  declare
-                     Length : Ada.Streams.Stream_Element_Offset := 0;
-                     Mult   : Ada.Streams.Stream_Element_Offset := 1;
-                  begin
-                     for J in 1 .. Decoder.Prefix_Count loop
-                        Length := Length
-                          + Ada.Streams.Stream_Element_Offset
-                              (Decoder.Prefix_Bytes (J) and 16#7F#) * Mult;
-                        Mult := Mult * 128;
-                     end loop;
-
-                     if Length > Max_Frame_Body_Length then
+               declare
+                  Count : constant Positive :=
+                    Positive (Decoder.Prefix_Count);
+                  Raw   : Octets (1 .. Max_Frame_Prefix_Bytes) :=
+                    (others => 0);
+                  V     : Interfaces.Integer_32 := 0;
+                  Cons  : Natural := 0;
+                  St    : Varnum.Status_Type := Varnum.Truncated;
+               begin
+                  for J in 1 .. Count loop
+                     Raw (J) := Octet (Decoder.Prefix_Bytes (J));
+                  end loop;
+                  Varnum.Decode
+                    (Buffer      => Raw,
+                     Start_Index => 1,
+                     Value       => V,
+                     Consumed    => Cons,
+                     Status      => St);
+                  if St = Varnum.Ok then
+                     if Cons /= Count
+                       or else V < 0
+                       or else V > Interfaces.Integer_32
+                         (Max_Frame_Body_Length)
+                     then
                         Decoder.Failed := True;
                         Status := Framing_Error;
                         return;
                      end if;
-
-                     Decoder.Body_Length := Length;
-                  end;
-
-                  Decoder.Body_Count := 0;
-                  if Decoder.Body_Length = 0 then
-                     On_Frame (Empty_Body);
-                     Decoder.Phase := In_Prefix;
-                     Decoder.Prefix_Count := 0;
+                     Decoder.Body_Length := Frame_Body_Length (V);
+                     Decoder.Body_Count := 0;
+                     if Decoder.Body_Length = 0 then
+                        On_Frame (Empty_Body);
+                        Decoder.Phase := In_Prefix;
+                        Decoder.Prefix_Count := 0;
+                     else
+                        Decoder.Phase := In_Body;
+                     end if;
+                  elsif St = Varnum.Truncated then
+                     if Decoder.Prefix_Count = Max_Frame_Prefix_Bytes then
+                        Decoder.Failed := True;
+                        Status := Framing_Error;
+                        return;
+                     end if;
                   else
-                     Decoder.Phase := In_Body;
+                     Decoder.Failed := True;
+                     Status := Framing_Error;
+                     return;
                   end if;
-               end if;
+               end;
 
             when In_Body =>
                Decoder.Body_Count := Decoder.Body_Count + 1;
@@ -176,7 +197,6 @@ is
       end if;
 
       if Length.Next - From > Max_Length_Bytes
-        or else Length.Value = 0
         or else Length.Value > Interfaces.Unsigned_32 (Max_Packet_Length)
       then
          return (Status => Rejected, Packet_Id => 0, Payload_First => 1,
@@ -188,6 +208,15 @@ is
       end if;
 
       Size := Natural (Length.Value);
+      if Size = 0 then
+         return
+           (Status          => Status_Kind'(Ok),
+            Packet_Id       => 0,
+            Payload_First   => Length.Next,
+            Payload_Last    => Length.Next - 1,
+            Next            => Length.Next,
+            Declared_Length => 0);
+      end if;
       if Remaining (Buffer'Last, Length.Next) < Size then
          return (Status => Need_More, Packet_Id => 0, Payload_First => 1,
                  Payload_Last => 0, Next => From, Declared_Length => Size);

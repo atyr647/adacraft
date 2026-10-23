@@ -27,6 +27,7 @@ package Adacraft.Auth.Session_Fake is
       Username    : Session.Username;
       Server_Hash : Session.Server_Hash;
       Client_Ip   : Session.Optional_Ip) return Session.Auth_Result
-     with SPARK_Mode => Off;
+     with Global => null,
+          SPARK_Mode => Off;
 
 end Adacraft.Auth.Session_Fake;

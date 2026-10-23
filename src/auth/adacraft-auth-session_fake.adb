@@ -1,12 +1,12 @@
-package body Adacraft.Auth.Session_Fake with SPARK_Mode => On is
+package body Adacraft.Auth.Session_Fake with SPARK_Mode => Off is
 
-   overriding procedure Has_Joined
+   overriding function Has_Joined
      (Self        : in out Fake_Check;
       Username    : Session.Username;
       Server_Hash : Session.Server_Hash;
-      Client_Ip   : Session.Optional_Ip;
-      Result      : out Session.Auth_Result)
+      Client_Ip   : Session.Optional_Ip) return Session.Auth_Result
    is
+      Result : Session.Auth_Result;
    begin
       Self.Last_Username := Username;
       Self.Last_Hash := Server_Hash;
@@ -29,6 +29,7 @@ package body Adacraft.Auth.Session_Fake with SPARK_Mode => On is
                                    Status           => Self.Scripted_Status,
                                    Body_Text        => Self.Scripted_Body));
       end case;
+      return Result;
    end Has_Joined;
 
 end Adacraft.Auth.Session_Fake;

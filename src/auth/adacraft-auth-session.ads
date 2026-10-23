@@ -94,14 +94,13 @@ is
 
    type Session_Check is interface;
 
-   procedure Has_Joined
+   function Has_Joined
      (Self        : in out Session_Check;
       Username    : Adacraft.Auth.Session.Username;
       Server_Hash : Adacraft.Auth.Session.Server_Hash;
-      Client_Ip   : Optional_Ip;
-      Result      : out Auth_Result)
+      Client_Ip   : Optional_Ip) return Auth_Result
    is abstract
-     with Global'Class => null,
+     with Global => null,
           Pre'Class  => True,
           Post'Class => True;
 

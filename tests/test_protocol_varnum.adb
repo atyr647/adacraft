@@ -88,6 +88,51 @@ procedure Test_Protocol_Varnum is
 
    Empty : constant Octets (1 .. 0) := (others => 0);
 begin
+   --  Negative VarInt >= 16#8000_0000# via Buffer.Put_Varint: exact 5 bytes.
+   declare
+      use type Interfaces.Unsigned_32;
+      W : Adacraft.Protocol.Buffer.Writer (Capacity => 8);
+   begin
+      Adacraft.Protocol.Buffer.Reset (W);
+      Adacraft.Protocol.Buffer.Put_Varint (W, 16#8000_0000#);
+      Check (not W.Failed and then W.Len = 5
+             and then W.Data (1) = 16#80#
+             and then W.Data (2) = 16#80#
+             and then W.Data (3) = 16#80#
+             and then W.Data (4) = 16#80#
+             and then W.Data (5) = 16#08#,
+             "buffer put_varint 80000000 exact 5 bytes");
+   end;
+   --  #254: empty-payload Feed==Decode_Frame agreement, both accept empty.
+   declare
+      use type Adacraft.Protocol.Status_Kind;
+      use type Adacraft.Protocol.Frame.Feed_Status;
+      Empty_Frame : constant Octets (1 .. 1) := (1 => 16#00#);
+      F : constant Adacraft.Protocol.Frame.Frame_Decode :=
+        Adacraft.Protocol.Frame.Decode_Frame (Empty_Frame, 1);
+      D : Adacraft.Protocol.Frame.Decoder_Type;
+      Got : Natural := 0;
+      Body_Len : Natural := 0;
+      procedure On_Frame (Frame : in Adacraft.Protocol.Frame.Byte_Array) is
+      begin
+         Got := Got + 1;
+         Body_Len := Frame'Length;
+      end On_Frame;
+      S : Adacraft.Protocol.Frame.Feed_Status;
+   begin
+      Check (F.Status = Adacraft.Protocol.Ok
+             and then F.Declared_Length = 0,
+             "empty payload Decode_Frame accepts");
+      Adacraft.Protocol.Frame.Feed
+        (D, Adacraft.Protocol.Frame.Byte_Array'(1 => 16#00#),
+         On_Frame'Access, S);
+      Check (S = Adacraft.Protocol.Frame.Success
+             and then Got = 1 and then Body_Len = 0,
+             "empty payload Feed accepts one empty frame");
+      Check ((F.Status = Adacraft.Protocol.Ok)
+               = (S = Adacraft.Protocol.Frame.Success),
+             "empty payload Feed==Decode_Frame");
+   end;
    --  Round trips and lengths for many values.
    for I in Values'Range loop
       Round_Trip (Values (I), "value" & Integer'Image (I));

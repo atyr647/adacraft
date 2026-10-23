@@ -1,4 +1,5 @@
 with Ada.Characters.Handling;
+with Ada.Streams;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
 with Interfaces;
@@ -9,6 +10,7 @@ with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Ids;
 with Adacraft.Protocol.Login;
 with Adacraft.Protocol.Packets;
+with Adacraft.Network;
 
 package body Adacraft.Corpus.Runner is
 
@@ -127,124 +129,86 @@ package body Adacraft.Corpus.Runner is
          return;
       end if;
 
-      --  LOGIN-state dispatch onto the existing codec. Start is
-      --  handled only serverbound in LOGIN, Ack only serverbound
-      --  in LOGIN_AWAITING_ACK; anything else in LOGIN context
-      --  closes (validation failures produce a Disconnect frame
-      --  held as pending output before close).
+      --  LOGIN and later states dispatch through the real server
+      --  handler using the runner's own Conn. Handshake and Status
+      --  dispatch below stay as they are.
       if Dir = Serverbound
-        and then (State = PS.Login or else State = PS.Login_Awaiting_Ack)
+        and then (State = PS.Login or else State = PS.Login_Awaiting_Ack
+                  or else State = PS.Configuration or else State = PS.Play)
       then
          declare
-            Parent_Login : constant Boolean :=
-              State = PS.Login or else State = PS.Login_Awaiting_Ack;
+            Runner_Conn : aliased Adacraft.Network.Conn;
+            Id_W : P.Buffer.Writer (Capacity => 8);
+            FB_Len : Natural := 0;
+            Before : constant PS.Connection_State := State;
          begin
-            if Parent_Login and then F.Packet_Id = Login_Start_Pid then
-               if State /= PS.Login then
-                  Ctx.Closed := True;
-                  Ctx.Has_Pending := False;
-                  R.Category := To_Unbounded_String ("login");
-                  R.Detail := To_Unbounded_String ("duplicate login start");
-                  return;
-               end if;
-               if not Ctx.Active then
-                  Ctx.Session := (others => <>);
-                  Ctx.Active := True;
-               end if;
+            Runner_Conn.Proto_State := State;
+            Runner_Conn.In_Use := True;
+            P.Buffer.Put_Varint
+              (Id_W, Interfaces.Unsigned_32 (F.Packet_Id));
+            if not Id_W.Failed then
+               FB_Len := Id_W.Len
+                 + (if F.Payload_Last >= F.Payload_First
+                    then F.Payload_Last - F.Payload_First + 1 else 0);
                declare
-                  Payload : constant P.Octets :=
-                    Input (F.Payload_First .. F.Payload_Last);
-                  Res : constant Prot_Login.Start_Result :=
-                    Prot_Login.Handle_Start
-                      (Ctx.Session, Payload,
-                       (if Adacraft.Kernel.Online_Mode
-                        then Auth.Online else Auth.Offline));
-                  W : P.Buffer.Writer (Capacity => 512);
+                  FB : P.Frame.Byte_Array (1 .. Natural'Max (FB_Len, 1));
+                  K  : Natural := 0;
+                  Send_Before : constant Natural := Runner_Conn.Send_Len;
                begin
-                  case Res.Outcome is
-                     when Prot_Login.Ready_Success =>
-                        Ctx.Session := Res.Session;
-                        P.Buffer.Reset (W);
-                        declare
-                           WB : P.Buffer.Writer (Capacity => 256);
-                        begin
-                           Prot_Login.Encode_Login_Success (WB, Res.Identity);
-                           Ctx.Pending_Output :=
-                             Frame_Packet (WB);
-                           Ctx.Has_Pending := True;
-                        end;
-                        State := PS.Login_Awaiting_Ack;
-                        R.Actual := Accepted;
-                        R.Pid := F.Packet_Id;
-                        R.Category := To_Unbounded_String ("login");
-                        R.Detail := To_Unbounded_String ("login start ok");
-                        return;
-                     when Prot_Login.Need_Disconnect_Close
-                        | Prot_Login.Refuse_Online =>
-                        Ctx.Session := Res.Session;
-                        declare
-                           WB : P.Buffer.Writer (Capacity => 512);
-                        begin
-                           Prot_Login.Encode_Login_Disconnect
-                             (WB,
-                              Res.Reason (1 .. Res.Reason_Len));
-                           Ctx.Pending_Output :=
-                             Frame_Packet (WB);
-                           Ctx.Has_Pending := True;
-                        end;
-                        Ctx.Closed := True;
+                  for I in 1 .. Id_W.Len loop
+                     K := K + 1;
+                     FB (K) := Id_W.Data (I);
+                  end loop;
+                  if F.Payload_Last >= F.Payload_First then
+                     for I in F.Payload_First .. F.Payload_Last loop
+                        K := K + 1;
+                        FB (K) := Input (I);
+                     end loop;
+                  end if;
+                  if FB_Len > 0 then
+                     Adacraft.Network.Handle_Frame_Body
+                       (Runner_Conn'Access, FB (1 .. FB_Len));
+                  end if;
+                  State := Runner_Conn.Proto_State;
+                  if Runner_Conn.Send_Len > Send_Before then
+                     Ctx.Pending_Output.Clear;
+                     for I in Send_Before + 1 .. Runner_Conn.Send_Len loop
+                        Ctx.Pending_Output.Append
+                          (P.Octet (Runner_Conn.Send_Buf
+                             (Ada.Streams.Stream_Element_Offset (I))));
+                     end loop;
+                     Ctx.Has_Pending := True;
+                  end if;
+                  if Runner_Conn.Closing then
+                     Ctx.Closed := True;
+                     if State = Before then
                         R.Category := To_Unbounded_String ("disconnect");
                         R.Detail := To_Unbounded_String
                           ("login rejected with disconnect");
                         return;
-                     when Prot_Login.Protocol_Error_Close =>
-                        Ctx.Session := Res.Session;
-                        Ctx.Closed := True;
-                        Ctx.Has_Pending := False;
-                        R.Category := To_Unbounded_String ("login");
-                        R.Detail := To_Unbounded_String
-                          ("malformed login start");
-                        return;
-                  end case;
-               end;
-            elsif Parent_Login and then F.Packet_Id = Login_Ack_Pid then
-               if State /= PS.Login_Awaiting_Ack then
-                  Ctx.Closed := True;
-                  Ctx.Has_Pending := False;
-                  R.Category := To_Unbounded_String ("login");
-                  R.Detail := To_Unbounded_String ("early login ack");
-                  return;
-               end if;
-               declare
-                  Payload : constant P.Octets :=
-                    Input (F.Payload_First .. F.Payload_Last);
-                  Res : constant Prot_Login.Ack_Result :=
-                    Prot_Login.Handle_Acknowledged (Ctx.Session, Payload);
-               begin
-                  if Res.Outcome = Prot_Login.To_Configuration then
-                     Ctx.Session := Res.Session;
-                     Ctx.Has_Pending := False;
-                     State := PS.Configuration;
+                     end if;
+                  end if;
+                  if State /= Before or else not Runner_Conn.Closing then
                      R.Actual := Accepted;
                      R.Pid := F.Packet_Id;
                      R.Category := To_Unbounded_String ("login");
-                     R.Detail := To_Unbounded_String ("ack ok");
-                     return;
-                  else
-                     Ctx.Closed := True;
-                     R.Category := To_Unbounded_String ("login");
-                     R.Detail := To_Unbounded_String ("bad ack body");
+                     R.Detail := To_Unbounded_String ("login via server");
                      return;
                   end if;
+                  Ctx.Closed := True;
+                  Ctx.Has_Pending := False;
+                  R.Category := To_Unbounded_String ("login");
+                  R.Detail := To_Unbounded_String ("login rejected");
+                  return;
                end;
-            elsif Parent_Login then
+            end;
+         exception
+            when others =>
                Ctx.Closed := True;
                Ctx.Has_Pending := False;
                R.Category := To_Unbounded_String ("login");
-               R.Detail := To_Unbounded_String
-                 ("unknown login packet id");
+               R.Detail := To_Unbounded_String ("login handler raised");
                return;
-            end if;
          end;
       end if;
 
@@ -287,6 +251,9 @@ package body Adacraft.Corpus.Runner is
             R.Pid := F.Packet_Id;
          end;
 
+         --  #254: Reencoded is filled only via real encoders below
+         --  (Put_Varint / Put_String / Put_U16 / Put_U64 then
+         --  Packets.Frame); no Put_Bytes, no raw Payload/Input copy.
          declare
             Body_W : P.Buffer.Writer (Payload'Length + 16);
             Framed : P.Buffer.Writer (Payload'Length + 32);
@@ -297,8 +264,20 @@ package body Adacraft.Corpus.Runner is
                P.Buffer.Put_String (Body_W, Hello.Address (1 .. Hello.Addr_Len));
                P.Buffer.Put_U16 (Body_W, Hello.Port);
                P.Buffer.Put_Varint (Body_W, Hello.Intent);
+            elsif Payload'Length = 0 then
+               --  Status Request: id only, already written above.
+               null;
             else
-               P.Buffer.Put_Bytes (Body_W, Payload);
+               --  Ping: packet id then the decoded long with the
+               --  real 64-bit writer.
+               declare
+                  Ping_Res : constant P.Packets.Ping :=
+                    P.Packets.Decode_Ping (Payload);
+               begin
+                  if Ping_Res.Status = P.Ok then
+                     P.Buffer.Put_U64 (Body_W, Ping_Res.Value);
+                  end if;
+               end;
             end if;
             if P.Packets.Frame (Framed, Body_W) and then not Framed.Failed then
                for I in 1 .. Framed.Len loop

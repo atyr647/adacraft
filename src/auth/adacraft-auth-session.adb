@@ -395,6 +395,36 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       end loop;
    end Skip_String;
 
+   --  Shared key parser: merges the Parse_Property/Parse_Document copies.
+   --  Parses a JSON string key at S(P), consumes the ':' separator and
+   --  trailing whitespace. On success P points at the value start.
+   procedure Parse_Key
+     (S     : String;
+      P     : in out Natural;
+      K_Buf : out String;
+      KLen  : out Natural;
+      Ok    : out Boolean)
+   is
+      KOk : Boolean := False;
+   begin
+      KLen := 0;
+      Ok := False;
+      Parse_String (S, P, K_Buf, K_Buf'First, KLen, KOk);
+      if not KOk then
+         return;
+      end if;
+      Skip_WS (S, P);
+      if P > S'Last or else S (P) /= ':' then
+         return;
+      end if;
+      P := P + 1;
+      Skip_WS (S, P);
+      if P > S'Last then
+         return;
+      end if;
+      Ok := True;
+   end Parse_Key;
+
    --  Parse one property object at S(P)='{', appending to Props.
    procedure Parse_Property
      (S     : String;
@@ -461,16 +491,10 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
             end if;
          end if;
          First := False;
-         Parse_String (S, P, K_Buf, 1, KLen, KOk);
+         Parse_Key (S, P, K_Buf, KLen, KOk);
          if not KOk then
             return;
          end if;
-         Skip_WS (S, P);
-         if P > S'Last or else S (P) /= ':' then
-            return;
-         end if;
-         P := P + 1;
-         Skip_WS (S, P);
          if K_Buf (1 .. KLen) = "name" then
             Parse_String (S, P, N_Buf, 1, NLen, SOk);
             if not SOk then
@@ -585,16 +609,10 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
             end if;
          end if;
          First := False;
-         Parse_String (S, P, K_Buf, 1, KLen, KOk);
+         Parse_Key (S, P, K_Buf, KLen, KOk);
          if not KOk then
             return;
          end if;
-         Skip_WS (S, P);
-         if P > S'Last or else S (P) /= ':' then
-            return;
-         end if;
-         P := P + 1;
-         Skip_WS (S, P);
          if P > S'Last then
             return;
          end if;

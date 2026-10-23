@@ -1,3 +1,4 @@
+with Ada.Streams;
 with Interfaces;
 with Adacraft.Protocol.Varnum;
 
@@ -111,7 +112,9 @@ is
          case Decoder.Phase is
             when In_Prefix =>
                Decoder.Prefix_Count := Decoder.Prefix_Count + 1;
-               Decoder.Prefix_Bytes (Decoder.Prefix_Count) := Value;
+               Decoder.Prefix_Bytes
+                 (Ada.Streams.Stream_Element_Offset
+                    (Decoder.Prefix_Count)) := Value;
 
                declare
                   Count : constant Positive :=
@@ -123,7 +126,10 @@ is
                   St    : Varnum.Status_Type := Varnum.Truncated;
                begin
                   for J in 1 .. Count loop
-                     Raw (J) := Octet (Decoder.Prefix_Bytes (J));
+                     Raw (J) :=
+                       Octet
+                         (Decoder.Prefix_Bytes
+                            (Ada.Streams.Stream_Element_Offset (J)));
                   end loop;
                   Varnum.Decode
                     (Buffer      => Raw,

@@ -11,6 +11,7 @@ procedure Test_Protocol_Varnum is
    use Adacraft.Protocol;
    use type Interfaces.Integer_32;
    use type Interfaces.Unsigned_8;
+   use type Interfaces.Unsigned_32;
    use type V.Status_Type;
 
    Failures : Natural := 0;
@@ -642,12 +643,12 @@ begin
       Check (Count_In_File ("tests/adacraft-corpus-runner.adb", "Adacraft.Network.Handle_Frame_Body") >= 1, "runner dispatches via Handle_Frame_Body");
    end;
    declare
+      use type Interfaces.Unsigned_32;
       W : Adacraft.Protocol.Buffer.Writer (Capacity => 8);
-      Val : constant Interfaces.Integer_32 := Interfaces.Integer_32'First;
-      U : constant Interfaces.Unsigned_32 := Interfaces.Unsigned_32'Val (16#8000_0000#);
+      U : constant Interfaces.Unsigned_32 := 16#8000_0000#;
    begin
       Check (U >= 16#8000_0000#, "value >= 16#8000_0000#");
-      Adacraft.Protocol.Buffer.Put_Varint (W, Val);
+      Adacraft.Protocol.Buffer.Put_Varint (W, U);
       Check ((not W.Failed) and then W.Len = 5, "Buffer.Put_Varint negative uses 5 bytes");
       if W.Len = 5 and then not W.Failed then
          Check (W.Data (1) = 16#80# and then W.Data (2) = 16#80# and then W.Data (3) = 16#80# and then W.Data (4) = 16#80# and then W.Data (5) = 16#08#, "Buffer.Put_Varint First exact 5 bytes");

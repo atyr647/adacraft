@@ -1,5 +1,3 @@
-with Interfaces;
-
 package body Adacraft.Auth.Session with SPARK_Mode => On is
    use type Interfaces.Unsigned_8;
 

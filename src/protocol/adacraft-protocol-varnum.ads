@@ -122,7 +122,6 @@ is
          and then (if Decode_Varint'Result.Status /= Status_Kind'(Ok)
                    then Decode_Varint'Result.Next = From);
 
-   --  Unchanged by the VarInt rework; VarLong is reworked separately.
    function Decode_VarLong (Buffer : Octets; From : Positive) return VarLong_Result
      with
        Pre  => Buffer'Last < Positive'Last

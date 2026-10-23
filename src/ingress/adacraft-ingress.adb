@@ -284,7 +284,10 @@ package body Adacraft.Ingress is
                      end case;
                   end;
 
-               when Protocol.State.Configuration | Protocol.State.Play =>
+               when Protocol.State.Configuration | Protocol.State.Play
+                 | Protocol.State.Login_Awaiting_Ack
+                 | Protocol.State.Configuration_Awaiting_Ack
+                 | Protocol.State.Play_Awaiting_Config_Ack =>
                   Close_Now := True;
             end case;
          end;

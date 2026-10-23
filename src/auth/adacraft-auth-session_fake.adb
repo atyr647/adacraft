@@ -1,4 +1,4 @@
-package body Adacraft.Auth.Session_Fake with SPARK_Mode => Off is
+package body Adacraft.Auth.Session_Fake is
 
    overriding function Has_Joined
      (Self        : in out Fake_Check;

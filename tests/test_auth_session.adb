@@ -10,7 +10,6 @@ package body Test_Auth_Session is
    use type S.Result_Kind;
    use type S.Disconnect_Reason;
    use type S.Uuid;
-   use type Interfaces.Unsigned_8;
 
    Failures : Natural := 0;
 
@@ -42,8 +41,8 @@ package body Test_Auth_Session is
         "{""id"":""069a79f444e94726a5befca90e38aaf5"",""name"":""Notch"","
         & """extra"":""hello""}";
       Expected_Uuid : constant S.Uuid :=
-        (16#06#, 16#9A#, 16#79#, 16#F4#, 16#44#, 16#E9#, 16#47#, 16#26#,
-         16#A5#, 16#BE#, 16#FC#, 16#A9#, 16#0E#, 16#38#, 16#AA#, 16#F5#);
+        [16#06#, 16#9A#, 16#79#, 16#F4#, 16#44#, 16#E9#, 16#47#, 16#26#,
+         16#A5#, 16#BE#, 16#FC#, 16#A9#, 16#0E#, 16#38#, 16#AA#, 16#F5#];
       F : Fk.Fake_Check;
       R : S.Auth_Result;
    begin
@@ -287,8 +286,8 @@ package body Test_Auth_Session is
 
    procedure T9 is
       Expected_Uuid : constant S.Uuid :=
-        (16#06#, 16#9A#, 16#79#, 16#F4#, 16#44#, 16#E9#, 16#47#, 16#26#,
-         16#A5#, 16#BE#, 16#FC#, 16#A9#, 16#0E#, 16#38#, 16#AA#, 16#F5#);
+        [16#06#, 16#9A#, 16#79#, 16#F4#, 16#44#, 16#E9#, 16#47#, 16#26#,
+         16#A5#, 16#BE#, 16#FC#, 16#A9#, 16#0E#, 16#38#, 16#AA#, 16#F5#];
       F9 : Fk.Fake_Check;
       P : S.Auth_Profile;
       R : S.Auth_Result;

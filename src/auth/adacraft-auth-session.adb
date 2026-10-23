@@ -14,7 +14,6 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
          return False;
       end if;
       for K in P .. P + 3 loop
-         pragma Loop_Invariant (K >= P and then K <= P + 3);
          if not Is_Hex (S (K)) then
             return False;
          end if;
@@ -63,7 +62,6 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
          return False;
       end if;
       for I in S'Range loop
-         pragma Loop_Invariant (I >= S'First and then I <= S'Last);
          if not Is_Hex (S (I)) then
             return False;
          end if;
@@ -79,7 +77,6 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
          return R;
       end if;
       for I in 0 .. 15 loop
-         pragma Loop_Invariant (I >= 0 and then I <= 15);
          Hi := Nibble (S (S'First + I * 2));
          Lo := Nibble (S (S'First + I * 2 + 1));
          R (I) := Hi * Interfaces.Unsigned_8 (16) + Lo;
@@ -98,6 +95,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
    --  and returns the decoded character (unicode escapes as '?').
    procedure Consume_Escape
      (S : String; P : in out Natural; C : out Character; Ok : out Boolean)
+     with Global => null
    is
    begin
       C := '?';
@@ -152,6 +150,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       Buf_First : Natural;
       Len       : out Natural;
       Ok        : out Boolean)
+     with Global => null
    is
       Out_Next : Natural := Buf_First;
       Cap      : constant Natural := Buf'Last;
@@ -201,11 +200,13 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
 
    --  Forward: structural string skip used by Skip_Value so long
    --  string values (e.g. unknown keys like "extra":"hello") validate.
-   procedure Skip_String (S : String; P : in out Natural; Ok : out Boolean);
+   procedure Skip_String (S : String; P : in out Natural; Ok : out Boolean)
+     with Global => null;
 
    procedure Skip_Elements
      (S : String; P : in out Natural; Close : Character; Is_Object : Boolean;
-      Ok : out Boolean);
+      Ok : out Boolean)
+     with Global => null;
 
    --  Skip digit run helper for Skip_Number.
    procedure Skip_Digits (S : String; P : in out Natural) with Global => null is
@@ -217,7 +218,9 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
    end Skip_Digits;
 
    --  Skip JSON number fraction part; Ok=False on malformed fraction.
-   procedure Skip_Fraction (S : String; P : in out Natural; Ok : out Boolean) is
+   procedure Skip_Fraction (S : String; P : in out Natural; Ok : out Boolean)
+     with Global => null
+   is
    begin
       Ok := True;
       if P <= S'Last and then S (P) = '.' then
@@ -231,7 +234,9 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
    end Skip_Fraction;
 
    --  Skip JSON number exponent part; Ok=False on malformed exponent.
-   procedure Skip_Exponent (S : String; P : in out Natural; Ok : out Boolean) is
+   procedure Skip_Exponent (S : String; P : in out Natural; Ok : out Boolean)
+     with Global => null
+   is
    begin
       Ok := True;
       if P <= S'Last and then (S (P) = 'e' or else S (P) = 'E') then
@@ -248,7 +253,9 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
    end Skip_Exponent;
 
    --  Skip one JSON number at S(P); Ok=False unless well-formed.
-   procedure Skip_Number (S : String; P : in out Natural; Ok : out Boolean) is
+   procedure Skip_Number (S : String; P : in out Natural; Ok : out Boolean)
+     with Global => null
+   is
       Sub_Ok : Boolean;
    begin
       Ok := False;
@@ -281,7 +288,9 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
 
    --  Match one JSON literal word at S(P).
    procedure Skip_Word (S : String; P : in out Natural; Word : String;
-                        Ok : out Boolean) is
+                        Ok : out Boolean)
+     with Global => null
+   is
    begin
       Ok := False;
       if P + Word'Length - 1 <= S'Last
@@ -293,7 +302,9 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
    end Skip_Word;
 
    --  Skip one generic JSON value with structural validation.
-   procedure Skip_Value (S : String; P : in out Natural; Ok : out Boolean) is
+   procedure Skip_Value (S : String; P : in out Natural; Ok : out Boolean)
+     with Global => null
+   is
       SOk : Boolean;
    begin
       Ok := False;
@@ -343,6 +354,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
    procedure Skip_Separator
      (S : String; P : in out Natural; Close : Character;
       First : in out Boolean; Done : out Boolean; Ok : out Boolean)
+     with Global => null
    is
    begin
       Done := False;
@@ -380,6 +392,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
    --  Skip one object key prefix ("key":) inside Skip_Elements.
    procedure Skip_Key_Prefix
      (S : String; P : in out Natural; Ok : out Boolean)
+     with Global => null
    is
       SOk : Boolean;
    begin
@@ -443,7 +456,8 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
    end Skip_Elements;
 
    --  Skip a string structurally (no content capture) for unknown keys.
-   procedure Skip_String (S : String; P : in out Natural; Ok : out Boolean) is
+   procedure Skip_String (S : String; P : in out Natural; Ok : out Boolean)
+   is
    begin
       Ok := False;
       if P > S'Last or else S (P) /= '"' then
@@ -481,6 +495,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       K_Buf : out String;
       KLen  : out Natural;
       Ok    : out Boolean)
+     with Global => null
    is
       KOk : Boolean := False;
    begin
@@ -511,6 +526,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       S_Buf : String; SLen : Natural;
       NSet, VSet, SSet : Boolean;
       Ok : out Boolean)
+     with Global => null
    is
    begin
       Ok := False;
@@ -554,6 +570,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       S_Buf : in out String; SLen : in out Natural;
       NSet, VSet : in out Boolean; SSet : in out Boolean;
       Ok    : out Boolean)
+     with Global => null
    is
       SOk : Boolean;
    begin
@@ -597,6 +614,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       Props : in out Property_Vector;
       Count : Natural;
       Ok    : out Boolean)
+     with Global => null
    is
       N_Buf : String (1 .. Max_Prop_Chars + 64) := [others => ' '];
       V_Buf : String (1 .. Max_Prop_Chars + 64) := [others => ' '];
@@ -659,6 +677,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       Id_Len : out Natural; N_Len : out Natural;
       Count : Natural; P_Count : out Natural;
       Done : out Boolean; Ok : out Boolean)
+     with Global => null
    is
    begin
       Done := False;
@@ -722,8 +741,9 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       Tmp_N : in out String; Tmp_N_Len : in out Natural;
       Id_Set : in out Boolean; Name_Set : in out Boolean;
       Ok : out Boolean)
+     with Global => null
    is
-      SOk : Boolean;
+      SOk : Boolean := False;
    begin
       Ok := False;
       if Is_Id_Key (K_Buf, KLen) then
@@ -800,8 +820,9 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       Id_Set : in out Boolean; Name_Set : in out Boolean;
       Props : in out Property_Vector; Count : in out Natural;
       Props_Seen : in out Boolean; Ok : out Boolean)
+     with Global => null
    is
-      SOk : Boolean;
+      SOk : Boolean := False;
    begin
       Ok := False;
       if Is_Id_Key (K_Buf, KLen) or else Is_Name_Key (K_Buf, KLen) then
@@ -826,6 +847,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
    procedure Parse_Doc_Separator
      (S : String; P : in out Natural; First : in out Boolean;
       Ok : out Boolean)
+     with Global => null
    is
    begin
       Ok := False;
@@ -856,6 +878,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       Props   : out Property_Vector;
       P_Count : out Natural;
       Ok      : out Boolean)
+     with Global => null
    is
       P           : Natural := S'First;
       K_Buf       : String (1 .. 64) := [others => ' '];

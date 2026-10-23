@@ -518,6 +518,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
    end Parse_Key;
 
    --  Store one parsed property into Props(Count+1) after bound checks.
+   --  Calls Ada.Strings.Bounded (SPARK_Mode => Off) so this helper is Off.
    procedure Store_Property
      (Props : in out Property_Vector;
       Count : Natural;
@@ -526,7 +527,8 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       S_Buf : String; SLen : Natural;
       NSet, VSet, SSet : Boolean;
       Ok : out Boolean)
-     with Global => null
+     with Global => null,
+          SPARK_Mode => Off
    is
    begin
       Ok := False;
@@ -952,7 +954,9 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       return (Kind => Rejected, Reason => Reason);
    end Map_Reject;
 
-   function Interpret_Reply (Reply : Http_Reply) return Auth_Result is
+   function Interpret_Reply (Reply : Http_Reply) return Auth_Result
+     with SPARK_Mode => Off
+   is
    begin
       if Reply.Transport_Failed then
          return Map_Reject (Auth_Service_Unavailable);

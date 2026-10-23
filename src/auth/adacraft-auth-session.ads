@@ -98,6 +98,8 @@ is
      (Self        : in out Session_Check;
       Username    : Adacraft.Auth.Session.Username;
       Server_Hash : Adacraft.Auth.Session.Server_Hash;
-      Client_Ip   : Optional_Ip) return Auth_Result is abstract;
+      Client_Ip   : Optional_Ip) return Auth_Result
+   with SPARK_Mode => Off
+   is abstract;
 
 end Adacraft.Auth.Session;

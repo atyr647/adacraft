@@ -415,7 +415,6 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
    procedure Skip_Elements
      (S : String; P : in out Natural; Close : Character; Is_Object : Boolean;
       Ok : out Boolean)
-     with Refined_Global => null
    is
       SOk   : Boolean;
       First : Boolean := True;
@@ -458,7 +457,6 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
 
    --  Skip a string structurally (no content capture) for unknown keys.
    procedure Skip_String (S : String; P : in out Natural; Ok : out Boolean)
-     with Refined_Global => null
    is
    begin
       Ok := False;

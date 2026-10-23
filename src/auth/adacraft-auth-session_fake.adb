@@ -1,10 +1,11 @@
-package body Adacraft.Auth.Session_Fake is
+package body Adacraft.Auth.Session_Fake with SPARK_Mode => On is
 
-   overriding function Has_Joined
+   overriding procedure Has_Joined
      (Self        : in out Fake_Check;
       Username    : Session.Username;
       Server_Hash : Session.Server_Hash;
-      Client_Ip   : Session.Optional_Ip) return Session.Auth_Result
+      Client_Ip   : Session.Optional_Ip;
+      Result      : out Session.Auth_Result)
    is
    begin
       Self.Last_Username := Username;
@@ -17,13 +18,13 @@ package body Adacraft.Auth.Session_Fake is
 
       case Self.Mode is
          when Return_Accepted =>
-            return (Kind => Session.Accepted,
-                    Profile => Self.Scripted_Profile);
+            Result := (Kind => Session.Accepted,
+                       Profile => Self.Scripted_Profile);
          when Fail_Transport =>
-            return Session.Interpret_Reply
+            Result := Session.Interpret_Reply
               (Session.Http_Reply'(Transport_Failed => True));
          when Replay_Reply =>
-            return Session.Interpret_Reply
+            Result := Session.Interpret_Reply
               (Session.Http_Reply'(Transport_Failed => False,
                                    Status           => Self.Scripted_Status,
                                    Body_Text        => Self.Scripted_Body));

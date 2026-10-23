@@ -200,6 +200,90 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
      (S : String; P : in out Natural; Close : Character; Is_Object : Boolean;
       Ok : out Boolean);
 
+   --  Skip digit run helper for Skip_Number.
+   procedure Skip_Digits (S : String; P : in out Natural) is
+   begin
+      while P <= S'Last and then S (P) in '0' .. '9' loop
+         P := P + 1;
+      end loop;
+   end Skip_Digits;
+
+   --  Skip JSON number fraction part; Ok=False on malformed fraction.
+   procedure Skip_Fraction (S : String; P : in out Natural; Ok : out Boolean) is
+   begin
+      Ok := True;
+      if P <= S'Last and then S (P) = '.' then
+         P := P + 1;
+         if P > S'Last or else S (P) not in '0' .. '9' then
+            Ok := False;
+            return;
+         end if;
+         Skip_Digits (S, P);
+      end if;
+   end Skip_Fraction;
+
+   --  Skip JSON number exponent part; Ok=False on malformed exponent.
+   procedure Skip_Exponent (S : String; P : in out Natural; Ok : out Boolean) is
+   begin
+      Ok := True;
+      if P <= S'Last and then (S (P) = 'e' or else S (P) = 'E') then
+         P := P + 1;
+         if P <= S'Last and then (S (P) = '+' or else S (P) = '-') then
+            P := P + 1;
+         end if;
+         if P > S'Last or else S (P) not in '0' .. '9' then
+            Ok := False;
+            return;
+         end if;
+         Skip_Digits (S, P);
+      end if;
+   end Skip_Exponent;
+
+   --  Skip one JSON number at S(P); Ok=False unless well-formed.
+   procedure Skip_Number (S : String; P : in out Natural; Ok : out Boolean) is
+      Sub_Ok : Boolean;
+   begin
+      Ok := False;
+      if P <= S'Last and then S (P) = '-' then
+         P := P + 1;
+         if P > S'Last then
+            return;
+         end if;
+      end if;
+      if P > S'Last then
+         return;
+      end if;
+      if S (P) = '0' then
+         P := P + 1;
+      elsif S (P) in '1' .. '9' then
+         Skip_Digits (S, P);
+      else
+         return;
+      end if;
+      Skip_Fraction (S, P, Sub_Ok);
+      if not Sub_Ok then
+         return;
+      end if;
+      Skip_Exponent (S, P, Sub_Ok);
+      if not Sub_Ok then
+         return;
+      end if;
+      Ok := True;
+   end Skip_Number;
+
+   --  Match one JSON literal word at S(P).
+   procedure Skip_Word (S : String; P : in out Natural; Word : String;
+                        Ok : out Boolean) is
+   begin
+      Ok := False;
+      if P + Word'Length - 1 <= S'Last
+        and then S (P .. P + Word'Length - 1) = Word
+      then
+         P := P + Word'Length;
+         Ok := True;
+      end if;
+   end Skip_Word;
+
    --  Skip one generic JSON value with structural validation.
    procedure Skip_Value (S : String; P : in out Natural; Ok : out Boolean) is
       SOk : Boolean;
@@ -225,69 +309,87 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
             Ok := SOk;
             return;
          when 't' =>
-            if P + 3 <= S'Last and then S (P .. P + 3) = "true" then
-               P := P + 4;
-               Ok := True;
-            end if;
+            Skip_Word (S, P, "true", SOk);
+            Ok := SOk;
             return;
          when 'f' =>
-            if P + 4 <= S'Last and then S (P .. P + 4) = "false" then
-               P := P + 5;
-               Ok := True;
-            end if;
+            Skip_Word (S, P, "false", SOk);
+            Ok := SOk;
             return;
          when 'n' =>
-            if P + 3 <= S'Last and then S (P .. P + 3) = "null" then
-               P := P + 4;
-               Ok := True;
-            end if;
+            Skip_Word (S, P, "null", SOk);
+            Ok := SOk;
             return;
          when '-' | '0' .. '9' =>
-            if S (P) = '-' then
-               P := P + 1;
-               if P > S'Last then
-                  return;
-               end if;
-            end if;
-            if P > S'Last then
-               return;
-            end if;
-            if S (P) = '0' then
-               P := P + 1;
-            elsif S (P) in '1' .. '9' then
-               while P <= S'Last and then S (P) in '0' .. '9' loop
-                  P := P + 1;
-               end loop;
-            else
-               return;
-            end if;
-            if P <= S'Last and then S (P) = '.' then
-               P := P + 1;
-               if P > S'Last or else S (P) not in '0' .. '9' then
-                  return;
-               end if;
-               while P <= S'Last and then S (P) in '0' .. '9' loop
-                  P := P + 1;
-               end loop;
-            end if;
-            if P <= S'Last and then (S (P) = 'e' or else S (P) = 'E') then
-               P := P + 1;
-               if P <= S'Last and then (S (P) = '+' or else S (P) = '-') then
-                  P := P + 1;
-               end if;
-               if P > S'Last or else S (P) not in '0' .. '9' then
-                  return;
-               end if;
-               while P <= S'Last and then S (P) in '0' .. '9' loop
-                  P := P + 1;
-               end loop;
-            end if;
-            Ok := True;
+            Skip_Number (S, P, SOk);
+            Ok := SOk;
             return;
          when others =>
             return;
       end case;
    end Skip_Value;
+
+   --  Consume separator between elements; handles first/close/comma.
+   --  Returns Done=True when Close consumed (Ok=True); otherwise
+   --  positions P at next element start.
+   procedure Skip_Separator
+     (S : String; P : in out Natural; Close : Character; Is_Object : Boolean;
+      First : in out Boolean; Done : out Boolean; Ok : out Boolean)
+   is
+   begin
+      Done := False;
+      Ok := False;
+      Skip_WS (S, P);
+      if P > S'Last then
+         return;
+      end if;
+      if First and then S (P) = Close then
+         P := P + 1;
+         Done := True;
+         Ok := True;
+         return;
+      end if;
+      if not First then
+         if S (P) = Close then
+            return; --  trailing comma
+         end if;
+         if S (P) /= ',' then
+            return;
+         end if;
+         P := P + 1;
+         Skip_WS (S, P);
+         if P > S'Last then
+            return;
+         end if;
+         if S (P) = Close then
+            return; --  trailing comma invalid
+         end if;
+      end if;
+      First := False;
+      Ok := True;
+   end Skip_Separator;
+
+   --  Skip one object key prefix ("key":) inside Skip_Elements.
+   procedure Skip_Key_Prefix
+     (S : String; P : in out Natural; Ok : out Boolean)
+   is
+      SOk : Boolean;
+   begin
+      Ok := False;
+      if P > S'Last or else S (P) /= '"' then
+         return;
+      end if;
+      Skip_String (S, P, SOk);
+      if not SOk then
+         return;
+      end if;
+      Skip_WS (S, P);
+      if P > S'Last or else S (P) /= ':' then
+         return;
+      end if;
+      P := P + 1;
+      Ok := True;
+   end Skip_Key_Prefix;
 
    procedure Skip_Elements
      (S : String; P : in out Natural; Close : Character; Is_Object : Boolean;
@@ -295,55 +397,23 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
    is
       SOk   : Boolean;
       First : Boolean := True;
+      Done  : Boolean := False;
    begin
       Ok := False;
       loop
-         Skip_WS (S, P);
-         if P > S'Last then
+         Skip_Separator (S, P, Close, Is_Object, First, Done, SOk);
+         if not SOk then
             return;
          end if;
-         if not Is_Object and then First and then S (P) = Close then
-            P := P + 1;
+         if Done then
             Ok := True;
             return;
          end if;
-         if S (P) = Close and then not First then
-            --  Empty remainder only valid via separator path below;
-            --  a bare close here means trailing comma, reject.
-            return;
-         end if;
-         if S (P) = Close and then First and then Is_Object then
-            P := P + 1;
-            Ok := True;
-            return;
-         end if;
-         if not First then
-            if S (P) /= ',' then
-               return;
-            end if;
-            P := P + 1;
-            Skip_WS (S, P);
-            if P > S'Last then
-               return;
-            end if;
-            if S (P) = Close then
-               return; --  trailing comma invalid
-            end if;
-         end if;
-         First := False;
          if Is_Object then
-            if S (P) /= '"' then
-               return;
-            end if;
-            Skip_String (S, P, SOk);
+            Skip_Key_Prefix (S, P, SOk);
             if not SOk then
                return;
             end if;
-            Skip_WS (S, P);
-            if P > S'Last or else S (P) /= ':' then
-               return;
-            end if;
-            P := P + 1;
          end if;
          Skip_Value (S, P, SOk);
          if not SOk then
@@ -423,6 +493,94 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       Ok := True;
    end Parse_Key;
 
+   --  Store one parsed property into Props(Count+1) after bound checks.
+   procedure Store_Property
+     (Props : in out Property_Vector;
+      Count : Natural;
+      N_Buf : String; NLen : Natural;
+      V_Buf : String; VLen : Natural;
+      S_Buf : String; SLen : Natural;
+      NSet, VSet, SSet : Boolean;
+      Ok : out Boolean)
+   is
+   begin
+      Ok := False;
+      if not NSet or else not VSet then
+         return;
+      end if;
+      if NLen = 0 or else NLen > Max_Prop_Chars then
+         return;
+      end if;
+      if VLen > Max_Prop_Chars then
+         return;
+      end if;
+      if SSet and then SLen > Max_Prop_Chars then
+         return;
+      end if;
+      if Count + 1 > Max_Properties then
+         return;
+      end if;
+      Props (Count + 1).Name :=
+        Prop_Bounded.To_Bounded_String
+          (N_Buf (N_Buf'First .. N_Buf'First + NLen - 1));
+      Props (Count + 1).Value :=
+        (if VLen = 0 then Prop_Bounded.Null_Bounded_String
+         else Prop_Bounded.To_Bounded_String
+           (V_Buf (V_Buf'First .. V_Buf'First + VLen - 1)));
+      Props (Count + 1).Has_Sig := SSet;
+      Props (Count + 1).Signature :=
+        (if not SSet or else SLen = 0 then Prop_Bounded.Null_Bounded_String
+         else Prop_Bounded.To_Bounded_String
+           (S_Buf (S_Buf'First .. S_Buf'First + SLen - 1)));
+      Ok := True;
+   end Store_Property;
+
+   --  Parse one property member value by key.
+   procedure Parse_Property_Value
+     (S     : String;
+      P     : in out Natural;
+      Key   : String;
+      N_Buf : in out String; NLen : in out Natural;
+      V_Buf : in out String; VLen : in out Natural;
+      S_Buf : in out String; SLen : in out Natural;
+      NSet, VSet : in out Boolean; SSet : in out Boolean;
+      Ok    : out Boolean)
+   is
+      SOk : Boolean;
+   begin
+      Ok := False;
+      if Key = "name" then
+         Parse_String (S, P, N_Buf, N_Buf'First, NLen, SOk);
+         if not SOk then
+            return;
+         end if;
+         NSet := True;
+      elsif Key = "value" then
+         Parse_String (S, P, V_Buf, V_Buf'First, VLen, SOk);
+         if not SOk then
+            return;
+         end if;
+         VSet := True;
+      elsif Key = "signature" then
+         Parse_String (S, P, S_Buf, S_Buf'First, SLen, SOk);
+         if not SOk then
+            return;
+         end if;
+         SSet := True;
+      elsif P <= S'Last and then S (P) = '"' then
+         Skip_String (S, P, SOk);
+         if not SOk then
+            return;
+         end if;
+      else
+         Skip_Value (S, P, SOk);
+         if not SOk then
+            return;
+         end if;
+      end if;
+      Ok := True;
+   end Parse_Property_Value;
+
    --  Parse one property object at S(P)='{', appending to Props.
    procedure Parse_Property
      (S     : String;
@@ -454,28 +612,9 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
          end if;
          if S (P) = '}' then
             P := P + 1;
-            if not NSet or else not VSet then
-               return;
-            end if;
-            if NLen = 0 or else NLen > Max_Prop_Chars
-              or else VLen > Max_Prop_Chars
-              or else (SSet and then SLen > Max_Prop_Chars)
-            then
-               return;
-            end if;
-            if Count + 1 > Max_Properties then
-               return;
-            end if;
-            Props (Count + 1).Name :=
-              Prop_Bounded.To_Bounded_String (N_Buf (1 .. NLen));
-            Props (Count + 1).Value :=
-              (if VLen = 0 then Prop_Bounded.Null_Bounded_String
-               else Prop_Bounded.To_Bounded_String (V_Buf (1 .. VLen)));
-            Props (Count + 1).Has_Sig := SSet;
-            Props (Count + 1).Signature :=
-              (if not SSet or else SLen = 0 then Prop_Bounded.Null_Bounded_String
-               else Prop_Bounded.To_Bounded_String (S_Buf (1 .. SLen)));
-            Ok := True;
+            Store_Property (Props, Count, N_Buf, NLen, V_Buf, VLen,
+                            S_Buf, SLen, NSet, VSet, SSet, SOk);
+            Ok := SOk;
             return;
          end if;
          if not First then
@@ -493,41 +632,189 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
          if not KOk then
             return;
          end if;
-         if K_Buf (1 .. KLen) = "name" then
-            Parse_String (S, P, N_Buf, 1, NLen, SOk);
-            if not SOk then
-               return;
-            end if;
-            NSet := True;
-         elsif K_Buf (1 .. KLen) = "value" then
-            Parse_String (S, P, V_Buf, 1, VLen, SOk);
-            if not SOk then
-               return;
-            end if;
-            VSet := True;
-         elsif K_Buf (1 .. KLen) = "signature" then
-            Parse_String (S, P, S_Buf, 1, SLen, SOk);
-            if not SOk then
-               return;
-            end if;
-            SSet := True;
-         else
-            --  Unknown key: value must be string per Mojang shape;
-            --  accept and skip any value.
-            if P <= S'Last and then S (P) = '"' then
-               Skip_String (S, P, SOk);
-               if not SOk then
-                  return;
-               end if;
-            else
-               Skip_Value (S, P, SOk);
-               if not SOk then
-                  return;
-               end if;
-            end if;
+         Parse_Property_Value (S, P, K_Buf (K_Buf'First .. K_Buf'First + KLen - 1),
+                               N_Buf, NLen, V_Buf, VLen, S_Buf, SLen,
+                               NSet, VSet, SSet, SOk);
+         if not SOk then
+            return;
          end if;
       end loop;
    end Parse_Property;
+
+   --  Store the trailing '}' trailer of a document; sets Done on success.
+   procedure Finish_Document
+     (S : String; P : in out Natural; Id_Set, Name_Set : Boolean;
+      Tmp_Id : String; Tmp_Id_Len : Natural;
+      Tmp_N : String; Tmp_N_Len : Natural;
+      Id_Buf : in out String; N_Buf : in out String;
+      Id_Len : out Natural; N_Len : out Natural;
+      Count : Natural; P_Count : out Natural;
+      Done : out Boolean; Ok : out Boolean)
+   is
+   begin
+      Done := False;
+      Ok := False;
+      P := P + 1;
+      Skip_WS (S, P);
+      if P <= S'Last then
+         return; --  trailing garbage
+      end if;
+      if not Id_Set or else not Name_Set then
+         return;
+      end if;
+      if Tmp_Id_Len > 0 then
+         Id_Buf (Id_Buf'First .. Id_Buf'First + Tmp_Id_Len - 1) :=
+           Tmp_Id (Tmp_Id'First .. Tmp_Id'First + Tmp_Id_Len - 1);
+      end if;
+      if Tmp_N_Len > 0 then
+         N_Buf (N_Buf'First .. N_Buf'First + Tmp_N_Len - 1) :=
+           Tmp_N (Tmp_N'First .. Tmp_N'First + Tmp_N_Len - 1);
+      end if;
+      Id_Len := Tmp_Id_Len;
+      N_Len := Tmp_N_Len;
+      P_Count := Count;
+      Done := True;
+      Ok := True;
+   end Finish_Document;
+
+   --  Parse one scalar id/name field value by key length tag.
+   procedure Parse_Doc_Scalar
+     (S : String; P : in out Natural; K_Buf : String; KLen : Natural;
+      Tmp_Id : in out String; Tmp_Id_Len : in out Natural;
+      Tmp_N : in out String; Tmp_N_Len : in out Natural;
+      Id_Set : in out Boolean; Name_Set : in out Boolean;
+      Ok : out Boolean)
+   is
+      SOk : Boolean;
+   begin
+      Ok := False;
+      if KLen = 2
+        and then K_Buf (K_Buf'First .. K_Buf'First + 1) = "id"
+      then
+         Parse_String (S, P, Tmp_Id, Tmp_Id'First, Tmp_Id_Len, SOk);
+         if not SOk then
+            return;
+         end if;
+         Id_Set := True;
+      elsif KLen = 4
+        and then K_Buf (K_Buf'First .. K_Buf'First + 3) = "name"
+      then
+         Parse_String (S, P, Tmp_N, Tmp_N'First, Tmp_N_Len, SOk);
+         if not SOk then
+            return;
+         end if;
+         Name_Set := True;
+      else
+         return;
+      end if;
+      Ok := True;
+   end Parse_Doc_Scalar;
+
+   --  Parse the properties array value at S(P)='['.
+   procedure Parse_Doc_Properties
+     (S : String; P : in out Natural;
+      Props : in out Property_Vector; Count : in out Natural;
+      Props_Seen : in out Boolean; Ok : out Boolean)
+   is
+      SOk : Boolean;
+   begin
+      Ok := False;
+      if Props_Seen then
+         return;
+      end if;
+      Props_Seen := True;
+      if P > S'Last or else S (P) /= '[' then
+         return;
+      end if;
+      P := P + 1;
+      Skip_WS (S, P);
+      if P <= S'Last and then S (P) = ']' then
+         P := P + 1;
+         Ok := True;
+         return;
+      end if;
+      loop
+         if Count >= Max_Properties then
+            return; --  over bound => Ok=False
+         end if;
+         Parse_Property (S, P, Props, Count, SOk);
+         if not SOk then
+            return;
+         end if;
+         Count := Count + 1;
+         Skip_WS (S, P);
+         if P > S'Last then
+            return;
+         end if;
+         if S (P) = ',' then
+            P := P + 1;
+         elsif S (P) = ']' then
+            P := P + 1;
+            exit;
+         else
+            return;
+         end if;
+      end loop;
+      Ok := True;
+   end Parse_Doc_Properties;
+
+   --  Dispatch one document field by key to scalar/properties/skip.
+   procedure Parse_Doc_Field
+     (S : String; P : in out Natural; K_Buf : String; KLen : Natural;
+      Tmp_Id : in out String; Tmp_Id_Len : in out Natural;
+      Tmp_N : in out String; Tmp_N_Len : in out Natural;
+      Id_Set : in out Boolean; Name_Set : in out Boolean;
+      Props : in out Property_Vector; Count : in out Natural;
+      Props_Seen : in out Boolean; Ok : out Boolean)
+   is
+      SOk : Boolean;
+   begin
+      Ok := False;
+      if (KLen = 2
+          and then K_Buf (K_Buf'First .. K_Buf'First + 1) = "id")
+        or else (KLen = 4
+          and then K_Buf (K_Buf'First .. K_Buf'First + 3) = "name")
+      then
+         Parse_Doc_Scalar (S, P, K_Buf, KLen, Tmp_Id, Tmp_Id_Len,
+                           Tmp_N, Tmp_N_Len, Id_Set, Name_Set, SOk);
+         Ok := SOk;
+         return;
+      end if;
+      if KLen = 10
+        and then K_Buf (K_Buf'First .. K_Buf'First + 9) = "properties"
+      then
+         Parse_Doc_Properties (S, P, Props, Count, Props_Seen, SOk);
+         Ok := SOk;
+         return;
+      end if;
+      --  Unknown top-level key: skip any JSON value.
+      Skip_Value (S, P, SOk);
+      Ok := SOk;
+   end Parse_Doc_Field;
+
+   --  Consume a document separator; positions P at next key or Close.
+   procedure Parse_Doc_Separator
+     (S : String; P : in out Natural; First : in out Boolean;
+      Ok : out Boolean)
+   is
+   begin
+      Ok := False;
+      if not First then
+         if P > S'Last or else S (P) /= ',' then
+            return;
+         end if;
+         P := P + 1;
+         Skip_WS (S, P);
+         if P > S'Last then
+            return;
+         end if;
+         if S (P) = '}' then
+            return; --  trailing comma invalid
+         end if;
+      end if;
+      First := False;
+      Ok := True;
+   end Parse_Doc_Separator;
 
    --  Parse top-level document, extracting id/name/properties.
    procedure Parse_Document
@@ -544,6 +831,7 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
       K_Buf       : String (1 .. 64) := [others => ' '];
       KLen        : Natural;
       KOk, SOk    : Boolean;
+      FDone       : Boolean := False;
       First       : Boolean := True;
       Id_Set      : Boolean := False;
       Name_Set    : Boolean := False;
@@ -577,36 +865,16 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
             return;
          end if;
          if S (P) = '}' then
-            P := P + 1;
-            Skip_WS (S, P);
-            if P <= S'Last then
-               return; --  trailing garbage
-            end if;
-            if not Id_Set or else not Name_Set then
-               return;
-            end if;
-            Id_Buf (1 .. Tmp_Id_Len) := Tmp_Id (1 .. Tmp_Id_Len);
-            N_Buf (1 .. Tmp_N_Len) := Tmp_N (1 .. Tmp_N_Len);
-            Id_Len := Tmp_Id_Len;
-            N_Len := Tmp_N_Len;
-            P_Count := Count;
-            Ok := True;
+            Finish_Document (S, P, Id_Set, Name_Set, Tmp_Id, Tmp_Id_Len,
+                             Tmp_N, Tmp_N_Len, Id_Buf, N_Buf,
+                             Id_Len, N_Len, Count, P_Count, SOk, FDone);
+            Ok := SOk and then FDone;
             return;
          end if;
-         if not First then
-            if S (P) /= ',' then
-               return;
-            end if;
-            P := P + 1;
-            Skip_WS (S, P);
-            if P > S'Last then
-               return;
-            end if;
-            if S (P) = '}' then
-               return; --  trailing comma invalid
-            end if;
+         Parse_Doc_Separator (S, P, First, SOk);
+         if not SOk then
+            return;
          end if;
-         First := False;
          Parse_Key (S, P, K_Buf, KLen, KOk);
          if not KOk then
             return;
@@ -614,60 +882,11 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
          if P > S'Last then
             return;
          end if;
-         if K_Buf (1 .. KLen) = "id" then
-            Parse_String (S, P, Tmp_Id, 1, Tmp_Id_Len, SOk);
-            if not SOk then
-               return;
-            end if;
-            Id_Set := True;
-         elsif K_Buf (1 .. KLen) = "name" then
-            Parse_String (S, P, Tmp_N, 1, Tmp_N_Len, SOk);
-            if not SOk then
-               return;
-            end if;
-            Name_Set := True;
-         elsif K_Buf (1 .. KLen) = "properties" then
-            if Props_Seen then
-               return;
-            end if;
-            Props_Seen := True;
-            if S (P) /= '[' then
-               return;
-            end if;
-            P := P + 1;
-            Skip_WS (S, P);
-            if P <= S'Last and then S (P) = ']' then
-               P := P + 1;
-            else
-               loop
-                  if Count >= Max_Properties then
-                     return; --  over bound => Ok=False
-                  end if;
-                  Parse_Property (S, P, Props, Count, SOk);
-                  if not SOk then
-                     return;
-                  end if;
-                  Count := Count + 1;
-                  Skip_WS (S, P);
-                  if P > S'Last then
-                     return;
-                  end if;
-                  if S (P) = ',' then
-                     P := P + 1;
-                  elsif S (P) = ']' then
-                     P := P + 1;
-                     exit;
-                  else
-                     return;
-                  end if;
-               end loop;
-            end if;
-         else
-            --  Unknown top-level key: skip any JSON value.
-            Skip_Value (S, P, SOk);
-            if not SOk then
-               return;
-            end if;
+         Parse_Doc_Field (S, P, K_Buf, KLen, Tmp_Id, Tmp_Id_Len,
+                          Tmp_N, Tmp_N_Len, Id_Set, Name_Set,
+                          Props, Count, Props_Seen, SOk);
+         if not SOk then
+            return;
          end if;
       end loop;
    end Parse_Document;
@@ -705,7 +924,10 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
          if not Ok then
             return Map_Reject (Auth_Service_Unavailable);
          end if;
-         if Id_Len /= 32 or else not Is_32_Hex (Id_Buf (1 .. Id_Len)) then
+         if Id_Len /= 32
+           or else not Is_32_Hex
+             (Id_Buf (Id_Buf'First .. Id_Buf'First + Id_Len - 1))
+         then
             return Map_Reject (Auth_Service_Unavailable);
          end if;
          if Name_Len = 0 or else Name_Len > Max_Name_Chars then
@@ -714,9 +936,11 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
          declare
             P : Auth_Profile;
          begin
-            P.Id := Hex_To_Uuid (Id_Buf (1 .. 32));
+            P.Id := Hex_To_Uuid
+              (Id_Buf (Id_Buf'First .. Id_Buf'First + 31));
             P.Name :=
-              Profile_Name_Bounded.To_Bounded_String (Name_Buf (1 .. Name_Len));
+              Profile_Name_Bounded.To_Bounded_String
+                (Name_Buf (Name_Buf'First .. Name_Buf'First + Name_Len - 1));
             P.Properties := Props;
             P.Prop_Count := Count;
             return (Kind => Accepted, Profile => P);

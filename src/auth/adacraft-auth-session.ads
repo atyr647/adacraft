@@ -85,7 +85,12 @@ is
    end record;
 
    function Interpret_Reply (Reply : Http_Reply) return Auth_Result
-     with Global => null;
+     with Global => null,
+          Pre  => True,
+          Post => (if Reply.Transport_Failed then
+                      Interpret_Reply'Result.Kind = Rejected
+                   elsif Reply.Status = 204 then
+                      Interpret_Reply'Result.Kind = Rejected);
 
    type Session_Check is interface;
 

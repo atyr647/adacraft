@@ -1,16 +1,20 @@
 with Adacraft.Protocol.Buffer;
 with Adacraft.Protocol.Packets;
+with Adacraft.Protocol.Version;
 
 package body Adacraft.Protocol.Status_Exchange with SPARK_Mode => Off is
    use Adacraft.Protocol;
    use type State.Connection_State;
 
-   function Build_JSON return String is
+   function Build_Response return String is
+      Img : constant String := Integer'Image (Version.Protocol_Version);
+      Num : constant String := Img (Img'First + 1 .. Img'Last);
    begin
-      return "{""version"":{""name"":""26.3"",""protocol"":777},"
+      return "{""version"":{""name"":""" & Version.Minecraft_Version
+        & """,""protocol"":" & Num & "},"
         & """players"":{""max"":20,""online"":0},"
         & """description"":{""text"":""AdaCraft""}}";
-   end Build_JSON;
+   end Build_Response;
 
    procedure Reset (S : in out Session) is
    begin
@@ -50,7 +54,7 @@ package body Adacraft.Protocol.Status_Exchange with SPARK_Mode => Off is
             return;
          end if;
          declare
-            JSON : constant String := Build_JSON;
+            JSON : constant String := Build_Response;
             W : Buffer.Writer (33_000);
          begin
             if JSON'Length > 32_767 then

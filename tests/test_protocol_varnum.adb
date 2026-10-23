@@ -2,6 +2,8 @@ with Ada.Command_Line;
 with Ada.Text_IO;
 with Interfaces;
 with Adacraft.Protocol;
+with Adacraft.Protocol.Buffer;
+with Adacraft.Protocol.Frame;
 with Adacraft.Protocol.Varnum;
 
 procedure Test_Protocol_Varnum is
@@ -513,4 +515,121 @@ begin
    else
       Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
    end if;
+   --  #254 One of each: structural plus agreement checks.
+   declare
+      function To_Lower (C : Character) return Character is
+      begin
+         if C in 'A' .. 'Z' then
+            return Character'Val (Character'Pos (C) + 32);
+         else
+            return C;
+         end if;
+      end To_Lower;
+
+      function Matches_At (Line : String; Pos : Integer; Pat : String) return Boolean is
+      begin
+         for J in Pat'Range loop
+            if To_Lower (Line (Pos + J - Pat'First)) /= To_Lower (Pat (J)) then
+               return False;
+            end if;
+         end loop;
+         return True;
+      end Matches_At;
+
+      function Count_In_File (Path : String; Pat : String) return Integer is
+         F : Ada.Text_IO.File_Type;
+         N : Integer := 0;
+      begin
+         Ada.Text_IO.Open (F, Ada.Text_IO.In_File, Path);
+         while not Ada.Text_IO.End_Of_File (F) loop
+            declare
+               Line : constant String := Ada.Text_IO.Get_Line (F);
+            begin
+               if Line'Length >= Pat'Length then
+                  for I in Line'First .. Line'Last - Pat'Length + 1 loop
+                     if Matches_At (Line, I, Pat) then
+                        N := N + 1;
+                     end if;
+                  end loop;
+               end if;
+            end;
+         end loop;
+         Ada.Text_IO.Close (F);
+         return N;
+      exception
+         when others =>
+            if Ada.Text_IO.Is_Open (F) then
+               Ada.Text_IO.Close (F);
+            end if;
+            return -999;
+      end Count_In_File;
+   begin
+      Check (Count_In_File ("src/protocol/adacraft-protocol-varnum.ads", "Encode_Varlong") = 1, "single Encode_VarLong decl");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-varnum.ads", "Decode_Varlong") = 1, "single Decode_VarLong decl");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-varnum.adb", "Encode_Varlong") = 1, "single Encode_VarLong body");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-varnum.adb", "Decode_Varlong") = 1, "single Decode_VarLong body");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-varnum.ads", "rename") = 0, "no rename in varnum ads");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-varnum.adb", "rename") = 0, "no rename in varnum adb");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-varnum.adb", "16#80#") >= 1, "varnum owns 16#80#");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-frame.adb", "16#80#") = 0, "no 16#80# in frame.adb");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-buffer.adb", "16#80#") = 0, "no 16#80# in buffer.adb");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-packets.adb", "16#80#") = 0, "no 16#80# in packets.adb");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-state.ads", "Protocol_State") = 0, "no duplicate Protocol_State in state.ads");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-state.adb", "Protocol_State") = 0, "no duplicate Protocol_State in state.adb");
+      Check (Count_In_File ("tests/adacraft_tests.adb", "Adacraft.Protocol.State") >= 1, "tests use survivor State");
+      Check (Count_In_File ("src/ingress/adacraft-ingress.ads", "Adacraft.Protocol.State") >= 1, "ingress ads uses survivor");
+      Check (Count_In_File ("src/ingress/adacraft-ingress.adb", "Adacraft.Protocol.State") >= 1, "ingress adb uses survivor");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-status_exchange.ads", "Build_Response") >= 1, "Build_Response exposed");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-packets.adb", "Build_Response") >= 1, "packets delegates to Build_Response");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-packets.ads", "Protocol_Version_Image") = 0, "Protocol_Version_Image gone from packets ads");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-packets.adb", "Protocol_Version_Image") = 0, "Protocol_Version_Image gone from packets adb");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-state.ads", "Adacraft.Protocol.Version") >= 1, "state uses single version");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-version.ads", "Adacraft.Protocol.Version") >= 1, "single version source");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-version.ads", "777") >= 1, "version pin 777");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-version.ads", "5023") >= 1, "version pin 5023");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-state.ads", "Protocol_Version") = 0, "no second Protocol_Version in state.ads");
+      Check (Count_In_File ("src/protocol/adacraft-protocol-state.ads", "Minecraft_Version") = 0, "no Minecraft_Version in state.ads");
+      Check (Count_In_File ("tests/adacraft-corpus-runner.adb", "Put_Bytes") = 0, "runner has no Put_Bytes");
+      Check (Count_In_File ("tests/adacraft-corpus-runner.adb", "Put_Varint") >= 1, "runner uses Put_Varint");
+      Check (Count_In_File ("tests/adacraft-corpus-runner.adb", "Put_U16") >= 1, "runner uses Put_U16");
+      Check (Count_In_File ("tests/adacraft-corpus-runner.adb", "Packets.Frame") >= 1, "runner uses Packets.Frame");
+      Check (Count_In_File ("src/network/adacraft-network.ads", "Handle_Frame_Body") >= 1, "network exposes Handle_Frame_Body");
+      Check (Count_In_File ("tests/adacraft-corpus-runner.adb", "Adacraft.Network.Handle_Frame_Body") >= 1, "runner dispatches via Handle_Frame_Body");
+   end;
+   declare
+      W : Adacraft.Protocol.Buffer.Writer (Capacity => 8);
+      Val : constant Interfaces.Integer_32 := Interfaces.Integer_32'First;
+      U : constant Interfaces.Unsigned_32 := Interfaces.Unsigned_32'Val (16#8000_0000#);
+   begin
+      Check (U >= 16#8000_0000#, "value >= 16#8000_0000#");
+      Adacraft.Protocol.Buffer.Put_Varint (W, Val);
+      Check ((not W.Failed) and then W.Len = 5, "Buffer.Put_Varint negative uses 5 bytes");
+      if W.Len = 5 and then not W.Failed then
+         Check (W.Data (1) = 16#80# and then W.Data (2) = 16#80# and then W.Data (3) = 16#80# and then W.Data (4) = 16#80# and then W.Data (5) = 16#08#, "Buffer.Put_Varint First exact 5 bytes");
+      else
+         Check (False, "Buffer.Put_Varint First exact 5 bytes");
+      end if;
+   end;
+   declare
+      use Adacraft.Protocol.Frame;
+      D : Decoder_Type;
+      Got_Frames : Natural := 0;
+      Got_Len : Natural := 0;
+      procedure On_F (Frm : in Byte_Array) is
+      begin
+         Got_Frames := Got_Frames + 1;
+         Got_Len := Frm'Length;
+      end On_F;
+      S : Feed_Status;
+      Empty_Prefix : constant Byte_Array (1 .. 1) := (others => 0);
+      Input_Oct : constant Adacraft.Protocol.Octets (1 .. 1) := (others => 0);
+      R : Frame_Decode;
+   begin
+      Feed (D, Empty_Prefix, On_F'Access, S);
+      Check (S = Success, "Feed zero-length success");
+      Check (Got_Frames = 1 and then Got_Len = 0, "Feed zero-length one empty frame");
+      R := Decode_Frame (Input_Oct, 1);
+      Check (R.Status = Adacraft.Protocol.Ok, "Decode_Frame zero-length Ok");
+      Check ((Got_Frames = 1) = (R.Status = Adacraft.Protocol.Ok), "Feed and Decode_Frame agree on zero-length");
+   end;
 end Test_Protocol_Varnum;

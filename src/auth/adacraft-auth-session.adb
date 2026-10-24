@@ -955,7 +955,6 @@ package body Adacraft.Auth.Session with SPARK_Mode => On is
    end Map_Reject;
 
    function Interpret_Reply (Reply : Http_Reply) return Auth_Result
-     with SPARK_Mode => Off
    is
    begin
       if Reply.Transport_Failed then

@@ -166,9 +166,15 @@ is
                         return;
                      end if;
                   else
-                     Decoder.Failed := True;
-                     Status := Framing_Error;
-                     return;
+                     if Decoder.Body_Length = 0 then
+                        On_Frame (Decoder.Body_Bytes (1 .. 0));
+                        Decoder.Phase := In_Prefix;
+                        Decoder.Prefix_Count := 0;
+                        Decoder.Body_Count := 0;
+                        Status := Success;
+                     else
+                        Decoder.Phase := In_Body;
+                     end if;
                   end if;
                end;
 

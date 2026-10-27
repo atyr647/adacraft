@@ -135,7 +135,7 @@ is
                             (Ada.Streams.Stream_Element_Offset (J)));
                   end loop;
                   Varnum.Decode
-                    (Buffer      => Raw,
+                    (Buffer      => Raw (1 .. Count),
                      Start_Index => 1,
                      Value       => V,
                      Consumed    => Cons,

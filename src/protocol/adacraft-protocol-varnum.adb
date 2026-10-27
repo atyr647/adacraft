@@ -251,6 +251,11 @@ is
       Decode (Buffer, From, V, C, S);
       case S is
          when Ok =>
+            --  The legacy packet API is strict even though the bounded
+            --  codec deliberately accepts non-minimal encodings.
+            if C /= Encoded_Length (V) then
+               return (Status => Rejected, Value => 0, Next => From);
+            end if;
             return
               (Status => Status_Kind'(Ok),
                Value  =>
@@ -288,6 +293,9 @@ is
             Result := Result or Interfaces.Shift_Left (Bits, Shift);
             Pos    := Pos + 1;
             if (B and 16#80#) = 0 then
+               if Step > 1 and then Bits = 0 then
+                  return (Status => Rejected, Value => 0, Next => From);
+               end if;
                return (Status => Status_Kind'(Ok), Value => Result, Next => Pos);
             end if;
             if Pos > Buffer'Last then

@@ -1,10 +1,21 @@
 GNATMAKE ?= gnatmake
 SRC := -Igenerated -Isrc -Isrc/protocol -Isrc/kernel -Isrc/auth -Isrc/ingress -Isrc/network
-FLAGS := -gnat2022 -gnata -D obj
+FLAGS := -f -gnat2022 -gnata -D obj
 
 .PHONY: all test server clean check check-packets-table
 
-all: bin/adacraft bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus bin/test_protocol_login bin/test_bad_clients bin/test_login_server bin/test_protocol_compression bin/test_handshake_exchange bin/test_status_exchange bin/test_protocol_packet_encoder
+PROGRAMS := bin/adacraft bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus bin/test_protocol_login bin/test_bad_clients bin/test_login_server bin/test_protocol_compression bin/test_handshake_exchange bin/test_status_exchange bin/test_protocol_packet_encoder
+
+all: $(PROGRAMS)
+
+# Main-only Make prerequisites and cached ALI timestamps can leave tests
+# running a previous candidate. Invoke GNAT every time and rebuild project
+# units (-f); predefined runtime units are not rebuilt.
+.PHONY: recheck-ada-dependencies
+recheck-ada-dependencies:
+
+$(PROGRAMS): recheck-ada-dependencies
+
 
 bin/test_protocol_varnum: tests/test_protocol_varnum.adb
 	mkdir -p bin obj
@@ -63,6 +74,7 @@ bin/test_protocol_packet_encoder: tests/test_protocol_packet_encoder.adb
 	$(GNATMAKE) $(FLAGS) $(SRC) tests/test_protocol_packet_encoder.adb -o $@
 
 test: bin/adacraft_tests bin/test_ingress_framing bin/test_protocol_varnum bin/test_protocol_state bin/test_corpus_loader bin/test_golden_corpus bin/test_protocol_login bin/test_bad_clients bin/test_login_server bin/test_protocol_compression bin/test_handshake_exchange bin/test_status_exchange bin/test_protocol_packet_encoder
+	GNATMAKE="$(GNATMAKE)" ./tests/test_incremental_build.sh
 	$(MAKE) --no-print-directory check-packets-table
 	$(MAKE) --no-print-directory check
 	./bin/adacraft_tests

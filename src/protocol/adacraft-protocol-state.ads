@@ -1,3 +1,6 @@
+with Adacraft.Protocol.Version;
+with Adacraft.Protocol;
+
 package Adacraft.Protocol.State
   with SPARK_Mode => On
 is
@@ -62,8 +65,8 @@ is
      (Current      : Connection_State;
       Success_Sent : Boolean) return Boolean;
 
-   Protocol_Number   : constant := 777;
-   Minecraft_Version : constant String := "26.3";
+   Protocol_Number : constant := Version.Protocol_Version;
+   Minecraft_Version : constant String := Version.Minecraft_Version;
    Report_Source     : constant String :=
      "vanilla 26.3 server.jar packet report (packets.json)";
    Report_SHA256     : constant String :=

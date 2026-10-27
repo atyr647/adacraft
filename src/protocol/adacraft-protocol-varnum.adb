@@ -148,7 +148,7 @@ is
       Status := Overlong;
    end Decode;
 
-   function Encoded_Length_Varlong (Value : Interfaces.Integer_64) return Natural is
+   function Encoded_Length_VarLong (Value : Interfaces.Integer_64) return Natural is
      (if Value < 0 then 10
       elsif Value < 2 ** 7 then 1
       elsif Value < 2 ** 14 then 2
@@ -160,14 +160,14 @@ is
       elsif Value < 2 ** 56 then 8
       else 9);
 
-   procedure Encode_Varlong
+   procedure Encode_VarLong
      (Value       : in     Interfaces.Integer_64;
       Buffer      : in out Octets;
       Start_Index : in     Integer;
       Written     :    out Natural;
       Status      :    out Status_Type)
    is
-      Len : constant Natural := Encoded_Length_Varlong (Value);
+      Len : constant Natural := Encoded_Length_VarLong (Value);
       U   : Interfaces.Unsigned_64;
    begin
       if Value < 0 then
@@ -177,9 +177,9 @@ is
       end if;
 
       Encode_Unsigned (U, Len, Buffer, Start_Index, Written, Status);
-   end Encode_Varlong;
+   end Encode_VarLong;
 
-   procedure Decode_Varlong
+   procedure Decode_VarLong
      (Buffer      : in     Octets;
       Start_Index : in     Integer;
       Value       :    out Interfaces.Integer_64;
@@ -237,7 +237,7 @@ is
       end loop;
 
       Status := Overlong;
-   end Decode_Varlong;
+   end Decode_VarLong;
 
    function Decode_Varint (Buffer : Octets; From : Positive) return Varint_Result is
       V : Interfaces.Integer_32;
@@ -251,7 +251,9 @@ is
       Decode (Buffer, From, V, C, S);
       case S is
          when Ok =>
-            if C > 1 and then Buffer (From + C - 1) = 0 then
+            --  The legacy packet API is strict even though the bounded
+            --  codec deliberately accepts non-minimal encodings.
+            if C /= Encoded_Length (V) then
                return (Status => Rejected, Value => 0, Next => From);
             end if;
             return
@@ -269,7 +271,7 @@ is
       end case;
    end Decode_Varint;
 
-   function Decode_Varlong (Buffer : Octets; From : Positive) return Varlong_Result is
+   function Decode_VarLong (Buffer : Octets; From : Positive) return VarLong_Result is
       Result : Interfaces.Unsigned_64 := 0;
       Pos    : Natural                := From;
    begin
@@ -302,5 +304,5 @@ is
          end;
       end loop;
       return (Status => Rejected, Value => 0, Next => From);
-   end Decode_Varlong;
+   end Decode_VarLong;
 end Adacraft.Protocol.Varnum;

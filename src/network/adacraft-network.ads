@@ -52,5 +52,7 @@ package Adacraft.Network is
 
    procedure Parse_Port (Image : String; Port : out GNAT.Sockets.Port_Type);
 
+   procedure Handle_Frame_Body (C : Conn_Access; Frame_Data : Adacraft.Protocol.Frame.Byte_Array);
+
    procedure Serve (Port : GNAT.Sockets.Port_Type);
 end Adacraft.Network;

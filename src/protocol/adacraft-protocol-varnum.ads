@@ -57,13 +57,13 @@ is
    --  continuation bit set or is greater than 16#0F#. Non-minimal forms
    --  within 5 bytes are accepted.
 
-   function Encoded_Length_Varlong (Value : Interfaces.Integer_64) return Natural
+   function Encoded_Length_VarLong (Value : Interfaces.Integer_64) return Natural
      with
        Global => null,
-       Post   => Encoded_Length_Varlong'Result in 1 .. Max_Varlong_Bytes;
-   --  Exact number of bytes Encode_Varlong writes (negatives: 10).
+       Post   => Encoded_Length_VarLong'Result in 1 .. Max_Varlong_Bytes;
+   --  Exact number of bytes Encode_VarLong writes (negatives: 10).
 
-   procedure Encode_Varlong
+   procedure Encode_VarLong
      (Value       : in     Interfaces.Integer_64;
       Buffer      : in out Octets;
       Start_Index : in     Integer;
@@ -73,12 +73,12 @@ is
        Global => null,
        Post   =>
          (if Status = Ok
-          then Written = Encoded_Length_Varlong (Value)
+          then Written = Encoded_Length_VarLong (Value)
           else Status = Buffer_Too_Small
                and then Written = 0
                and then Buffer = Buffer'Old);
 
-   procedure Decode_Varlong
+   procedure Decode_VarLong
      (Buffer      : in     Octets;
       Start_Index : in     Integer;
       Value       :    out Interfaces.Integer_64;
@@ -104,7 +104,7 @@ is
       Next   : Natural                := 0;
    end record;
 
-   type Varlong_Result is record
+   type VarLong_Result is record
       Status : Status_Kind            := Rejected;
       Value  : Interfaces.Unsigned_64 := 0;
       Next   : Natural                := 0;
@@ -122,15 +122,14 @@ is
          and then (if Decode_Varint'Result.Status /= Status_Kind'(Ok)
                    then Decode_Varint'Result.Next = From);
 
-   --  Unchanged by the VarInt rework; VarLong is reworked separately.
-   function Decode_Varlong (Buffer : Octets; From : Positive) return Varlong_Result
+   function Decode_VarLong (Buffer : Octets; From : Positive) return VarLong_Result
      with
        Pre  => Buffer'Last < Positive'Last
                and then From <= Buffer'Last + 1,
        Post =>
-         (if Decode_Varlong'Result.Status = Status_Kind'(Ok)
-          then Decode_Varlong'Result.Next in From + 1 .. From + Max_Varlong_Bytes
-               and then Decode_Varlong'Result.Next - 1 <= Buffer'Last)
-         and then (if Decode_Varlong'Result.Status /= Status_Kind'(Ok)
-                   then Decode_Varlong'Result.Next = From);
+         (if Decode_VarLong'Result.Status = Status_Kind'(Ok)
+          then Decode_VarLong'Result.Next in From + 1 .. From + Max_Varlong_Bytes
+               and then Decode_VarLong'Result.Next - 1 <= Buffer'Last)
+         and then (if Decode_VarLong'Result.Status /= Status_Kind'(Ok)
+                   then Decode_VarLong'Result.Next = From);
 end Adacraft.Protocol.Varnum;

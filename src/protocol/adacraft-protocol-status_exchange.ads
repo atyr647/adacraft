@@ -1,4 +1,5 @@
 with Adacraft.Protocol.State;
+with Adacraft.Protocol;
 
 package Adacraft.Protocol.Status_Exchange with SPARK_Mode => Off is
 
@@ -9,6 +10,8 @@ package Adacraft.Protocol.Status_Exchange with SPARK_Mode => Off is
    end record;
 
    procedure Reset (S : in out Session);
+
+   function Build_Response return String;
 
    procedure Handle
      (Packet_Id        : in     Natural;

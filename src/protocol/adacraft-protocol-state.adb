@@ -1,5 +1,6 @@
 with Adacraft.Protocol.Ids;
 with Adacraft.Protocol.State.Table;
+with Adacraft.Protocol.Version;
 
 package body Adacraft.Protocol.State
   with SPARK_Mode => On

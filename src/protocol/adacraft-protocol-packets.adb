@@ -1,4 +1,5 @@
 with Adacraft.Protocol.Ids;
+with Adacraft.Protocol.Status_Exchange;
 with Adacraft.Protocol.Varnum;
 
 package body Adacraft.Protocol.Packets is
@@ -48,10 +49,7 @@ package body Adacraft.Protocol.Packets is
    end Decode_Handshake;
 
    procedure Encode_Status_Response (W : in out Buffer.Writer) is
-      JSON : constant String :=
-        "{""version"":{""name"":""26.3"",""protocol"":777},"
-        & """players"":{""max"":20,""online"":0},"
-        & """description"":{""text"":""AdaCraft""}}";
+      JSON : constant String := Status_Exchange.Build_Response;
    begin
       Buffer.Put_Varint (W, Interfaces.Unsigned_32 (Ids.Protocol_Id (Ids.Cb_Status_Status_Response)));
       Buffer.Put_String (W, JSON);
